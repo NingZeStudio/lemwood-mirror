@@ -83,6 +83,14 @@ $env:GITHUB_TOKEN = "<your token>"
 GET /api/status
 ```
 
+#### 获取特定启动器信息
+
+你也可以通过在路径中指定启动器 ID 来获取特定启动器的数据。
+
+```http
+GET /api/status/{launcher_id}
+```
+
 ### 响应示例
 
 ```json

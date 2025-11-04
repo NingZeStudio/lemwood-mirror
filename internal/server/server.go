@@ -46,6 +46,7 @@ func (s *State) Routes(mux *http.ServeMux) {
     mux.Handle("/download/", http.StripPrefix("/download/", http.FileServer(http.Dir(s.BasePath))))
     // API endpoints
     mux.HandleFunc("/api/status", s.handleStatus)
+    mux.HandleFunc("/api/status/", s.handleLauncherStatus)
     mux.HandleFunc("/api/files", s.handleFiles)
 }
 
@@ -99,6 +100,37 @@ func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
+	launcherID := filepath.Base(r.URL.Path)
+	s.mu.RLock()
+	versions, ok := s.index[launcherID]
+	s.mu.RUnlock()
+
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	resp := make([]map[string]any, 0, len(versions))
+	for version, infoPath := range versions {
+		v, err := storage.ReadInfoJSON(infoPath)
+		if err != nil {
+			log.Printf("read info.json failed for %s %s: %v", launcherID, version, err)
+			continue
+		}
+		relPath, err := filepath.Rel(s.BasePath, filepath.Dir(infoPath))
+		if err != nil {
+			log.Printf("could not get relative path for %s: %v", infoPath, err)
+		} else {
+			v["download_path"] = filepath.ToSlash(filepath.Join("download", relPath))
+		}
+		resp = append(resp, v)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 func (s *State) handleFiles(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" { path = "." }
@@ -143,3 +175,4 @@ func StartHTTPWithScan(addr string, s *State, scan func()) error {
 func EnsureDir(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
+
