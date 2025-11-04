@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func main() {
 					return
 				}
 				downer := downloader.NewDownloader(cfg.DownloadTimeoutMinutes, cfg.ConcurrentDownloads)
-				infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, base, cfg.ProxyURL, cfg.AssetProxyURL, cfg.XgetEnabled, cfg.XgetDomain, rel, cfg.ServerAddress)
+				infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, base, cfg.ProxyURL, cfg.AssetProxyURL, cfg.XgetEnabled, cfg.XgetDomain, rel, cfg.ServerAddress, cfg.ServerPort)
 				if err != nil {
 					log.Printf("%s: 下载失败: %v", lcfg.Name, err)
 					return
@@ -114,8 +115,9 @@ func main() {
 	defer c.Stop()
 
 	// http server with manual scan endpoint
-	log.Printf("Starting server on :8080")
-	if err := server.StartHTTPWithScan(":8080", s, scan); err != nil {
+	addr := fmt.Sprintf(":%d", cfg.ServerPort)
+	log.Printf("Starting server on %s", addr)
+	if err := server.StartHTTPWithScan(addr, s, scan); err != nil {
 		log.Fatalf("http 服务器出错: %v", err)
 	}
 }

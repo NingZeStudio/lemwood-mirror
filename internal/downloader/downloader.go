@@ -47,7 +47,7 @@ func NewDownloader(timeoutMinutes, concurrentDownloads int) *Downloader {
 	}
 }
 
-func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBase string, proxyURL string, assetProxyURL string, xgetEnabled bool, xgetDomain string, rel *github.RepositoryRelease, serverAddress string) (string, error) {
+func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBase string, proxyURL string, assetProxyURL string, xgetEnabled bool, xgetDomain string, rel *github.RepositoryRelease, serverAddress string, serverPort int) (string, error) {
 	if rel == nil {
 		return "", errors.New("nil release")
 	}
@@ -78,7 +78,7 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 				log.Printf("Could not get public IP: %v. Falling back to GitHub URL for asset %s", err, a.GetName())
 				downloadURL = a.GetBrowserDownloadURL()
 			} else {
-				downloadURL = fmt.Sprintf("http://%s:8080/download/%s/%s/%s", publicIP, launcher, version, a.GetName())
+				downloadURL = fmt.Sprintf("http://%s:%d/download/%s/%s/%s", publicIP, serverPort, launcher, version, a.GetName())
 			}
 		}
 		info.Assets = append(info.Assets, ReleaseAssetSimple{

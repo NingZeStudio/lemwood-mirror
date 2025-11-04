@@ -29,6 +29,8 @@
 
 - `github_token`: 你的 GitHub Personal Access Token，用于提高 API 请求速率限制。
 - `storage_path`: 下载文件的存储目录，默认为 `download`。
+- `server_address`: 用于生成 `index.json` 中资源下载链接的服务器地址，务必带着端口填写，例如 `http://127.0.0.1:8080`。如果留空，程序将自动获取并使用服务器的公共 IP 地址。
+- `server_port`: HTTP 服务的监听端口，默认为 8080。此端口也会用于生成 `index.json` 中的下载链接。
 - `check_cron`: 自动检查更新的 cron 表达式，默认为每 10 分钟检查一次 (`*/10 * * * *`)。
 - `proxy_url`: 用于网络请求的 HTTP/HTTPS 代理地址，例如 `http://127.0.0.1:7890`。
 - `asset_proxy_url`: 用于加速 GitHub Release 资源下载的代理地址，会作为前缀拼接到下载链接前。
@@ -92,7 +94,7 @@ GET /api/status
       {
         "name": "FCL-release-1.2.6.3-all.apk",
         "size": 123456,
-        "download_url": "/download/fcl/1.2.6.3/FCL-release-1.2.6.3-all.apk"
+        "download_url": "http://your-server-address:8080/download/fcl/1.2.6.3/FCL-release-1.2.6.3-all.apk"
       }
     ]
   },
@@ -103,7 +105,7 @@ GET /api/status
       {
         "name": "ZalithLauncher-1.4.1.0.apk",
         "size": 234567,
-        "download_url": "/download/zl/141000/ZalithLauncher-1.4.1.0.apk"
+        "download_url": "http://your-server-address:8080/download/zl/141000/ZalithLauncher-1.4.1.0.apk"
       }
     ]
   }
@@ -115,7 +117,7 @@ GET /api/status
 - **assets**: 一个包含所有已下载资产文件的数组。
   - **name**: 资产文件名。
   - **size**: 文件大小（字节）。
-  - **download_url**: 文件的相对下载链接。
+  - **download_url**: 文件的完整下载链接。
 
 ## 认证与限流
 - 建议在配置或环境变量中提供 `GITHUB_TOKEN`，提升 API 配额。
