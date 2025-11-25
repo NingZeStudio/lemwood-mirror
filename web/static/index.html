@@ -11,10 +11,50 @@
   <div class="container">
     <header>
       <h1>启动器镜像</h1>
-      <button id="refresh">手动刷新</button>
+      <div class="actions">
+        <button id="show-api-docs">API 文档</button>
+        <button id="refresh">手动刷新</button>
+      </div>
     </header>
 
     <main>
+      <section id="api-docs" class="hidden">
+        <h2>API 文档</h2>
+        <div class="docs-content">
+            <p>本镜像服务提供以下 API 供开发者使用：</p>
+            
+            <div class="api-endpoint">
+                <h3>1. 获取所有版本状态</h3>
+                <div class="method">GET /api/status</div>
+                <p>返回所有启动器及其版本的详细信息。</p>
+            </div>
+
+            <div class="api-endpoint">
+                <h3>2. 获取指定启动器状态</h3>
+                <div class="method">GET /api/status/{launcher}</div>
+                <p>返回指定启动器的所有版本信息。</p>
+            </div>
+
+            <div class="api-endpoint">
+                <h3>3. 获取最新版本信息</h3>
+                <div class="method">GET /api/latest</div>
+                <p>返回所有启动器的最新版本号及相关信息。</p>
+            </div>
+
+            <div class="api-endpoint">
+                <h3>4. 获取指定启动器最新版本</h3>
+                <div class="method">GET /api/latest/{launcher}</div>
+                <p>返回指定启动器的最新版本信息。</p>
+            </div>
+            
+             <div class="api-endpoint">
+                <h3>5. 触发手动扫描</h3>
+                <div class="method">POST /api/scan</div>
+                <p>触发服务器重新扫描上游仓库更新。</p>
+            </div>
+        </div>
+      </section>
+
       <section>
         <h2>版本信息</h2>
         <div id="status"></div>

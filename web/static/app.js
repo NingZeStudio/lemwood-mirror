@@ -32,11 +32,37 @@ async function loadStatus() {
 
             if (Array.isArray(v.assets)) {
                 for (const a of v.assets) {
+                    const item = document.createElement('div');
+                    item.className = 'asset-item';
+
                     const link = document.createElement('a');
-                    link.href = `/download/${name}/${v.tag_name || v.name}/${a.name}`;
+                    link.className = 'asset-link';
+                    const downloadUrl = `/download/${name}/${v.tag_name || v.name}/${a.name}`;
+                    link.href = downloadUrl;
                     link.textContent = a.name;
                     link.setAttribute('download', a.name);
-                    assetsDiv.appendChild(link);
+
+                    // If download_url_base is used, the URL might be absolute, so we check if it starts with http
+                    if (a.url && (a.url.startsWith('http://') || a.url.startsWith('https://'))) {
+                        link.href = a.url;
+                    }
+
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'copy-btn';
+                    copyBtn.textContent = '复制链接';
+                    copyBtn.onclick = (e) => {
+                        e.preventDefault();
+                        const fullUrl = link.href.startsWith('http') ? link.href : window.location.origin + link.href;
+                        navigator.clipboard.writeText(fullUrl).then(() => {
+                            const originalText = copyBtn.textContent;
+                            copyBtn.textContent = '已复制';
+                            setTimeout(() => copyBtn.textContent = originalText, 2000);
+                        });
+                    };
+
+                    item.appendChild(link);
+                    item.appendChild(copyBtn);
+                    assetsDiv.appendChild(item);
                 }
             }
 
@@ -75,9 +101,22 @@ async function manualRefresh() {
     }
 }
 
+function toggleApiDocs() {
+    const docs = document.getElementById('api-docs');
+    const btn = document.getElementById('show-api-docs');
+    if (docs.classList.contains('hidden')) {
+        docs.classList.remove('hidden');
+        btn.textContent = '隐藏 API 文档';
+    } else {
+        docs.classList.add('hidden');
+        btn.textContent = 'API 文档';
+    }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('refresh').addEventListener('click', manualRefresh);
     document.getElementById('list').addEventListener('click', loadFiles);
+    document.getElementById('show-api-docs').addEventListener('click', toggleApiDocs);
     loadStatus();
     loadFiles();
 });
