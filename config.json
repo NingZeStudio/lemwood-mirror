@@ -1,6 +1,7 @@
 {
   "server_address": "http://127.0.0.1",
   "server_port": 8080,
+  "download_url_base": "http://127.0.0.1:8080",
   "check_cron": "*/10 * * * *",
   "storage_path": "download",
   "github_token": "",

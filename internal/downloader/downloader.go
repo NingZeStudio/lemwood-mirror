@@ -47,7 +47,7 @@ func NewDownloader(timeoutMinutes, concurrentDownloads int) *Downloader {
 	}
 }
 
-func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBase string, proxyURL string, assetProxyURL string, xgetEnabled bool, xgetDomain string, rel *github.RepositoryRelease, serverAddress string, serverPort int) (string, error) {
+func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBase string, proxyURL string, assetProxyURL string, xgetEnabled bool, xgetDomain string, rel *github.RepositoryRelease, serverAddress string, serverPort int, downloadUrlBase string) (string, error) {
 	if rel == nil {
 		return "", errors.New("nil release")
 	}
@@ -70,15 +70,24 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 	info.PublishedAt = rel.GetPublishedAt().Time
 	for _, a := range rel.Assets {
 		var downloadURL string
-		if serverAddress != "" {
-			downloadURL = fmt.Sprintf("%s:%d/download/%s/%s/%s", serverAddress, serverPort, launcher, version, a.GetName())
+		if downloadUrlBase != "" {
+			// If downloadUrlBase is provided, use it directly.
+			// Ensure downloadUrlBase has scheme, if not default to http://
+			baseURL := downloadUrlBase
+			if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+				baseURL = "http://" + baseURL
+			}
+			baseURL = strings.TrimRight(baseURL, "/")
+			downloadURL = fmt.Sprintf("%s/download/%s/%s/%s", baseURL, launcher, version, a.GetName())
+		} else if serverAddress != "" {
+			downloadURL = FormatDownloadURL(serverAddress, serverPort, "", launcher, version, a.GetName())
 		} else {
 			publicIP, err := getPublicIP()
 			if err != nil {
 				log.Printf("Could not get public IP: %v. Falling back to GitHub URL for asset %s", err, a.GetName())
 				downloadURL = a.GetBrowserDownloadURL()
 			} else {
-				downloadURL = fmt.Sprintf("http://%s:%d/download/%s/%s/%s", publicIP, serverPort, launcher, version, a.GetName())
+				downloadURL = FormatDownloadURL("", serverPort, publicIP, launcher, version, a.GetName())
 			}
 		}
 		info.Assets = append(info.Assets, ReleaseAssetSimple{
@@ -106,7 +115,7 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 		}
 		// Create a new client for proxy, as the default one might be shared
 		client = &http.Client{
-			Timeout: d.httpClient.Timeout,
+			Timeout:   d.httpClient.Timeout,
 			Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
 		}
 	}
@@ -255,4 +264,36 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 		log.Printf("下载 %s: %d / %d (%.2f%%)", pw.fileName, pw.written, pw.total, percentage)
 	}
 	return n, nil
+}
+
+func FormatDownloadURL(serverAddress string, serverPort int, publicIP string, launcher, version, assetName string) string {
+	var host string
+	var scheme string = "http"
+
+	if serverAddress != "" {
+		host = serverAddress
+		// If serverAddress already has scheme, use it and strip it for host processing if needed,
+		// but typically serverAddress in config might be just domain or domain:port.
+		// Assuming serverAddress is just the address part from the user request "配置文件中的端口为应用网址和api请求端口，地址也是".
+		// If serverAddress contains http/https, we should parse it or just use it.
+		// However, the requirement says "下载地址格式必须为地址：端口".
+
+		// Simple heuristic: if serverAddress starts with http:// or https://, use that scheme.
+		if strings.HasPrefix(serverAddress, "http://") {
+			scheme = "http"
+			host = strings.TrimPrefix(serverAddress, "http://")
+		} else if strings.HasPrefix(serverAddress, "https://") {
+			scheme = "https"
+			host = strings.TrimPrefix(serverAddress, "https://")
+		}
+	} else {
+		host = publicIP
+	}
+
+	// Format host with port if not 80/443
+	if serverPort != 80 && serverPort != 443 {
+		host = fmt.Sprintf("%s:%d", host, serverPort)
+	}
+
+	return fmt.Sprintf("%s://%s/download/%s/%s/%s", scheme, host, launcher, version, assetName)
 }

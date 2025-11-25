@@ -21,17 +21,18 @@ type LauncherConfig struct {
 }
 
 type Config struct {
-	ServerAddress       string      `json:"server_address"`
-	ServerPort          int         `json:"server_port"`
-	CheckCron           string      `json:"check_cron"`
+	ServerAddress          string           `json:"server_address"`
+	ServerPort             int              `json:"server_port"`
+	CheckCron              string           `json:"check_cron"`
 	StoragePath            string           `json:"storage_path"`
 	GitHubToken            string           `json:"github_token"`
 	ProxyURL               string           `json:"proxy_url"`
 	AssetProxyURL          string           `json:"asset_proxy_url"`
 	XgetDomain             string           `json:"xget_domain"`
 	XgetEnabled            bool             `json:"xget_enabled"`
-	DownloadTimeoutMinutes int    `json:"download_timeout_minutes"`
-    ConcurrentDownloads    int    `json:"concurrent_downloads"`
+	DownloadTimeoutMinutes int              `json:"download_timeout_minutes"`
+	ConcurrentDownloads    int              `json:"concurrent_downloads"`
+	DownloadUrlBase        string           `json:"download_url_base,omitempty"`
 	Launchers              []LauncherConfig `json:"launchers"`
 }
 
