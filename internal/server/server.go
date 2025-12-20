@@ -101,10 +101,10 @@ func (s *State) clearLatestFlag(infoPath string) error {
 
 func (s *State) Routes(mux *http.ServeMux) {
 	// 静态 UI
-	staticDir := filepath.Join("web", "static")
+	staticDir := filepath.Join("web", "dist")
 
 	// 安全静态资源处理器
-	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/dist/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		// 再次检查路径遍历以防万一，尽管中间件会捕获它
 		if containsDotDot(path) {
@@ -112,13 +112,13 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
-		relPath := strings.TrimPrefix(path, "/static/")
+		relPath := strings.TrimPrefix(path, "/dist/")
 		if relPath == "" || relPath == "/" {
 			http.NotFound(w, r)
 			return
 		}
 
-		fullPath := filepath.Join(staticDir, relPath)
+		fullPath := filepath.Join(distDir, relPath)
 		cleanPath := filepath.Clean(fullPath)
 
 		// 验证路径是否在 staticDir 内

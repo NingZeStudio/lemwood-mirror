@@ -35,7 +35,7 @@ func RecordVisit(r *http.Request) {
 	referer := r.Referer()
 
 	// 忽略静态资源（可根据需要调整）
-	if strings.HasPrefix(path, "/static/") || path == "/favicon.svg" {
+	if strings.HasPrefix(path, "/dist/") || path == "/favicon.svg" {
 		return
 	}
 
