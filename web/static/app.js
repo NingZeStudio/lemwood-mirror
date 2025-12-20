@@ -32,7 +32,7 @@ async function loadStatus() {
         
         const toggleIcon = document.createElement('span');
         toggleIcon.className = 'toggle-icon';
-        toggleIcon.textContent = '▼';
+        toggleIcon.textContent = '▶';
         
         const titleText = document.createElement('span');
         titleText.textContent = name;
@@ -53,9 +53,9 @@ async function loadStatus() {
         
         launcherHeader.appendChild(launcherTitle);
         
-        // 创建版本容器
+        // 创建版本容器（默认折叠）
         const versionsContainer = document.createElement('div');
-        versionsContainer.className = 'versions-container';
+        versionsContainer.className = 'versions-container collapsed';
         
         // 添加所有版本
         for (const v of versions) {
@@ -139,17 +139,6 @@ async function loadStatus() {
         launcherGroup.appendChild(launcherHeader);
         launcherGroup.appendChild(versionsContainer);
         container.appendChild(launcherGroup);
-    }
-}
-
-async function loadFiles() {
-    const p = document.getElementById('path').value || '.';
-    try {
-        const res = await fetch(`/api/files?path=${encodeURIComponent(p)}`);
-        const data = await res.json();
-        document.getElementById('files').textContent = JSON.stringify(data, null, 2);
-    } catch (error) {
-        document.getElementById('files').textContent = '加载文件列表失败。';
     }
 }
 
@@ -240,11 +229,12 @@ async function loadStats() {
              topContainer.textContent = '暂无数据';
         }
 
-        // Geo Distribution
+        // Geo Distribution (限制显示前10个)
         const geoContainer = document.getElementById('geo-dist');
         geoContainer.innerHTML = '';
         if (data.geo_distribution && data.geo_distribution.length > 0) {
-             for (const item of data.geo_distribution) {
+             const topGeo = data.geo_distribution.slice(0, 10);
+             for (const item of topGeo) {
                 const row = document.createElement('div');
                 row.className = 'stat-list-item';
                 
@@ -299,9 +289,7 @@ function toggleApiDocs() {
 
 window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('refresh').addEventListener('click', manualRefresh);
-    document.getElementById('list').addEventListener('click', loadFiles);
     document.getElementById('show-api-docs').addEventListener('click', toggleApiDocs);
     loadStatus();
-    loadFiles();
     loadStats();
 });

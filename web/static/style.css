@@ -198,14 +198,17 @@ input[type="text"] {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 20px;
     padding: 20px;
-    max-height: 2000px;
-    overflow: hidden;
-    transition: max-height 0.3s ease, padding 0.3s ease;
+    max-height: none;
+    overflow: visible;
+    transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
+    opacity: 1;
 }
 
 .versions-container.collapsed {
     max-height: 0;
     padding: 0 20px;
+    opacity: 0;
+    overflow: hidden;
 }
 
 .versions-container .card {
