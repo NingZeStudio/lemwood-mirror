@@ -1,47 +1,41 @@
-<template>
-  <v-card class="mb-6 rounded" variant="flat" color="surface-light" border>
-    <v-card-item>
-      <template v-slot:prepend>
-         <v-icon color="primary" class="mr-2">mdi-bullhorn-variant</v-icon>
-      </template>
-      <v-card-title class="text-subtitle-1 font-weight-bold">
-        站点公告
-      </v-card-title>
-    </v-card-item>
-
-    <v-divider class="mx-4"></v-divider>
-
-    <v-card-text class="pt-2">
-      <v-row dense>
-        <v-col v-for="(link, index) in links" :key="index" cols="12" sm="4">
-          <v-btn
-            block
-            variant="text"
-            :href="link.url"
-            target="_blank"
-            class="justify-start text-none px-2"
-            color="on-surface"
-          >
-            <template v-slot:prepend>
-               <v-icon :color="link.color || 'primary'" size="small">mdi-link-variant</v-icon>
-            </template>
-            <div class="d-flex flex-column align-start ml-1">
-               <span class="font-weight-medium">{{ link.label }}</span>
-               <span class="text-caption text-medium-emphasis text-truncate" style="max-width: 150px;">
-                  {{ link.text || link.url }}
-               </span>
-            </div>
-          </v-btn>
-        </v-col>
-      </v-row>
-    </v-card-text>
-  </v-card>
-</template>
-
 <script setup>
+import { Megaphone, ExternalLink } from 'lucide-vue-next'
+import Card from '@/components/ui/Card.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import CardContent from '@/components/ui/CardContent.vue'
+import Button from '@/components/ui/Button.vue'
+
 const links = [
-  { label: '赞助网站', url: 'https://zs.lemwood.cn/', color: 'pink' },
-  { label: 'MT管理器下载', url: 'https://mt2.cn', text: 'mt2.cn', color: 'green' },
-  { label: 'Shizuku 官网', url: 'https://shizuku.rikka.app/zh-hans/', color: 'blue' },
+  { label: '赞助网站', url: 'https://zs.lemwood.cn/', color: 'text-pink-500' },
+  { label: 'MT管理器下载', url: 'https://mt2.cn', text: 'mt2.cn', color: 'text-green-500' },
+  { label: 'Shizuku 官网', url: 'https://shizuku.rikka.app/zh-hans/', color: 'text-blue-500' },
 ];
 </script>
+
+<template>
+  <Card class="mb-6">
+    <CardHeader class="pb-3">
+      <CardTitle class="flex items-center gap-2 text-lg">
+        <Megaphone class="h-5 w-5 text-primary" />
+        站点公告
+      </CardTitle>
+    </CardHeader>
+    <CardContent>
+      <div class="grid gap-4 sm:grid-cols-3">
+        <a
+          v-for="(link, index) in links"
+          :key="index"
+          :href="link.url"
+          target="_blank"
+          class="flex items-center gap-2 rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+        >
+          <div class="flex flex-col overflow-hidden">
+            <span class="font-medium text-sm">{{ link.label }}</span>
+            <span class="text-xs text-muted-foreground truncate">{{ link.text || link.url }}</span>
+          </div>
+        </a>
+      </div>
+    </CardContent>
+  </Card>
+</template>
