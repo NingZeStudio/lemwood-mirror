@@ -24,12 +24,13 @@ import { cn } from '@/lib/utils';
 import { useClipboard } from '@vueuse/core';
 
 const LAUNCHER_INFO_MAP = {
-  'zl': { displayName: 'ZalithLauncher', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/34c1ec9e07f826df.webp' },
-  'zl2': { displayName: 'ZalithLauncher2', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/ee0028bd82493eb3.webp' },
-  'hmcl': { displayName: 'HMCL', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/3835841e4b9b7abf.jpeg' },
-  'MG': { displayName: 'MobileGlues', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/3625548d2639a024.png' },
-  'fcl': { displayName: 'FoldCraftLauncher', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/dc5e0ee14d8f54f0.png' },
-  'shizuku': { displayName: 'Shizuku', logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/f7067665f073b4cc.png' }
+  'zl': { displayName: 'ZalithLauncher', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/34c1ec9e07f826df.webp' },
+  'zl2': { displayName: 'ZalithLauncher2', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/ee0028bd82493eb3.webp' },
+  'hmcl': { displayName: 'HMCL', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/3835841e4b9b7abf.jpeg' },
+  'MG': { displayName: 'MobileGlues', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/3625548d2639a024.png' },
+  'fcl': { displayName: 'FoldCraftLauncher', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/dc5e0ee14d8f54f0.png' },
+  'FCL_Trunip': { displayName: 'FCL_Trunip Plugin', logoUrl: 'https://cdn.zeinklab.com/myfile/images/4bd121929a04f08e.png' },
+  'shizuku': { displayName: 'Shizuku', logoUrl: 'https://cdn.zeinklab.com/gh/JanePHPDev/Blog-Static-Resource@main/images/f7067665f073b4cc.png' }
 };
 
 const rawLaunchers = ref({});
@@ -45,7 +46,7 @@ const launcherList = computed(() => {
     const versions = rawLaunchers.value[name];
     const latestVersion = latestMap.value[name];
     const latestObj = versions.find(v => (v.tag_name || v.name) === latestVersion) || versions[0];
-    const info = LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: 'https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/b4ee27d31312bdb9.svg' };
+    const info = LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: 'https://cdn.zeinklab.com/myfile/images/4bd121929a04f08e.png' };
     
     const latestDownloadUrl = latestObj && latestObj.assets && latestObj.assets.length > 0
       ? getAssetUrl(name, latestObj, latestObj.assets[0])

@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useDark, useToggle } from '@vueuse/core'
 import { Menu, Sun, Moon, Home, Folder, BarChart2, FileText, Info } from 'lucide-vue-next'
 import Sidebar from '@/components/layout/Sidebar.vue'
+import Footer from '@/components/layout/Footer.vue'
 import Button from '@/components/ui/Button.vue'
 import { Sheet, SheetTrigger, SheetContent } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
@@ -25,8 +26,8 @@ const links = [
 <template>
   <div class="grid min-h-screen w-full md:grid-cols-[220px_1fr] lg:grid-cols-[280px_1fr]">
     <Sidebar />
-    <div class="flex flex-col">
-      <header class="flex h-14 items-center gap-4 border-b bg-muted/40 px-4 lg:h-[60px] lg:px-6">
+    <div class="flex flex-col min-h-screen">
+      <header class="flex h-14 items-center gap-4 border-b bg-muted/40 px-4 lg:h-[60px] lg:px-6 sticky top-0 z-30 backdrop-blur-md bg-background/60">
         <Sheet v-model:open="isMobileMenuOpen">
           <SheetTrigger as-child>
             <Button variant="outline" size="icon" class="shrink-0 md:hidden">
@@ -74,6 +75,7 @@ const links = [
       <main class="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6 overflow-auto">
         <slot />
       </main>
+      <Footer />
     </div>
   </div>
 </template>
