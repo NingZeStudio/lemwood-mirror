@@ -22,16 +22,24 @@ import Badge from '@/components/ui/Badge.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import { cn } from '@/lib/utils';
 import { useClipboard } from '@vueuse/core';
+import zlLogo from '@/assets/images/34c1ec9e07f826df.webp'
+import zl2Logo from '@/assets/images/ee0028bd82493eb3.webp'
+import hmclLogo from '@/assets/images/3835841e4b9b7abf.jpeg'
+import mgLogo from '@/assets/images/3625548d2639a024.png'
+import fclLogo from '@/assets/images/dc5e0ee14d8f54f0.png'
+import fclTurnipLogo from '@/assets/images/4bd121929a04f08e.png'
+import shizukuLogo from '@/assets/images/f7067665f073b4cc.png'
 
 const LAUNCHER_INFO_MAP = {
-  'zl': { displayName: 'ZalithLauncher', logoUrl: '@assets/images/34c1ec9e07f826df.webp' },
-  'zl2': { displayName: 'ZalithLauncher2', logoUrl: '@assets/images/ee0028bd82493eb3.webp' },
-  'hmcl': { displayName: 'HMCL', logoUrl: '@assets/images/3835841e4b9b7abf.jpeg' },
-  'MG': { displayName: 'MobileGlues', logoUrl: '@assets/images/3625548d2639a024.png' },
-  'fcl': { displayName: 'FoldCraftLauncher', logoUrl: '@assets/images/dc5e0ee14d8f54f0.png' },
-  'FCL_Trunip': { displayName: 'FCL_Trunip Plugin', logoUrl: '@assets/images/4bd121929a04f08e.png' },
-  'shizuku': { displayName: 'Shizuku', logoUrl: '@assets/images/f7067665f073b4cc.png' }
+  'zl': { displayName: 'ZalithLauncher', logoUrl: zlLogo },
+  'zl2': { displayName: 'ZalithLauncher2', logoUrl: zl2Logo },
+  'hmcl': { displayName: 'HMCL', logoUrl: hmclLogo },
+  'MG': { displayName: 'MobileGlues', logoUrl: mgLogo },
+  'fcl': { displayName: 'FoldCraftLauncher', logoUrl: fclLogo },
+  'FCL_Trunip': { displayName: 'FCL_Trunip Plugin', logoUrl: fclTurnipLogo },
+  'shizuku': { displayName: 'Shizuku', logoUrl: shizukuLogo }
 };
+
 
 const rawLaunchers = ref({});
 const latestMap = ref({});
@@ -46,7 +54,7 @@ const launcherList = computed(() => {
     const versions = rawLaunchers.value[name];
     const latestVersion = latestMap.value[name];
     const latestObj = versions.find(v => (v.tag_name || v.name) === latestVersion) || versions[0];
-    const info = LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: '@assets/images/4bd121929a04f08e.png' };
+    const info = LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: fclTurnipLogo };
     
     const latestDownloadUrl = latestObj && latestObj.assets && latestObj.assets.length > 0
       ? getAssetUrl(name, latestObj, latestObj.assets[0])
