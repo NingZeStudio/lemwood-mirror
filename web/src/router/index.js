@@ -15,6 +15,18 @@ const router = createRouter({
       component: () => import('@/views/FilesView.vue')
     },
     {
+      path: '/files/:launcherName',
+      name: 'files-launcher',
+      component: () => import('@/views/FilesView.vue'),
+      props: true
+    },
+    {
+      path: '/files/:launcherName/:versionName',
+      name: 'files-version',
+      component: () => import('@/views/FilesView.vue'),
+      props: true
+    },
+    {
       path: '/stats',
       name: 'stats',
       component: () => import('@/views/StatsView.vue')
