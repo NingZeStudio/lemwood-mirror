@@ -26,6 +26,8 @@ type Config struct {
 	CheckCron              string           `json:"check_cron"`
 	StoragePath            string           `json:"storage_path"`
 	GitHubToken            string           `json:"github_token"`
+	AdminUser              string           `json:"admin_user"`
+	AdminPassword          string           `json:"admin_password"`
 	ProxyURL               string           `json:"proxy_url"`
 	AssetProxyURL          string           `json:"asset_proxy_url"`
 	XgetDomain             string           `json:"xget_domain"`
@@ -62,4 +64,16 @@ func LoadConfig(projectRoot string) (*Config, error) {
 		cfg.GitHubToken = env
 	}
 	return &cfg, nil
+}
+
+func (c *Config) Save(projectRoot string) error {
+	cfgPath := filepath.Join(projectRoot, "config.json")
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 config.json 失败: %w", err)
+	}
+	if err := os.WriteFile(cfgPath, b, 0644); err != nil {
+		return fmt.Errorf("写入 config.json 失败: %w", err)
+	}
+	return nil
 }

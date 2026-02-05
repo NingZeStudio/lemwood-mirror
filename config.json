@@ -5,6 +5,8 @@
   "check_cron": "*/10 * * * *",
   "storage_path": "download",
   "github_token": "",
+  "admin_user": "admin",
+  "admin_password": "$2a$14$KGD2SesFz34BxwfCs.doI.murfh3SIxVcDzamZU/wPDnJHCEq9ExK",
   "proxy_url": "",
   "asset_proxy_url": "",
   "xget_domain": "https://xget.xi-xu.me",

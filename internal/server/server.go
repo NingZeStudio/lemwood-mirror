@@ -3,8 +3,10 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,11 +14,16 @@ import (
 	"strings"
 	"sync"
 
+	"lemwood_mirror/internal/auth"
+	"lemwood_mirror/internal/config"
+	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/stats"
 )
 
 type State struct {
-	BasePath string
+	BasePath    string
+	ProjectRoot string
+	Config      *config.Config
 	// 缓存状态：map[launcher]map[version]infoPath
 	mu        sync.RWMutex
 	index     map[string]map[string]string
@@ -24,12 +31,14 @@ type State struct {
 	infoCache map[string]map[string]interface{} // 缓存 index.json 文件内容
 }
 
-func NewState(base string) *State {
+func NewState(base string, projectRoot string, cfg *config.Config) *State {
 	return &State{
-		BasePath:  base,
-		index:     make(map[string]map[string]string),
-		latest:    make(map[string]string),
-		infoCache: make(map[string]map[string]interface{}),
+		BasePath:    base,
+		ProjectRoot: projectRoot,
+		Config:      cfg,
+		index:       make(map[string]map[string]string),
+		latest:      make(map[string]string),
+		infoCache:   make(map[string]map[string]interface{}),
 	}
 }
 
@@ -144,9 +153,295 @@ func (s *State) clearLatestFlag(infoPath string) error {
 	return nil
 }
 
+func (s *State) AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			// 也可以尝试从 Cookie 获取
+			if cookie, err := r.Cookie("admin_token"); err == nil {
+				token = cookie.Value
+			}
+		}
+
+		if token == "" || !auth.ValidateToken(token) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// 检查配置中的用户名和密码
+	if s.Config.AdminUser == "" || s.Config.AdminPassword == "" {
+		http.Error(w, "Admin account not configured", http.StatusInternalServerError)
+		return
+	}
+
+	if req.Username != s.Config.AdminUser || !auth.CheckPasswordHash(req.Password, s.Config.AdminPassword) {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := auth.GenerateToken()
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"token": token,
+	})
+}
+
+func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		// 返回脱敏后的配置
+		cfgCopy := *s.Config
+		cfgCopy.AdminPassword = "" // 不返回密码哈希
+		json.NewEncoder(w).Encode(cfgCopy)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var newCfg config.Config
+		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
+		// 保持密码不变，除非提供了新密码
+		if newCfg.AdminPassword == "" {
+			newCfg.AdminPassword = s.Config.AdminPassword
+		} else {
+			hashed, err := auth.HashPassword(newCfg.AdminPassword)
+			if err != nil {
+				http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+				return
+			}
+			newCfg.AdminPassword = hashed
+		}
+
+		if err := newCfg.Save(s.ProjectRoot); err != nil {
+			http.Error(w, "Failed to save config", http.StatusInternalServerError)
+			return
+		}
+
+		s.mu.Lock()
+		s.Config = &newCfg
+		s.mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "Config updated")
+		return
+	}
+
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *State) handleAdminBlacklist(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := db.GetIPBlacklist()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(list)
+	case http.MethodPost:
+		var req struct {
+			IP     string `json:"ip"`
+			Reason string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		if err := db.AddIPToBlacklist(req.IP, req.Reason); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	case http.MethodDelete:
+		ip := r.URL.Query().Get("ip")
+		if ip == "" {
+			http.Error(w, "Missing ip parameter", http.StatusBadRequest)
+			return
+		}
+		if err := db.RemoveIPFromBlacklist(ip); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *State) handleAdminFiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		path := r.URL.Query().Get("path")
+		fullPath := filepath.Join(s.BasePath, path)
+		
+		// 安全检查
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(fullPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		entries, err := os.ReadDir(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.Error(w, "Directory not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var result []map[string]interface{}
+		for _, e := range entries {
+			info, _ := e.Info()
+			result = append(result, map[string]interface{}{
+				"name":     e.Name(),
+				"is_dir":   e.IsDir(),
+				"size":     info.Size(),
+				"mod_time": info.ModTime(),
+			})
+		}
+		json.NewEncoder(w).Encode(result)
+
+	case http.MethodDelete:
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			http.Error(w, "Missing path", http.StatusBadRequest)
+			return
+		}
+		fullPath := filepath.Join(s.BasePath, path)
+		
+		// 安全检查
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(fullPath)
+		if !strings.HasPrefix(absPath, absBase) || absPath == absBase {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		if err := os.RemoveAll(fullPath); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+
+	case http.MethodPost:
+		// 文件上传
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			http.Error(w, "Missing path", http.StatusBadRequest)
+			return
+		}
+		fullPath := filepath.Join(s.BasePath, path)
+
+		// 安全检查
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(fullPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		// 获取上传的文件
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "Failed to get file: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		// 确保目录存在
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			http.Error(w, "Failed to create directory", http.StatusInternalServerError)
+			return
+		}
+
+		// 创建文件（自动替换）
+		dst, err := os.Create(fullPath)
+		if err != nil {
+			http.Error(w, "Failed to create file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, file); err != nil {
+			http.Error(w, "Failed to save file", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "File uploaded")
+		return
+
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *State) handleAdminFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Missing path", http.StatusBadRequest)
+		return
+	}
+	fullPath := filepath.Join(s.BasePath, path)
+
+	// 安全检查
+	absBase, _ := filepath.Abs(s.BasePath)
+	absPath, _ := filepath.Abs(fullPath)
+	if !strings.HasPrefix(absPath, absBase) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// 检查是否是文件
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// 设置下载响应头
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(fullPath)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeFile(w, r, fullPath)
+}
+
 func (s *State) Routes(mux *http.ServeMux) {
 	// 静态 UI
 	staticDir := filepath.Join("web", "dist")
+	adminStaticDir := filepath.Join("web", "admin")
 
 	// 统一静态资源服务函数
 	serveStatic := func(w http.ResponseWriter, r *http.Request, baseDir string, prefix string) {
@@ -228,9 +523,9 @@ func (s *State) Routes(mux *http.ServeMux) {
 		}
 
 		// 默认 404
-		w.WriteHeader(http.StatusNotFound)
 		notFoundPath := filepath.Join(staticDir, "404.html")
 		if _, err := os.Stat(notFoundPath); err == nil {
+			w.WriteHeader(http.StatusNotFound)
 			http.ServeFile(w, r, notFoundPath)
 		} else {
 			// 如果没有 404.html，返回 index.html 以支持前端路由 fallback
@@ -301,6 +596,33 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/latest", s.handleLatestAll)
 	mux.HandleFunc("/api/latest/", s.handleLatestLauncher)
 	mux.HandleFunc("/api/stats", s.handleStats)
+
+	// Admin API
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/admin/config", s.AdminMiddleware(s.handleAdminConfig))
+	mux.HandleFunc("/api/admin/blacklist", s.AdminMiddleware(s.handleAdminBlacklist))
+	mux.HandleFunc("/api/admin/files", s.AdminMiddleware(s.handleAdminFiles))
+	mux.HandleFunc("/api/admin/files/download", s.AdminMiddleware(s.handleAdminFileDownload))
+
+	// Admin UI
+	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		relPath := strings.TrimPrefix(path, "/admin/")
+		
+		if relPath == "" || relPath == "index.html" {
+			http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
+			return
+		}
+
+		fullPath := filepath.Join(adminStaticDir, relPath)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, fullPath)
+			return
+		}
+		
+		// Fallback to index.html for SPA-like behavior in admin
+		http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
+	})
 }
 
 // containsDotDot 检查路径是否包含 ".." 元素
@@ -318,7 +640,30 @@ func containsDotDot(v string) bool {
 
 func SecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 记录访问
 		stats.RecordVisit(r)
+
+		// 获取真实 IP（考虑代理）
+		ip := r.RemoteAddr
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ip = strings.Split(xff, ",")[0]
+		} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			ip = xri
+		}
+		// 移除端口号
+		if strings.Contains(ip, ":") {
+			if host, _, err := net.SplitHostPort(ip); err == nil {
+				ip = host
+			}
+		}
+
+		// 检查黑名单
+		if db.IsIPBlacklisted(ip) {
+			log.Printf("拒绝来自黑名单 IP 的访问: %s", ip)
+			http.Error(w, "Access Denied", http.StatusForbidden)
+			return
+		}
+
 		path := r.URL.Path
 		// 拦截路径遍历尝试
 		if containsDotDot(path) {

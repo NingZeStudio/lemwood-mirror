@@ -14,15 +14,7 @@
 - 下载 release 资产到 `download/启动器名/版本号/`，并生成 `info.json`。
 - 集成 SQLite 数据库，自动记录访问日志和下载统计。
 - 提供详细的数据统计功能，包括访问量、下载排行、地域分布和每日趋势图表。
-- 提供 HTTP 服务：
-  - `GET /` 前端页面。
-  - `GET /api/status` 返回各启动器版本信息。
-  - `GET /api/latest` 返回所有启动器的最新稳定版本信息。
-  - `GET /api/latest/{launcher_id}` 返回指定启动器的最新稳定版本信息。
-  - `GET /api/stats` 返回统计数据。
-  - `POST /api/scan` 触发一次手动扫描。
-  - `GET /api/files?path=...` 列出存储目录树。
-  - `GET /download/...` 提供下载静态文件。
+- 提供完善的 HTTP API 接口和后台管理功能（详见 [API 文档](API_DOCS.md)）。
 
 ## 目录结构
 - `cmd/mirror`：主程序入口。
@@ -137,11 +129,8 @@ server {
 - **下载统计**: 记录具体下载的启动器、版本和文件名。
 - **可视化面板**: 前端提供直观的每日趋势、下载分布图表。
 
-## API 集成
-- `GET /api/status`: 获取所有版本详情。
-- `GET /api/latest`: 获取各启动器最新稳定版。
-- `GET /api/latest/{id}`: 获取指定启动器最新版本号（纯文本）。
-- `GET /api/stats`: 获取统计摘要。
+## 📖 API 文档
+详细的 API 接口说明请参阅 [API 文档](API_DOCS.md)。
 
 ---
 *Powered by Lemwood Mirror Team*

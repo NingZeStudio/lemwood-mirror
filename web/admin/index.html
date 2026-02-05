@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lemwood Mirror 后台管理</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="login-page" class="page">
+        <div class="login-container">
+            <h1>后台登录</h1>
+            <form id="login-form">
+                <input type="text" id="username" placeholder="用户名" required>
+                <input type="password" id="password" placeholder="密码" required>
+                <button type="submit">登录</button>
+            </form>
+            <p id="login-error" class="error"></p>
+        </div>
+    </div>
+
+    <div id="admin-page" class="page" style="display: none;">
+        <nav>
+            <div class="nav-title">Lemwood Mirror Admin</div>
+            <ul>
+                <li><a href="#" data-tab="config">配置编辑</a></li>
+                <li><a href="#" data-tab="files">文件管理</a></li>
+                <li><a href="#" data-tab="blacklist">黑名单管理</a></li>
+                <li><a href="#" id="logout-btn">退出</a></li>
+            </ul>
+        </nav>
+
+        <main>
+            <section id="config-tab" class="tab-content">
+                <div class="section-header">
+                    <h2>系统配置</h2>
+                </div>
+                <form id="config-form">
+                        <div class="form-section">
+                            <h4>基础设置</h4>
+                            <div class="form-group">
+                                <label>服务端口</label>
+                                <input type="number" name="server_port" required>
+                            </div>
+                            <div class="form-group">
+                                <label>检查频率 (Cron)</label>
+                                <input type="text" name="check_cron" required placeholder="例如: @every 10m">
+                            </div>
+                            <div class="form-group">
+                                <label>存储路径</label>
+                                <input type="text" name="storage_path" required>
+                            </div>
+                            <div class="form-group">
+                                <label>下载链接前缀</label>
+                                <input type="text" name="download_url_base" required placeholder="例如: https://mirror.example.com">
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h4>GitHub 配置</h4>
+                            <div class="form-group">
+                                <label>GitHub Token (留空不修改)</label>
+                                <input type="password" name="github_token" placeholder="用于 API 认证，避免限流">
+                            </div>
+                            <div class="form-group">
+                                <label>代理 URL</label>
+                                <input type="text" name="proxy_url" placeholder="例如: http://127.0.0.1:7890">
+                            </div>
+                            <div class="form-group">
+                                <label>资源代理前缀</label>
+                                <input type="text" name="asset_proxy_url" placeholder="用于加速下载，例如: https://ghproxy.com/">
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h4>管理员设置</h4>
+                            <div class="form-group">
+                                <label>管理员账号</label>
+                                <input type="text" name="admin_user" required>
+                            </div>
+                            <div class="form-group">
+                                <label>新密码 (留空不修改)</label>
+                                <input type="password" name="admin_password">
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h4>高级设置</h4>
+                            <div class="form-group">
+                                <label>并发下载数</label>
+                                <input type="number" name="concurrent_downloads" required min="1" max="10">
+                            </div>
+                            <div class="form-group">
+                                <label>下载超时 (分钟)</label>
+                                <input type="number" name="download_timeout_minutes" required min="1">
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <input type="checkbox" id="xget_enabled" name="xget_enabled">
+                                <label for="xget_enabled">启用 Xget 镜像加速</label>
+                            </div>
+                            <div class="form-group">
+                                <label>Xget 域名</label>
+                                <input type="text" name="xget_domain">
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="section-header">
+                                <h4>启动器配置</h4>
+                                <button type="button" id="add-launcher-btn" class="secondary-btn">添加启动器</button>
+                            </div>
+                            <div id="launchers-container">
+                                <!-- 启动器配置项动态生成 -->
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="primary-btn">保存配置</button>
+                            <span id="config-msg" class="msg"></span>
+                        </div>
+                    </form>
+                </section>
+
+            <section id="files-tab" class="tab-content" style="display: none;">
+                <div class="section-header">
+                    <h2>下载目录文件管理</h2>
+                    <div class="file-actions">
+                        <input type="file" id="file-upload-input" style="display: none;">
+                        <button type="button" id="upload-btn" class="secondary-btn">上传文件 (自动替换)</button>
+                    </div>
+                </div>
+                <div id="file-browser">
+                    <div id="file-msg" class="msg"></div>
+                    <div class="breadcrumb" id="file-path">/</div>
+                    <table id="file-table">
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>类型</th>
+                                <th>大小</th>
+                                <th>修改时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="blacklist-tab" class="tab-content" style="display: none;">
+                <h2>IP 黑名单管理</h2>
+                <form id="add-blacklist-form" class="add-blacklist">
+                    <input type="text" id="blacklist-ip" placeholder="IP 地址" required>
+                    <input type="text" id="blacklist-reason" placeholder="原因" required>
+                    <button type="submit" class="secondary-btn">添加</button>
+                </form>
+                <table id="blacklist-table">
+                    <thead>
+                        <tr>
+                            <th>IP</th>
+                            <th>原因</th>
+                            <th>添加时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

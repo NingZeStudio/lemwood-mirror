@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-
+	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/browser"
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
@@ -39,7 +39,11 @@ func main() {
 	if err := db.InitDB(base); err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
-	s := server.NewState(base)
+
+	// 启动 Token 清理协程
+	go auth.CleanupTokens()
+
+	s := server.NewState(base, projectRoot, cfg)
 	if err := s.InitFromDisk(); err != nil {
 		log.Printf("初始化索引失败: %v", err)
 	}

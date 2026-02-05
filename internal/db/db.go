@@ -25,12 +25,15 @@ func InitDB(storagePath string) error {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
 
+	// 限制最大连接数为 1，避免 SQLite 锁定
+	DB.SetMaxOpenConns(1)
+
 	// 性能优化：启用 WAL 模式
 	// WAL 模式允许并发读写，显著提高性能
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=5000",
+		"PRAGMA busy_timeout=10000",
 		"PRAGMA foreign_keys=ON",
 	}
 
@@ -69,6 +72,11 @@ func createTables() error {
             country TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS ip_blacklist (
+            ip TEXT PRIMARY KEY,
+            reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
 		`CREATE INDEX IF NOT EXISTS idx_visits_created_at ON visits(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_file_name ON downloads(file_name)`,
@@ -80,4 +88,45 @@ func createTables() error {
 		}
 	}
 	return nil
+}
+
+func IsIPBlacklisted(ip string) bool {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM ip_blacklist WHERE ip = ?", ip).Scan(&count)
+	if err != nil {
+		return false
+	}
+	return count > 0
+}
+
+func AddIPToBlacklist(ip, reason string) error {
+	_, err := DB.Exec("INSERT OR REPLACE INTO ip_blacklist (ip, reason) VALUES (?, ?)", ip, reason)
+	return err
+}
+
+func RemoveIPFromBlacklist(ip string) error {
+	_, err := DB.Exec("DELETE FROM ip_blacklist WHERE ip = ?", ip)
+	return err
+}
+
+func GetIPBlacklist() ([]map[string]string, error) {
+	rows, err := DB.Query("SELECT ip, reason, created_at FROM ip_blacklist ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := []map[string]string{}
+	for rows.Next() {
+		var ip, reason, createdAt string
+		if err := rows.Scan(&ip, &reason, &createdAt); err != nil {
+			return nil, err
+		}
+		list = append(list, map[string]string{
+			"ip":         ip,
+			"reason":     reason,
+			"created_at": createdAt,
+		})
+	}
+	return list, nil
 }

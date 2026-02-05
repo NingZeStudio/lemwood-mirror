@@ -1,0 +1,264 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #fff;
+    color: #000;
+    margin: 0;
+    padding: 0;
+}
+
+.page {
+    min-height: 100vh;
+}
+
+/* Login Page */
+.login-container {
+    max-width: 400px;
+    margin: 100px auto;
+    padding: 40px;
+    border: 1px solid #000;
+}
+
+.login-container h1 {
+    margin-top: 0;
+    font-weight: 300;
+    text-align: center;
+}
+
+input[type="text"], input[type="password"], textarea {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 20px;
+    border: 1px solid #000;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+
+button {
+    background: #000;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.2s;
+}
+
+button:hover {
+    opacity: 0.8;
+}
+
+.error {
+    color: red;
+    font-size: 14px;
+}
+
+/* Admin Layout */
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 40px;
+    border-bottom: 1px solid #000;
+    height: 60px;
+}
+
+.nav-title {
+    font-weight: bold;
+    font-size: 18px;
+}
+
+nav ul {
+    list-style: none;
+    display: flex;
+    margin: 0;
+    padding: 0;
+}
+
+nav ul li {
+    margin-left: 20px;
+}
+
+nav ul li a {
+    color: #000;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+nav ul li a:hover {
+    text-decoration: underline;
+}
+
+main {
+    padding: 40px;
+}
+
+h2 {
+    font-weight: 300;
+    margin-top: 0;
+}
+
+.tab-content {
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* 表单样式 */
+.form-section {
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    border: 1px solid #eee;
+}
+
+.form-section h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+    border-bottom: 2px solid #000;
+    padding-bottom: 5px;
+    display: inline-block;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group input[type="password"] {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.form-group.checkbox-group {
+    display: flex;
+    align-items: center;
+}
+
+.form-group.checkbox-group input {
+    margin-right: 10px;
+    width: auto;
+}
+
+.form-group.checkbox-group label {
+    margin-bottom: 0;
+}
+
+.launcher-item {
+    background: #fff;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    position: relative;
+}
+
+.launcher-item .remove-btn {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    background: #ff4444;
+    color: white;
+    border: none;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.secondary-btn {
+    background: #444;
+    color: white;
+    border: none;
+    padding: 5px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.secondary-btn:hover {
+    background: #666;
+}
+
+.form-actions {
+    margin-top: 30px;
+    padding: 20px;
+    background: #eee;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+th, td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+th {
+    font-weight: bold;
+    border-bottom: 2px solid #000;
+}
+
+.actions-cell button {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.add-blacklist {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.add-blacklist input {
+    margin-bottom: 0;
+}
+
+.breadcrumb {
+    margin-bottom: 20px;
+    font-family: monospace;
+}
+
+.folder-link {
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.delete-btn {
+    background: #ff4444;
+}
+
+.download-btn {
+    background: #28a745;
+    margin-right: 5px;
+}
