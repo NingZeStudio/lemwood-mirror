@@ -8,42 +8,57 @@ document.addEventListener('DOMContentLoaded', () => {
     const tabContents = document.querySelectorAll('.tab-content');
 
     let currentPath = '';
-    let authInfo = { username: 'admin', salt: '' };
+    let adminUser = 'admin';
 
-    // Fetch auth info (username and salt)
-    async function fetchAuthInfo() {
-        try {
-            const res = await fetch('/api/auth/info');
-            if (res.ok) {
-                authInfo = await res.json();
-                if (document.getElementById('username')) {
-                    document.getElementById('username').placeholder = `用户名 (默认: ${authInfo.username})`;
-                }
+    // 检查是否有现有 token
+    let token = localStorage.getItem('admin_token');
+    if (!token) {
+        // 尝试从 cookie 获取 (针对 OAuth2 回调)
+        const cookies = document.cookie.split(';');
+        for (let c of cookies) {
+            c = c.trim();
+            if (c.startsWith('admin_token=')) {
+                token = c.substring('admin_token='.length);
+                localStorage.setItem('admin_token', token);
+                // 清除 cookie
+                document.cookie = "admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+                break;
             }
-        } catch (err) {
-            console.error('Failed to fetch auth info:', err);
         }
     }
-    fetchAuthInfo();
-
-    // Check for existing token
-    const token = localStorage.getItem('admin_token');
     if (token) {
         showAdminPage();
     }
 
-    // Login
+    // 检查 2FA 状态
+    async function check2FAStatus() {
+        try {
+            const res = await fetch('/api/auth/2fa/status');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.enabled) {
+                    document.getElementById('totp-input-group').style.display = 'block';
+                    document.getElementById('otp_code').required = true;
+                }
+            }
+        } catch (err) {
+            console.error('Failed to check 2FA status:', err);
+        }
+    }
+    check2FAStatus();
+
+    // 登录
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const username = document.getElementById('username').value || authInfo.username;
-        const passwordRaw = document.getElementById('password').value;
-        const password = await hashPassword(passwordRaw);
+        const username = document.getElementById('username').value || adminUser;
+        const password = document.getElementById('password').value;
+        const otp_code = document.getElementById('otp_code').value;
 
         try {
             const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username, password, otp_code })
             });
 
             if (res.ok) {
@@ -51,29 +66,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 localStorage.setItem('admin_token', data.token);
                 showAdminPage();
             } else {
-                loginError.textContent = '登录失败，请检查用户名和密码';
+                const text = await res.text();
+                loginError.textContent = text || '登录失败，请检查用户名、密码或验证码';
             }
         } catch (err) {
             loginError.textContent = '连接服务器失败';
         }
     });
 
-    // Logout
+    // 登出
     logoutBtn.addEventListener('click', () => {
         localStorage.removeItem('admin_token');
         location.reload();
     });
-
-    // 辅助函数
-    async function hashPassword(password) {
-        if (!password) return '';
-        const encoder = new TextEncoder();
-        // 使用安装唯一的 salt 进行哈希，防止针对开源项目的通用彩虹表攻击
-        const data = encoder.encode(password + authInfo.salt);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    }
 
     async function apiFetch(url, options = {}) {
         const token = localStorage.getItem('admin_token');
@@ -162,6 +167,18 @@ document.addEventListener('DOMContentLoaded', () => {
             form.download_timeout_minutes.value = config.download_timeout_minutes;
             form.xget_enabled.checked = config.xget_enabled;
             form.xget_domain.value = config.xget_domain || '';
+
+            // 管理员限制
+            form.admin_max_retries.value = config.admin_max_retries || 10;
+            form.admin_lock_duration.value = config.admin_lock_duration || 120;
+
+            // TOTP Config
+            form.two_factor_enabled.checked = config.two_factor_enabled;
+            form.two_factor_secret.value = config.two_factor_secret || '';
+            document.getElementById('totp-setup-section').style.display = config.two_factor_enabled ? 'block' : 'none';
+            if (config.two_factor_enabled && config.two_factor_secret) {
+                updateTOTPQR(config.two_factor_secret);
+            }
             
             console.log('Populating launchers...');
             // 加载启动器
@@ -203,6 +220,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('add-launcher-btn').onclick = () => addLauncherItem();
 
+    // TOTP 相关逻辑
+    const twoFactorEnabled = document.getElementById('two_factor_enabled');
+    const totpSetupSection = document.getElementById('totp-setup-section');
+    const generateTotpBtn = document.getElementById('generate-totp-btn');
+    const twoFactorSecret = document.getElementById('two_factor_secret');
+
+    twoFactorEnabled.addEventListener('change', () => {
+        totpSetupSection.style.display = twoFactorEnabled.checked ? 'block' : 'none';
+        if (twoFactorEnabled.checked && !twoFactorSecret.value) {
+            generateNewSecret();
+        }
+    });
+
+    generateTotpBtn.addEventListener('click', generateNewSecret);
+
+    function generateNewSecret() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; // Base32
+        let secret = '';
+        for (let i = 0; i < 16; i++) {
+            secret += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        twoFactorSecret.value = secret;
+        updateTOTPQR(secret);
+    }
+
+    function updateTOTPQR(secret) {
+        const qrDiv = document.getElementById('totp-qr-code');
+        qrDiv.innerHTML = '';
+        const url = `otpauth://totp/LemwoodMirror:admin?secret=${secret}&issuer=LemwoodMirror`;
+        const qrImg = document.createElement('img');
+        qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url)}`;
+        qrDiv.appendChild(qrImg);
+    }
+
     // 保存配置
     document.getElementById('config-form').onsubmit = async (e) => {
         e.preventDefault();
@@ -232,12 +283,15 @@ document.addEventListener('DOMContentLoaded', () => {
             download_timeout_minutes: parseInt(form.download_timeout_minutes.value),
             xget_enabled: form.xget_enabled.checked,
             xget_domain: form.xget_domain.value,
+            admin_max_retries: parseInt(form.admin_max_retries.value),
+            admin_lock_duration: parseInt(form.admin_lock_duration.value),
+            two_factor_enabled: form.two_factor_enabled.checked,
+            two_factor_secret: form.two_factor_secret.value,
             launchers: launchers
         };
 
-        // 仅当填写了密码时才发送
         if (form.admin_password.value) {
-            config.admin_password = await hashPassword(form.admin_password.value);
+            config.admin_password = form.admin_password.value;
         }
         if (form.github_token.value) {
             config.github_token = form.github_token.value;

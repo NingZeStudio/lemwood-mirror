@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/config"
@@ -29,6 +30,11 @@ type State struct {
 	index     map[string]map[string]string
 	latest    map[string]string
 	infoCache map[string]map[string]interface{} // 缓存 index.json 文件内容
+
+	// 登录限制
+	loginAttempts   map[string]int       // IP -> 失败次数
+	loginLocks      map[string]time.Time // IP -> 解锁时间
+	loginAttemptsMu sync.Mutex
 }
 
 func NewState(base string, projectRoot string, cfg *config.Config) *State {
@@ -39,6 +45,9 @@ func NewState(base string, projectRoot string, cfg *config.Config) *State {
 		index:       make(map[string]map[string]string),
 		latest:      make(map[string]string),
 		infoCache:   make(map[string]map[string]interface{}),
+
+		loginAttempts: make(map[string]int),
+		loginLocks:    make(map[string]time.Time),
 	}
 }
 
@@ -185,27 +194,44 @@ func (s *State) AdminSwitchMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *State) handleAuthInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]string{
-		"username": s.Config.AdminUser,
-		"salt":     s.Config.SecuritySalt,
-	})
-}
-
 func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// 获取 IP
+	ip := r.RemoteAddr
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ip = strings.Split(xff, ",")[0]
+	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		ip = xri
+	}
+	if strings.Contains(ip, ":") {
+		if host, _, err := net.SplitHostPort(ip); err == nil {
+			ip = host
+		}
+	}
+
+	// 检查锁定状态
+	s.loginAttemptsMu.Lock()
+	if unlockTime, locked := s.loginLocks[ip]; locked {
+		if time.Now().Before(unlockTime) {
+			s.loginAttemptsMu.Unlock()
+			diff := time.Until(unlockTime).Round(time.Second)
+			http.Error(w, fmt.Sprintf("账号已被锁定，请在 %v 后重试", diff), http.StatusForbidden)
+			return
+		}
+		// 锁定已过期
+		delete(s.loginLocks, ip)
+		delete(s.loginAttempts, ip)
+	}
+	s.loginAttemptsMu.Unlock()
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		OTPCode  string `json:"otp_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
@@ -218,10 +244,49 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 验证用户名密码
 	if req.Username != s.Config.AdminUser || !auth.CheckPasswordHash(req.Password, s.Config.AdminPassword) {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		// 记录失败
+		s.loginAttemptsMu.Lock()
+		s.loginAttempts[ip]++
+		attempts := s.loginAttempts[ip]
+		if attempts >= s.Config.AdminMaxRetries {
+			lockUntil := time.Now().Add(time.Duration(s.Config.AdminLockDuration) * time.Minute)
+			s.loginLocks[ip] = lockUntil
+			log.Printf("IP %s 登录失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
+			s.loginAttemptsMu.Unlock()
+			http.Error(w, fmt.Sprintf("登录失败次数过多，账号已锁定 %d 小时", s.Config.AdminLockDuration/60), http.StatusForbidden)
+		} else {
+			log.Printf("IP %s 登录失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
+			s.loginAttemptsMu.Unlock()
+			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		}
 		return
 	}
+
+	// 验证 2FA
+	if s.Config.TwoFactorEnabled {
+		if req.OTPCode == "" {
+			http.Error(w, "需要验证码", http.StatusUnauthorized)
+			return
+		}
+		if !auth.ValidateTOTP(req.OTPCode, s.Config.TwoFactorSecret) {
+			// 验证码错误也算作一次失败尝试
+			s.loginAttemptsMu.Lock()
+			s.loginAttempts[ip]++
+			attempts := s.loginAttempts[ip]
+			log.Printf("IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
+			s.loginAttemptsMu.Unlock()
+			http.Error(w, "验证码错误", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// 登录成功，重置计数
+	s.loginAttemptsMu.Lock()
+	delete(s.loginAttempts, ip)
+	delete(s.loginLocks, ip)
+	s.loginAttemptsMu.Unlock()
 
 	token, err := auth.GenerateToken()
 	if err != nil {
@@ -234,12 +299,18 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *State) handle2FAStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{
+		"enabled": s.Config.TwoFactorEnabled,
+	})
+}
+
 func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		// 返回脱敏后的配置
 		cfgCopy := *s.Config
 		cfgCopy.AdminPassword = "" // 不返回密码哈希
-		cfgCopy.SecuritySalt = ""  // 不在配置编辑页返回盐
 		json.NewEncoder(w).Encode(cfgCopy)
 		return
 	}
@@ -262,9 +333,6 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			newCfg.AdminPassword = hashed
 		}
-
-		// 保持盐不变
-		newCfg.SecuritySalt = s.Config.SecuritySalt
 
 		if err := newCfg.Save(s.ProjectRoot); err != nil {
 			http.Error(w, "Failed to save config", http.StatusInternalServerError)
@@ -626,7 +694,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/latest", s.handleLatestAll)
 	mux.HandleFunc("/api/latest/", s.handleLatestLauncher)
 	mux.HandleFunc("/api/stats", s.handleStats)
-	mux.HandleFunc("/api/auth/info", s.handleAuthInfo)
+	mux.HandleFunc("/api/auth/2fa/status", s.handle2FAStatus)
 
 	// Admin API
 	mux.Handle("/api/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))

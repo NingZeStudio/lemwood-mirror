@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +29,8 @@ type Config struct {
 	AdminUser              string           `json:"admin_user"`
 	AdminPassword          string           `json:"admin_password"`
 	AdminEnabled           bool             `json:"admin_enabled"`
+	AdminMaxRetries        int              `json:"admin_max_retries"`
+	AdminLockDuration      int              `json:"admin_lock_duration"` // 单位：分钟
 	ProxyURL               string           `json:"proxy_url"`
 	AssetProxyURL          string           `json:"asset_proxy_url"`
 	XgetDomain             string           `json:"xget_domain"`
@@ -38,7 +38,8 @@ type Config struct {
 	DownloadTimeoutMinutes int              `json:"download_timeout_minutes"`
 	ConcurrentDownloads    int              `json:"concurrent_downloads"`
 	DownloadUrlBase        string           `json:"download_url_base,omitempty"`
-	SecuritySalt           string           `json:"security_salt,omitempty"`
+	TwoFactorEnabled       bool             `json:"two_factor_enabled"`
+	TwoFactorSecret        string           `json:"two_factor_secret"`
 	Launchers              []LauncherConfig `json:"launchers"`
 }
 
@@ -70,15 +71,17 @@ func LoadConfig(projectRoot string) (*Config, error) {
 			fmt.Println("警告: 管理员账号或密码未配置，管理后台已自动禁用")
 			cfg.AdminEnabled = false
 		}
+		// 设置默认限制
+		if cfg.AdminMaxRetries <= 0 {
+			cfg.AdminMaxRetries = 10
+		}
+		if cfg.AdminLockDuration <= 0 {
+			cfg.AdminLockDuration = 120 // 默认 2 小时 (120 分钟)
+		}
 	} else {
 		fmt.Println("提示: 管理后台当前处于禁用状态")
 	}
 
-	// 自动生成安全盐
-	if cfg.SecuritySalt == "" {
-		cfg.SecuritySalt = generateRandomString(32)
-		_ = cfg.Save(projectRoot)
-	}
 	// 允许环境变量覆盖 GitHub 令牌
 	if env := os.Getenv("GITHUB_TOKEN"); env != "" {
 		cfg.GitHubToken = env
@@ -96,12 +99,4 @@ func (c *Config) Save(projectRoot string) error {
 		return fmt.Errorf("写入 config.json 失败: %w", err)
 	}
 	return nil
-}
-
-func generateRandomString(n int) string {
-	b := make([]byte, n/2)
-	if _, err := rand.Read(b); err != nil {
-		return "default_salt_if_rand_fails"
-	}
-	return hex.EncodeToString(b)
 }

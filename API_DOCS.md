@@ -8,17 +8,15 @@
 
 ### 1.1 认证机制
 - **认证方式**：基于 Bearer Token。
-- **Token 获取**：通过 `POST /api/login` 接口。
-- **安全加固**：采用前端预哈希 + 安装唯一盐值（Installation Salt）机制。
+- **Token 获取**：通过 `POST /api/login` 接口，支持基于 TOTP 的两步验证 (2FA)。
+- **两步验证 (TOTP)**：兼容 Microsoft Authenticator、Google Authenticator 等标准验证器。
+- **安全加固**：建议在 **HTTPS** 环境下运行，以确保登录凭证和 TOTP 密钥的安全传输。
 - **Token 有效期**：24 小时。
 - **使用方式**：在请求头中携带 `Authorization: <token>`，或者在 Cookie 中携带 `admin_token=<token>`。
 
-### 1.2 安全哈希机制
-为了防止彩虹表攻击和在非 HTTPS 环境下的明文传输，系统采用了以下流程：
-1. 客户端通过 `GET /api/auth/info` 获取服务器生成的唯一 `security_salt`。
-2. 客户端计算 `SHA-256(password + salt)`。
-3. 将该哈希值作为 `password` 字段发送至 `POST /api/login`。
-4. 服务端使用 `Bcrypt` 对收到的哈希值进行二次加密存储和校验。
+### 1.2 登录流程
+1. **常规登录**：客户端将用户名、密码及可选的 TOTP 验证码发送至 `POST /api/login`。
+2. **两步验证 (2FA)**：如果系统启用了 2FA，登录时必须提供由验证器应用（如 Microsoft Authenticator）生成的 6 位动态验证码。
 
 ### 1.3 安全中间件
 所有 API 请求均经过安全中间件处理：
@@ -27,32 +25,18 @@
 - **CORS 支持**：支持跨域访问，允许 `GET, POST, OPTIONS` 方法。
 - **访问统计**：自动记录所有有效请求的 IP、路径、UA 和地理位置。
 
-### 1.3 响应头
-- `X-Latest-Versions`: 仅在 `/api/latest` 返回，包含所有启动器最新版本的 JSON。
-- `X-Latest-Version`: 仅在 `/api/latest/{id}` 返回，包含该启动器的最新版本号。
-
 ---
 
 ## 2. 身份认证接口
 
-### 2.1 获取认证信息
-- **端点**：`GET /api/auth/info`
-- **功能**：获取当前系统配置的管理员用户名和安装唯一盐值（Salt）。
-- **响应示例**：
-  ```json
-  {
-    "username": "admin",
-    "salt": "a1b2c3d4e5f6..."
-  }
-  ```
-
-### 2.2 管理员登录
+### 2.1 管理员登录
 - **端点**：`POST /api/login`
 - **请求体**：
   ```json
   {
     "username": "admin",
-    "password": "<SHA-256(password + salt)>"
+    "password": "your_password",
+    "otp_code": "123456" 
   }
   ```
 - **响应示例** (200 OK)：
@@ -61,10 +45,19 @@
     "token": "4e7...a3f"
   }
   ```
-- **错误码**：
-  - `400 Bad Request`: 请求体格式错误。
-  - `401 Unauthorized`: 用户名或密码错误。
-  - `500 Internal Server Error`: 服务器配置错误或 Token 生成失败。
+- **安全特性**：
+  - **暴力破解防护**：同一 IP 连续登录失败（包括密码错误和验证码错误）达到上限（默认 10 次）将被锁定。
+  - **锁定时长**：锁定时间默认为 120 分钟（2 小时）。
+
+### 2.2 获取 2FA 状态
+- **端点**：`GET /api/auth/2fa/status`
+- **功能**：查询当前系统是否启用了两步验证，供登录页 UI 适配。
+- **响应示例**：
+  ```json
+  {
+    "enabled": true
+  }
+  ```
 
 ---
 
@@ -72,119 +65,47 @@
 
 ### 3.1 获取所有启动器状态
 - **端点**：`GET /api/status`
-- **功能**：返回所有启动器的所有版本详细信息，按版本号降序排列。
-- **响应示例**：
-  ```json
-  {
-    "fcl": [
-      {
-        "tag_name": "1.2.7.1",
-        "launcher": "fcl",
-        "name": "1.2.7.1",
-        "published_at": "2025-11-21T12:00:00Z",
-        "assets": [
-          {
-            "name": "FCL-release-1.2.7.1-all.apk",
-            "size": 238526949,
-            "url": "https://mirror.lemwood.icu/download/fcl/1.2.7.1/FCL-release-1.2.7.1-all.apk"
-          }
-        ]
-      }
-    ]
-  }
-  ```
+- **功能**：返回所有启动器的所有版本详细信息。
 
 ### 3.2 获取指定启动器状态
 - **端点**：`GET /api/status/{launcher_id}`
-- **示例**：`GET /api/status/fcl`
-- **响应示例**：返回该启动器的版本数组（结构同上）。
+- **功能**：返回指定启动器的所有版本详细信息。
 
-### 3.3 获取所有最新版本
+### 3.3 获取所有启动器最新版本
 - **端点**：`GET /api/latest`
-- **响应示例**：
-  ```json
-  {
-    "fcl": "1.2.7.1",
-    "hmcl": "v3.8.1",
-    "zl": "141100"
-  }
-  ```
-- **响应头**：包含 `X-Latest-Versions`。
+- **功能**：返回所有启动器的最新稳定版本号。
+- **响应头**：`X-Latest-Versions`
 
 ### 3.4 获取指定启动器最新版本
 - **端点**：`GET /api/latest/{launcher_id}`
-- **响应内容**：纯文本版本号，如 `1.2.7.1`。
-- **响应头**：包含 `X-Latest-Version`。
+- **功能**：返回指定启动器的最新稳定版本号（纯文本）。
+- **响应头**：`X-Latest-Version`
 
-### 3.5 获取系统统计数据
+### 3.5 获取系统统计信息
 - **端点**：`GET /api/stats`
-- **功能**：返回访问量、下载量、排行、地域分布等。
-- **响应示例**：
-  ```json
-  {
-    "total_visits": 18223,
-    "total_downloads": 2690,
-    "top_downloads": [{"file_name": "...", "count": 120}],
-    "geo_distribution": [{"city": "Beijing", "count": 500}],
-    "daily_stats": [{"date": "2026-02-05", "visits": 100, "downloads": 20}]
-  }
-  ```
+- **功能**：返回系统访问量、下载量等统计数据。
 
 ---
 
 ## 4. 后台管理接口 (需认证)
 
-### 4.1 配置文件管理
-- **获取配置**：`GET /api/admin/config`
-  - 响应：返回 `config.json` 的所有字段（`admin_password` 会被清空以保安全）。
-- **更新配置**：`POST /api/admin/config`
-  - 请求体：完整的配置 JSON。
-  - **注意**：如果需要更新 `admin_password`，该字段应填入 `SHA-256(new_password + salt)`。服务端会将其进行 Bcrypt 哈希后持久化。如果该字段为空，则保持原密码不变。
+### 4.1 获取/更新系统配置
+- **端点**：`GET/POST /api/admin/config`
+- **GET**：返回脱敏后的系统配置（不包含密码哈希和 TOTP 密钥）。
+- **POST**：更新系统配置。支持修改管理员密码、GitHub Token、TOTP 配置等。
+- **TOTP 设置流程**：
+  1. 生成新密钥：前端随机生成 Base32 字符串并显示二维码。
+  2. 保存配置：用户确认后点击保存，密钥被持久化到服务器。
+  3. 启用验证：勾选“启用两步验证”并保存，后续登录将强制要求验证码。
 
-### 4.2 IP 黑名单管理
-- **获取黑名单**：`GET /api/admin/blacklist`
-  - 响应：`[{"ip": "1.2.3.4", "reason": "...", "created_at": "..."}]`
-- **添加黑名单**：`POST /api/admin/blacklist`
-  - 请求体：`{"ip": "1.1.1.1", "reason": "恶意攻击"}`
-- **移除黑名单**：`DELETE /api/admin/blacklist?ip=1.1.1.1`
+### 4.2 管理 IP 黑名单
+- **端点**：`GET/POST/DELETE /api/admin/blacklist`
+- **功能**：查询、添加或删除 IP 黑名单。
 
-### 4.3 文件系统管理
-- **列表查询**：`GET /api/admin/files?path=launcher/fcl`
-  - 响应：`[{"name": "v1.0.0", "is_dir": true, "size": 0, "mod_time": "..."}]`
-- **上传文件**：`POST /api/admin/files?path=relative/path/to/file.exe`
-  - **参数**：`path` 为相对于下载根目录的路径。
-  - **请求体**：使用 `multipart/form-data` 格式，文件字段名为 `file`。
-  - **特性**：如果文件已存在，将自动**覆盖**；如果父目录不存在，将自动**递归创建**。
-- **删除文件/目录**：`DELETE /api/admin/files?path=relative/path`
-  - **注意**：目录将递归删除所有内容。禁止删除下载根目录。
-- **安全下载**：`GET /api/admin/files/download?path=relative/path/to/file`
-  - 响应：带 `Content-Disposition: attachment` 的文件流。
+### 4.3 管理文件
+- **端点**：`GET/DELETE /api/admin/files`
+- **功能**：浏览或删除下载目录下的文件和文件夹。
 
----
-
-## 5. 版本判定逻辑说明
-
-系统自动判定“最新稳定版”的规则如下：
-1. **显式标记**：如果版本信息的 `index.json` 中 `is_latest` 字段为 `true`，则优先选中。
-2. **稳定性优先**：排除包含 `alpha, beta, rc, snapshot, pre, dev` 的版本。
-3. **版本号比较**：
-   - 移除前缀 `v`。
-   - 按点分隔符 `.` 拆分段落。
-   - 每一段尝试作为整数比较。
-   - 如果数字相同，按字符串逐位比较。
-   - 例如：`1.2.10` > `1.2.2`；`2.0.0` > `2.0.0_beta`。
-
----
-
-## 6. 状态码参考
-
-| 状态码 | 含义 | 常见场景 |
-| :--- | :--- | :--- |
-| 200 | OK | 请求成功，通常伴随 JSON 数据 |
-| 201 | Created | 资源（如黑名单 IP）创建成功 |
-| 400 | Bad Request | 请求参数缺失或格式不正确 |
-| 401 | Unauthorized | 未登录或 Token 已过期 |
-| 403 | Forbidden | 权限不足（如试图访问系统目录）或 IP 被封禁 |
-| 404 | Not Found | 资源不存在（启动器 ID 错误或路径无效） |
-| 500 | Internal Error | 服务器内部错误（数据库异常或文件系统故障） |
-| 501 | Not Implemented | 功能尚未实现 |
+### 4.4 文件下载
+- **端点**：`GET /api/admin/files/download?path=...`
+- **功能**：从管理后台直接下载服务器上的文件。

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -57,6 +58,10 @@ func HashPassword(password string) (string, error) {
 func CheckPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
+}
+
+func ValidateTOTP(code, secret string) bool {
+	return totp.Validate(code, secret)
 }
 
 func CleanupTokens() {

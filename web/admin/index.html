@@ -13,6 +13,10 @@
             <form id="login-form">
                 <input type="text" id="username" placeholder="用户名" required>
                 <input type="password" id="password" placeholder="密码" required>
+                <div id="totp-input-group" style="display: none;">
+                    <input type="text" id="otp_code" placeholder="6 位验证码" maxlength="6" pattern="\d{6}">
+                    <small>请输入验证器应用中的 6 位动态验证码</small>
+                </div>
                 <button type="submit">登录</button>
             </form>
             <p id="login-error" class="error"></p>
@@ -38,6 +42,16 @@
                 <form id="config-form">
                         <div class="form-section">
                             <h4>基础设置</h4>
+                            <div class="form-group">
+                                <label>管理员登录限制</label>
+                                <div style="display: flex; gap: 10px; align-items: center;">
+                                    <span>最大重试次数:</span>
+                                    <input type="number" name="admin_max_retries" style="width: 80px; margin-bottom: 0;">
+                                    <span>锁定时长 (分钟):</span>
+                                    <input type="number" name="admin_lock_duration" style="width: 80px; margin-bottom: 0;">
+                                </div>
+                                <small>防止暴力破解，默认 10 次/120 分钟</small>
+                            </div>
                             <div class="form-group">
                                 <label>服务端口</label>
                                 <input type="number" name="server_port" required>
@@ -85,6 +99,27 @@
                             <div class="form-group">
                                 <label>新密码 (留空不修改)</label>
                                 <input type="password" name="admin_password">
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h4>二次验证 (TOTP)</h4>
+                            <div class="form-group checkbox-group">
+                                <input type="checkbox" id="two_factor_enabled" name="two_factor_enabled">
+                                <label for="two_factor_enabled">启用两步验证 (使用微软/谷歌验证器)</label>
+                            </div>
+                            <div id="totp-setup-section" style="display: none;">
+                                <div class="form-group">
+                                    <label>验证器密钥 (Secret)</label>
+                                    <div style="display: flex; gap: 10px;">
+                                        <input type="text" id="two_factor_secret" name="two_factor_secret" readonly>
+                                        <button type="button" id="generate-totp-btn">生成新密钥</button>
+                                    </div>
+                                    <small>请将此密钥手动输入或扫描二维码添加至您的验证器应用 (如 Microsoft Authenticator)。</small>
+                                </div>
+                                <div id="totp-qr-code" style="margin-bottom: 20px; text-align: center;">
+                                    <!-- 二维码将在这里生成 -->
+                                </div>
                             </div>
                         </div>
 
