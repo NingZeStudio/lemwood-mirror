@@ -171,6 +171,20 @@ func (s *State) AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *State) AdminSwitchMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.Config.AdminEnabled {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, "Admin console is disabled", http.StatusForbidden)
+			} else {
+				http.Error(w, "Admin console is disabled by administrator", http.StatusForbidden)
+			}
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *State) handleAuthInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -615,14 +629,14 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/info", s.handleAuthInfo)
 
 	// Admin API
-	mux.HandleFunc("/api/login", s.handleLogin)
-	mux.HandleFunc("/api/admin/config", s.AdminMiddleware(s.handleAdminConfig))
-	mux.HandleFunc("/api/admin/blacklist", s.AdminMiddleware(s.handleAdminBlacklist))
-	mux.HandleFunc("/api/admin/files", s.AdminMiddleware(s.handleAdminFiles))
-	mux.HandleFunc("/api/admin/files/download", s.AdminMiddleware(s.handleAdminFileDownload))
+	mux.Handle("/api/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))
+	mux.Handle("/api/admin/config", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminConfig))))
+	mux.Handle("/api/admin/blacklist", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminBlacklist))))
+	mux.Handle("/api/admin/files", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFiles))))
+	mux.Handle("/api/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
 
 	// Admin UI
-	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/admin/", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		relPath := strings.TrimPrefix(path, "/admin/")
 		
@@ -639,7 +653,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		
 		// Fallback to index.html for SPA-like behavior in admin
 		http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
-	})
+	})))
 }
 
 // containsDotDot 检查路径是否包含 ".." 元素

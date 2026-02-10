@@ -30,6 +30,7 @@ type Config struct {
 	GitHubToken            string           `json:"github_token"`
 	AdminUser              string           `json:"admin_user"`
 	AdminPassword          string           `json:"admin_password"`
+	AdminEnabled           bool             `json:"admin_enabled"`
 	ProxyURL               string           `json:"proxy_url"`
 	AssetProxyURL          string           `json:"asset_proxy_url"`
 	XgetDomain             string           `json:"xget_domain"`
@@ -62,6 +63,17 @@ func LoadConfig(projectRoot string) (*Config, error) {
 	if cfg.CheckCron == "" {
 		cfg.CheckCron = "*/10 * * * *" // 默认每 10 分钟
 	}
+
+	// 验证管理员配置
+	if cfg.AdminEnabled {
+		if cfg.AdminUser == "" || cfg.AdminPassword == "" {
+			fmt.Println("警告: 管理员账号或密码未配置，管理后台已自动禁用")
+			cfg.AdminEnabled = false
+		}
+	} else {
+		fmt.Println("提示: 管理后台当前处于禁用状态")
+	}
+
 	// 自动生成安全盐
 	if cfg.SecuritySalt == "" {
 		cfg.SecuritySalt = generateRandomString(32)

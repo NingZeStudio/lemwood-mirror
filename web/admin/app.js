@@ -155,6 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
             form.storage_path.value = config.storage_path;
             form.download_url_base.value = config.download_url_base || '';
             form.admin_user.value = config.admin_user;
+            form.admin_enabled.checked = config.admin_enabled;
             form.proxy_url.value = config.proxy_url || '';
             form.asset_proxy_url.value = config.asset_proxy_url || '';
             form.concurrent_downloads.value = config.concurrent_downloads;
@@ -224,6 +225,7 @@ document.addEventListener('DOMContentLoaded', () => {
             storage_path: form.storage_path.value,
             download_url_base: form.download_url_base.value,
             admin_user: form.admin_user.value,
+            admin_enabled: form.admin_enabled.checked,
             proxy_url: form.proxy_url.value,
             asset_proxy_url: form.asset_proxy_url.value,
             concurrent_downloads: parseInt(form.concurrent_downloads.value),
