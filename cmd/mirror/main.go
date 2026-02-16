@@ -100,25 +100,25 @@ func main() {
 					version = rel.GetName()
 				}
 				
-				// 检查是否已经是最新版本，避免重复下载
+				// 检查版本并执行下载/修复
 				mu.Lock()
 				ls := launchers[lcfg.Name]
-				if ls.Version == version {
-					mu.Unlock()
-					log.Printf("%s: 版本 %s 已是最新，跳过下载", lcfg.Name, version)
-					return
-				}
+				currentVersion := ls.Version
 				mu.Unlock()
 				
-				// 清除该启动器所有旧版本的 latest 标记
-				if err := s.ClearLatestFlags(lcfg.Name); err != nil {
-					log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
+				// 如果版本相同，也继续执行下载流程以检查文件完整性（downloader 内部会跳过已存在的文件）
+				// 但我们只在版本变化时清除 latest 标记
+				if currentVersion != version {
+					// 清除该启动器所有旧版本的 latest 标记
+					if err := s.ClearLatestFlags(lcfg.Name); err != nil {
+						log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
+					}
 				}
 				
 				downer := downloader.NewDownloader(cfg.DownloadTimeoutMinutes, cfg.ConcurrentDownloads)
 				infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, base, cfg.ProxyURL, cfg.AssetProxyURL, cfg.XgetEnabled, cfg.XgetDomain, rel, cfg.ServerAddress, cfg.ServerPort, cfg.DownloadUrlBase, true)
 				if err != nil {
-					log.Printf("%s: 下载失败: %v", lcfg.Name, err)
+					log.Printf("%s: 下载/检查失败: %v", lcfg.Name, err)
 					return
 				}
 				
@@ -128,7 +128,13 @@ func main() {
 				ls.Version = version
 				ls.LastScan = time.Now()
 				mu.Unlock()
-				log.Printf("%s: 已更新至 %s", lcfg.Name, version)
+				
+				if currentVersion != version {
+					log.Printf("%s: 已更新至 %s", lcfg.Name, version)
+				} else {
+					// 版本未变，只是检查了一遍文件
+					// log.Printf("%s: 版本 %s 检查完毕", lcfg.Name, version)
+				}
 			}()
 		}
 		wg.Wait()

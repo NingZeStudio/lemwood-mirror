@@ -104,10 +104,21 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 	if err != nil {
 		return "", fmt.Errorf("序列化 index.json 失败: %w", err)
 	}
-	if err := os.WriteFile(indexPath, b, 0o644); err != nil {
-		return "", fmt.Errorf("写入 index.json 失败: %w", err)
+
+	// 检查 index.json 是否已存在且内容一致
+	writeIndex := true
+	if existingContent, err := os.ReadFile(indexPath); err == nil {
+		if string(existingContent) == string(b) {
+			writeIndex = false
+		}
 	}
-	log.Printf("已将版本信息写入 %s", indexPath)
+
+	if writeIndex {
+		if err := os.WriteFile(indexPath, b, 0o644); err != nil {
+			return "", fmt.Errorf("写入 index.json 失败: %w", err)
+		}
+		log.Printf("已将版本信息写入 %s", indexPath)
+	}
 
 	client := d.httpClient
 	if proxyURL != "" {
@@ -207,7 +218,7 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 
 	if fileInfo, err := os.Stat(outfile); err == nil {
 		if fileInfo.Size() == int64(asset.GetSize()) {
-			log.Printf("文件 %s 已存在且大小一致，跳过下载。", name)
+			// 文件大小一致，认为是同一个文件，跳过下载且不打印日志
 			return nil
 		}
 		log.Printf("文件 %s 已存在但大小不一致 (本地: %d, 远程: %d)，将重新下载。", name, fileInfo.Size(), asset.GetSize())
