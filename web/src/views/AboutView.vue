@@ -1,10 +1,26 @@
 <script setup>
+import { onMounted } from 'vue'
 import { ExternalLink, Github, Mail, Server, Code, Layers, Heart, Coffee } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
 import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
+
+onMounted(() => {
+  document.title = '关于 - 柠枺镜像状态'
+  updateMetaDescription('了解柠枺镜像站背后的团队、技术栈和项目故事')
+})
+
+const updateMetaDescription = (desc) => {
+  const metaDescription = document.querySelector('meta[name="description"]')
+  const metaOgDescription = document.querySelector('meta[property="og:description"]')
+  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]')
+  
+  if (metaDescription) metaDescription.setAttribute('content', desc)
+  if (metaOgDescription) metaOgDescription.setAttribute('content', '关于 - ' + desc)
+  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', '关于 - ' + desc)
+}
 </script>
 
 <template>

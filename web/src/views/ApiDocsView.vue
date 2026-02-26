@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick } from 'vue';
+import { ref, computed, nextTick, onMounted } from 'vue';
 import { Search, Menu, Copy, Check, Terminal } from 'lucide-vue-next';
 import { useClipboard } from '@vueuse/core';
 import hljs from 'highlight.js/lib/core';
@@ -146,6 +146,21 @@ const scrollTo = (index) => {
 const highlightCode = (code, lang) => {
     return hljs.highlight(code, { language: lang }).value;
 };
+
+onMounted(() => {
+  document.title = 'API 文档 - 柠枺镜像状态'
+  updateMetaDescription('柠枺镜像站 API 接口文档，提供版本查询、文件下载、统计信息等接口')
+})
+
+const updateMetaDescription = (desc) => {
+  const metaDescription = document.querySelector('meta[name="description"]')
+  const metaOgDescription = document.querySelector('meta[property="og:description"]')
+  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]')
+  
+  if (metaDescription) metaDescription.setAttribute('content', desc)
+  if (metaOgDescription) metaOgDescription.setAttribute('content', 'API 文档 - ' + desc)
+  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', 'API 文档 - ' + desc)
+}
 </script>
 
 <template>

@@ -192,12 +192,26 @@ onMounted(async () => {
         registerMap('world', mapRes);
         mapLoaded.value = true;
         stats.value = statsRes.data;
+        
+        // 更新 SEO meta
+        document.title = '统计信息 - 柠枺镜像状态';
+        updateMetaDescription('查看柠枺镜像站的访问统计、下载统计和地理分布数据');
     } catch (e) {
         console.error('Failed to load data', e);
     } finally {
         loading.value = false;
     }
 });
+
+const updateMetaDescription = (desc) => {
+  const metaDescription = document.querySelector('meta[name="description"]');
+  const metaOgDescription = document.querySelector('meta[property="og:description"]');
+  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]');
+  
+  if (metaDescription) metaDescription.setAttribute('content', desc);
+  if (metaOgDescription) metaOgDescription.setAttribute('content', '统计信息 - ' + desc);
+  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', '统计信息 - ' + desc);
+};
 </script>
 
 <template>

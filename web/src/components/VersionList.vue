@@ -184,9 +184,9 @@ defineExpose({ refresh: loadData });
         <CardContent class="flex-1"></CardContent>
         
         <CardFooter class="flex flex-col gap-2 pt-0">
-             <Button 
+             <Button
                 v-if="item.hasAssets"
-                class="w-full" 
+                class="w-full"
                 as="a"
                 :href="item.latestDownloadUrl"
               >
@@ -197,8 +197,7 @@ defineExpose({ refresh: loadData });
                 <Button
                   variant="outline"
                   class="flex-1"
-                  as="a"
-                  :href="`/#/files/${item.name}`"
+                  @click="$router.push(`/files/${item.name}`)"
                 >
                   <History class="mr-2 h-4 w-4" />
                   历史版本

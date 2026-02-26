@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getStatus, getLatest } from '@/services/api';
 import { Search, File, Folder, Download, Copy, Loader2, FileArchive, HardDrive, ChevronRight, Home, ArrowLeft } from 'lucide-vue-next';
@@ -29,6 +29,7 @@ const latestData = ref({});
 const { copy, copied } = useClipboard();
 
 const route = useRoute();
+const router = useRouter();
 // 导航路径栈
 const currentPath = ref([]);
 
@@ -134,11 +135,11 @@ const navigateToBreadcrumb = (index) => {
  */
 const updateUrl = () => {
     if (currentPath.value.length === 0) {
-        router.replace({ name: 'files' });
+        router.push({ name: 'files' });
     } else if (currentPath.value.length === 1) {
-        router.replace({ name: 'files-launcher', params: { launcherName: currentPath.value[0].id } });
+        router.push({ name: 'files-launcher', params: { launcherName: currentPath.value[0].id } });
     } else if (currentPath.value.length >= 2) {
-        router.replace({
+        router.push({
             name: 'files-version',
             params: {
                 launcherName: currentPath.value[0].id,
@@ -203,28 +204,68 @@ const currentItems = computed(() => {
  */
 onMounted(async () => {
   await loadData();
-  
+
   // 使用路由参数初始化路径
   if (props.launcherName) {
     if (launchers.value[props.launcherName]) {
       currentPath.value = [{ name: getLauncherDisplayName(props.launcherName), id: props.launcherName, type: 'launcher', displayName: props.launcherName }];
-      
+
       if (props.versionName) {
         const versions = launchers.value[props.launcherName] || [];
         const versionData = versions.find(v => (v.tag_name || v.name) === props.versionName);
-        
+
         if (versionData) {
-          currentPath.value.push({ 
-            name: props.versionName, 
-            id: props.versionName, 
-            type: 'version', 
-            data: versionData 
+          currentPath.value.push({
+            name: props.versionName,
+            id: props.versionName,
+            type: 'version',
+            data: versionData
           });
         }
       }
     }
   }
 });
+
+/**
+ * 更新页面标题和 SEO meta 信息
+ */
+const updateMetaInfo = () => {
+  const baseTitle = '文件列表 - 柠枺镜像状态';
+  let title = baseTitle;
+  let description = '浏览和下载 Minecraft 启动器版本文件';
+  
+  if (currentPath.value.length === 1) {
+    const launcher = currentPath.value[0];
+    title = `${launcher.name} - 柠枺镜像状态`;
+    description = `浏览 ${launcher.name} 的所有版本`;
+  } else if (currentPath.value.length >= 2) {
+    const launcher = currentPath.value[0];
+    const version = currentPath.value[1];
+    title = `${version.name} - ${launcher.name} - 柠枺镜像状态`;
+    description = `下载 ${launcher.name} ${version.name} 版本的资源文件`;
+  }
+  
+  document.title = title;
+  
+  // 更新 meta 标签
+  const metaDescription = document.querySelector('meta[name="description"]');
+  const metaOgTitle = document.querySelector('meta[property="og:title"]');
+  const metaOgDescription = document.querySelector('meta[property="og:description"]');
+  const metaTwitterTitle = document.querySelector('meta[property="twitter:title"]');
+  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]');
+  
+  if (metaDescription) metaDescription.setAttribute('content', description);
+  if (metaOgTitle) metaOgTitle.setAttribute('content', title);
+  if (metaOgDescription) metaOgDescription.setAttribute('content', description);
+  if (metaTwitterTitle) metaTwitterTitle.setAttribute('content', title);
+  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', description);
+};
+
+// 监听路径变化，更新 meta 信息
+watch([() => props.launcherName, () => props.versionName, currentPath], () => {
+  updateMetaInfo();
+}, { deep: true });
 </script>
 
 <template>
