@@ -23,8 +23,12 @@ func StartHTTPWithScan(addr string, s *State, scanFunc func()) error {
 		fmt.Fprintln(w, "Scan triggered")
 	})
 
+	// 应用 SPA fallback 中间件（用于静态资源）
+	staticDir := filepath.Join("web", "dist")
+	handler := SPAFallbackMiddleware(mux, staticDir)
+
 	// 应用安全中间件
-	handler := SecurityMiddleware(mux)
+	handler = SecurityMiddleware(handler)
 
 	srv := &http.Server{
 		Addr:         addr,

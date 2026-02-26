@@ -587,7 +587,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		serveStatic(w, r, filepath.Join(staticDir, "assets"), "/assets/")
 	})
 
-	// 根路径处理器
+	// 根路径处理器 - 简单处理，SPA fallback 中间件会处理其他情况
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/" || path == "/index.html" {
@@ -602,17 +602,10 @@ func (s *State) Routes(mux *http.ServeMux) {
 			http.ServeContent(w, r, "index.html", d.ModTime(), f)
 			return
 		}
-		
+
 		// 允许访问根目录下的其他合法文件（如 favicon.svg）
-		if !strings.Contains(path, "/") || strings.Count(path, "/") == 1 {
-			fileName := strings.TrimPrefix(path, "/")
-			// 简单的白名单或排除目录
-			if fileName != "" && !strings.Contains(fileName, ".") {
-				// 如果没有后缀名且不是已知路由，可能是前端路由，返回 index.html
-				http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
-				return
-			}
-			
+		fileName := strings.TrimPrefix(path, "/")
+		if fileName != "" && !strings.Contains(fileName, "/") {
 			fullPath := filepath.Join(staticDir, fileName)
 			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
 				http.ServeFile(w, r, fullPath)
@@ -620,15 +613,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 			}
 		}
 
-		// 默认 404
-		notFoundPath := filepath.Join(staticDir, "404.html")
-		if _, err := os.Stat(notFoundPath); err == nil {
-			w.WriteHeader(http.StatusNotFound)
-			http.ServeFile(w, r, notFoundPath)
-		} else {
-			// 如果没有 404.html，返回 index.html 以支持前端路由 fallback
-			http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
-		}
+		// 其他情况交给 SPA fallback 中间件处理（返回 404 以触发 fallback）
+		http.NotFound(w, r)
 	})
 
 	// 下载 - 安全处理器
