@@ -22,6 +22,7 @@ import shizukuLogo from '@/assets/images/f7067665f073b4cc.png'
 import luminolLogo from '@/assets/images/c25a955166388e1257c23d01c78a62e6.webp'
 import leafLogo from '@/assets/images/leaf.png'
 import leavesLogo from '@/assets/images/Leaves.png'
+import authlibinjectorLogo from '@/assets/images/authlib-injector.png'
 import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info';
 
 const EXTENDED_LAUNCHER_INFO_MAP = {
@@ -35,7 +36,8 @@ const EXTENDED_LAUNCHER_INFO_MAP = {
   'shizuku': { ...LAUNCHER_INFO_MAP['shizuku'], logoUrl: shizukuLogo },
   'leaves': { ...LAUNCHER_INFO_MAP['leaves'], logoUrl: leavesLogo },
   'leaf': { ...LAUNCHER_INFO_MAP['leaf'], logoUrl: leafLogo },
-  'luminol': { ...LAUNCHER_INFO_MAP['luminol'], logoUrl: luminolLogo }
+  'luminol': { ...LAUNCHER_INFO_MAP['luminol'], logoUrl: luminolLogo },
+  'authlib-injector': { ...LAUNCHER_INFO_MAP['authlib-injector'], logoUrl: authlibinjectorLogo }
 };
 
 

@@ -15,7 +15,8 @@ export const LAUNCHER_INFO_MAP: Record<string, LauncherInfo> = {
   'shizuku': { displayName: 'Shizuku' },
   'leaves': { displayName: 'Leaves 服务端' },
   'leaf': { displayName: 'Leaf 服务端' },
-  'luminol': { displayName: 'Luminol 服务端' }
+  'luminol': { displayName: 'Luminol 服务端' },
+  'authlib-injector': { displayName: 'authlib-injector' }
 };
 
 /**

@@ -44,15 +44,31 @@ const updateMetaDescription = (desc) => {
         </CardTitle>
       </CardHeader>
       <CardContent class="relative z-10">
-          <div class="flex flex-col md:flex-row items-center gap-6">
-              <div class="flex-1 space-y-4 text-center md:text-left">
-                  <h3 class="text-2xl font-bold text-foreground">Ksgf452 <span class="text-sm font-normal text-muted-foreground ml-2">(大好人)</span></h3>
-                  <p class="text-muted-foreground leading-relaxed">
-                      赞助了 <span class="font-bold text-amber-600 dark:text-amber-500">40 元</span> 用于服务器续费。Ksgf452 是我们的天使投资人，梦泽和柠枺的许多项目都得到了他的慷慨赞助。
-                  </p>
-                  <div class="flex flex-wrap justify-center md:justify-start gap-4 text-sm text-muted-foreground">
-                      <span class="flex items-center gap-1.5"><Mail class="h-4 w-4" /> ksgf452@163.com</span>
-                      <span class="flex items-center gap-1.5 border-l pl-4 border-white/10">QQ: 2497302640</span>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">Ksgf452 <span class="text-sm font-normal text-muted-foreground ml-1">(大好人)</span></h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">40 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">@习习中</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">34 元</span> 用于服务器续费
+                      </p>
                   </div>
               </div>
           </div>
@@ -119,7 +135,8 @@ const updateMetaDescription = (desc) => {
                          <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 text-xs text-muted-foreground mt-1">
                              <span class="flex items-center gap-1"><Mail class="h-3 w-3" /> mengze2@foxmail.com</span>
                              <span class="hidden sm:inline border-l h-3"></span>
-                             <span>QQ: 417158478</span>
+                             <span>Github：JanePHPDev</span>
+                             <span>暂无其他联系方式</span>
                          </div>
                      </div>
                  </div>
@@ -138,15 +155,15 @@ const updateMetaDescription = (desc) => {
     <div class="grid gap-4 md:gap-6 md:grid-cols-2">
          <Card class="bg-gradient-to-br from-background/50 to-primary/5 backdrop-blur-sm border-primary/20 hover:border-primary/40 transition-colors">
             <CardHeader class="p-4 md:p-6">
-                <CardTitle>同根项目：NingZeLogs</CardTitle>
+                <CardTitle>同根项目：LogShare.CN</CardTitle>
             </CardHeader>
             <CardContent class="px-4 pb-4 md:px-6 md:pb-6 space-y-3">
                 <p class="text-sm text-muted-foreground">
                     一个更好用的 Minecraft 日志分析平台。类似于 mclo.gs，但提供更丰富的功能和更友好的用户体验。
                 </p>
                 <div class="pt-2 text-center md:text-left">
-                    <Button variant="outline" size="sm" as="a" href="https://mclogs.lemwood.icu" target="_blank">
-                        访问 mclogs.lemwood.icu <ExternalLink class="ml-2 h-3 w-3" />
+                    <Button variant="outline" size="sm" as="a" href="https://logshare.cn/" target="_blank">
+                        立即体验 <ExternalLink class="ml-2 h-3 w-3" />
                     </Button>
                 </div>
             </CardContent>
@@ -158,7 +175,7 @@ const updateMetaDescription = (desc) => {
              <p class="text-xs md:text-sm text-muted-foreground mb-3 md:mb-4">
                  本项目代码完全开源。欢迎 Star、Fork 或提交 Pull Request。
              </p>
-             <Button size="sm" as="a" href="https://github.com/JanePHPDev/lemwood_mirror_NewWeb" target="_blank">
+             <Button size="sm" as="a" href="https://github.com/NingZeStudio/lemwood-mirror" target="_blank">
                  前往 GitHub 仓库
              </Button>
         </Card>
