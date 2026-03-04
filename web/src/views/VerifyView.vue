@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { ShieldCheck, Loader2, CheckCircle, XCircle } from 'lucide-vue-next';
+import { ShieldCheck, Loader2, CheckCircle, XCircle, Copy, Download } from 'lucide-vue-next';
 import { getCaptchaConfig, verifyDownload } from '@/services/api';
 
 const route = useRoute();
@@ -12,7 +12,8 @@ const isLoading = ref(true);
 const isVerifying = ref(false);
 const verifyStatus = ref('pending');
 const errorMessage = ref('');
-const downloadToken = ref('');
+const downloadUrl = ref('');
+const showCopiedTip = ref(false);
 
 let captchaObj = null;
 
@@ -30,13 +31,9 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
 
   try {
     const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value);
-    downloadToken.value = response.data.download_token;
+    downloadUrl.value = response.data.download_url;
     verifyStatus.value = 'success';
     isLoading.value = false;
-
-    setTimeout(() => {
-      startDownload();
-    }, 1000);
   } catch (error) {
     console.error('Verify download error:', error);
     errorMessage.value = error.response?.data?.message || '验证失败，请重试';
@@ -48,8 +45,24 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
 };
 
 const startDownload = () => {
-  const downloadUrl = `/download/${filePath.value}?token=${downloadToken.value}`;
-  window.location.href = downloadUrl;
+  if (downloadUrl.value) {
+    window.location.href = downloadUrl.value;
+  }
+};
+
+const copyUrl = async () => {
+  if (downloadUrl.value) {
+    const fullUrl = window.location.origin + downloadUrl.value;
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      showCopiedTip.value = true;
+      setTimeout(() => {
+        showCopiedTip.value = false;
+      }, 2000);
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  }
 };
 
 const loadCaptchaScript = () => {
@@ -168,6 +181,7 @@ onUnmounted(() => {
 
 <template>
   <div class="verify-page">
+    <div v-if="showCopiedTip" class="copied-tip">已复制到剪贴板</div>
     <div class="verify-container">
       <div class="verify-card">
         <div class="verify-header">
@@ -184,7 +198,20 @@ onUnmounted(() => {
 
           <div v-else-if="verifyStatus === 'success'" class="verify-success">
             <CheckCircle class="h-16 w-16 text-green-500" />
-            <span>验证成功，正在开始下载...</span>
+            <span>验证成功</span>
+            <div class="download-url-box">
+              {{ downloadUrl ? window.location.origin + downloadUrl : '' }}
+            </div>
+            <div class="btn-group">
+              <button @click="startDownload" class="btn-primary">
+                <Download class="h-4 w-4 mr-2" />
+                直接下载
+              </button>
+              <button @click="copyUrl" class="btn-secondary">
+                <Copy class="h-4 w-4 mr-2" />
+                复制链接
+              </button>
+            </div>
           </div>
 
           <div v-else-if="verifyStatus === 'error'" class="verify-error">
@@ -212,6 +239,7 @@ onUnmounted(() => {
   justify-content: center;
   background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
   padding: 20px;
+  position: relative;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -220,9 +248,28 @@ onUnmounted(() => {
   }
 }
 
+.copied-tip {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #22c55e;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 1000;
+  animation: fadeInOut 2s ease-in-out;
+}
+
+@keyframes fadeInOut {
+  0%, 100% { opacity: 0; }
+  10%, 90% { opacity: 1; }
+}
+
 .verify-container {
   width: 100%;
-  max-width: 420px;
+  max-width: 480px;
 }
 
 .verify-card {
@@ -284,12 +331,73 @@ onUnmounted(() => {
   align-items: center;
   gap: 16px;
   text-align: center;
+  width: 100%;
 }
 
 .verify-success span,
 .verify-error span {
   color: #6b7280;
   font-size: 14px;
+}
+
+.download-url-box {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  background: #f3f4f6;
+  border-radius: 8px;
+  font-size: 12px;
+  word-break: break-all;
+  color: #374151;
+  text-align: left;
+}
+
+@media (prefers-color-scheme: dark) {
+  .download-url-box {
+    background: #374151;
+    color: #e5e7eb;
+  }
+}
+
+.btn-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  width: 100%;
+}
+
+.btn-group button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: opacity 0.2s;
+}
+
+.btn-group button:hover {
+  opacity: 0.9;
+}
+
+.btn-primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-secondary {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-secondary {
+    background: #4b5563;
+    color: #f3f4f6;
+  }
 }
 
 .retry-btn {

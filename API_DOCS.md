@@ -150,7 +150,7 @@
 
 ### 5.2 验证下载请求
 - **端点**：`POST /api/download/verify`
-- **功能**：验证用户完成的极验滑块验证，验证通过后返回临时下载令牌。
+- **功能**：验证用户完成的极验滑块验证，验证通过后返回临时下载令牌和下载链接。
 - **请求体**：
   ```json
   {
@@ -164,7 +164,8 @@
 - **响应示例** (验证成功)：
   ```json
   {
-    "download_token": "abc123def456..."
+    "download_token": "abc123def456...",
+    "download_url": "/download/abc123def456.../fcl/1.2.8.9/FCL-release-1.2.8.9-all.apk"
   }
   ```
 - **响应示例** (验证失败)：
@@ -177,7 +178,8 @@
 - **说明**：
   - `lot_number`, `captcha_output`, `pass_token`, `gen_time` 由极验前端 SDK `getValidate()` 方法返回
   - `download_token` 有效期 5 分钟，仅可使用一次
-  - 使用令牌下载：`GET /download/{file_path}?token={download_token}`
+  - `download_url` 为完整的下载链接，可直接用于下载或复制给下载器使用
+  - 下载链接格式：`/download/(token)/文件路径`
 
 ### 5.3 验证流程
 1. 用户点击下载按钮
@@ -185,8 +187,8 @@
 3. 若启用，加载极验 v4 SDK 并初始化验证
 4. 用户完成滑块验证后，前端获取验证参数
 5. 前端调用 `POST /api/download/verify` 提交验证
-6. 后端验证通过后返回临时下载令牌
-7. 前端使用令牌发起下载请求
+6. 后端验证通过后返回临时下载令牌和下载链接
+7. 前端可选择直接下载或复制链接供下载器使用
 
 ---
 

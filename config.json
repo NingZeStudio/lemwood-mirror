@@ -18,9 +18,9 @@
   "download_url_base": "http://127.0.0.1:8080",
   "two_factor_enabled": false,
   "two_factor_secret": "",
-  "captcha_enabled": false,
-  "captcha_app_id": "...",
-  "captcha_secret_key": "...",
+  "captcha_enabled": true,
+  "captcha_app_id": "9fab8370f958912499555f6ce0cd5c56",
+  "captcha_secret_key": "b74e2bb93f86d697a7930705ba8bf49b",
   "launchers": [
     {
       "name": "fcl",

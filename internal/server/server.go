@@ -660,39 +660,29 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
-		fullPath := filepath.Join(s.BasePath, relPath)
-		cleanPath := filepath.Clean(fullPath)
-
-		// 验证路径是否在 BasePath 内
-		absBase, _ := filepath.Abs(s.BasePath)
-		absPath, _ := filepath.Abs(cleanPath)
-		if !strings.HasPrefix(absPath, absBase) {
-			log.Printf("安全警告：拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
-			http.NotFound(w, r)
-			return
-		}
-
-		// 检查是否为目录
-		info, err := os.Stat(cleanPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				http.NotFound(w, r)
-				return
-			}
-			log.Printf("访问文件出错：%s, %v", path, err)
-			http.NotFound(w, r)
-			return
-		}
-		if info.IsDir() {
-			// 禁止目录列表访问
-			http.NotFound(w, r)
-			return
-		}
-
 		// 验证码检查
 		if s.Config.CaptchaEnabled && s.captchaValidator != nil {
+			// 尝试从查询参数获取 token
 			token := r.URL.Query().Get("token")
+			var filePath string
+
 			if token == "" {
+				// 尝试从路径中提取 token: /download/(token)/文件路径
+				parts := strings.SplitN(relPath, "/", 2)
+				if len(parts) == 2 {
+					potentialToken := parts[0]
+					potentialPath := parts[1]
+					
+					// 检查这个 token 是否有效
+					if _, valid := s.downloadTokenMgr.Peek(potentialToken); valid {
+						token = potentialToken
+						filePath = potentialPath
+					}
+				}
+			}
+
+			if token == "" {
+				// 没有 token，检查是否是浏览器请求
 				if isBrowserRequest(r) {
 					s.serveVerifyPage(w, r, relPath)
 					return
@@ -725,6 +715,13 @@ func (s *State) Routes(mux *http.ServeMux) {
 				return
 			}
 
+			// 确定最终的文件路径
+			if filePath != "" {
+				// 使用从路径中提取的文件路径
+				relPath = filePath
+			}
+			// 否则使用 token 中存储的路径
+
 			if tokenPath != relPath {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
@@ -734,6 +731,35 @@ func (s *State) Routes(mux *http.ServeMux) {
 				})
 				return
 			}
+		}
+
+		fullPath := filepath.Join(s.BasePath, relPath)
+		cleanPath := filepath.Clean(fullPath)
+
+		// 验证路径是否在 BasePath 内
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(cleanPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			log.Printf("安全警告：拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			http.NotFound(w, r)
+			return
+		}
+
+		// 检查是否为目录
+		info, err := os.Stat(cleanPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+			log.Printf("访问文件出错：%s, %v", path, err)
+			http.NotFound(w, r)
+			return
+		}
+		if info.IsDir() {
+			// 禁止目录列表访问
+			http.NotFound(w, r)
+			return
 		}
 
 		// 记录下载
@@ -1278,9 +1304,12 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 
 	downloadToken := s.downloadTokenMgr.Generate(req.FilePath)
 
+	downloadUrl := fmt.Sprintf("/download/%s/%s", downloadToken, req.FilePath)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"download_token": downloadToken,
+		"download_url":   downloadUrl,
 	})
 }
 
@@ -1332,12 +1361,13 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
             .header { border-bottom-color: #374151; }
             .desc, .file-path { color: #9ca3af; }
             h1 { color: #f3f4f6; }
+            .download-url { background: #374151; color: #e5e7eb; }
         }
         .card {
             background: #ffffff;
             border-radius: 16px;
             box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            max-width: 420px;
+            max-width: 480px;
             width: 100%;
             overflow: hidden;
         }
@@ -1372,15 +1402,63 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
         .loading { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #6b7280; }
         .spinner { width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .success { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #22c55e; }
+        .success { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #22c55e; width: 100%; }
         .success svg { width: 48px; height: 48px; }
         .error { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #ef4444; }
         .error svg { width: 48px; height: 48px; }
         .retry-btn { margin-top: 16px; padding: 10px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
         .retry-btn:hover { opacity: 0.9; }
+        .download-url {
+            width: 100%;
+            margin-top: 16px;
+            padding: 12px;
+            background: #f3f4f6;
+            border-radius: 8px;
+            font-size: 12px;
+            word-break: break-all;
+            color: #374151;
+            text-align: left;
+        }
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 16px;
+            width: 100%;
+        }
+        .btn-group button {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: opacity 0.2s;
+        }
+        .btn-group button:hover { opacity: 0.9; }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-secondary { background: #e5e7eb; color: #374151; }
+        @media (prefers-color-scheme: dark) {
+            .btn-secondary { background: #4b5563; color: #f3f4f6; }
+        }
+        .copied-tip {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #22c55e;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 1000;
+        }
+        .copied-tip.show { opacity: 1; }
     </style>
 </head>
 <body>
+    <div class="copied-tip" id="copied-tip">已复制到剪贴板</div>
     <div class="card">
         <div class="header">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1400,7 +1478,12 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
                     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
                     <polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
-                <span>验证成功，正在开始下载...</span>
+                <span>验证成功</span>
+                <div class="download-url" id="download-url"></div>
+                <div class="btn-group">
+                    <button class="btn-primary" onclick="startDownload()">直接下载</button>
+                    <button class="btn-secondary" onclick="copyUrl()">复制链接</button>
+                </div>
             </div>
             <div id="error" class="error" style="display:none;">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1420,6 +1503,7 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
         const filePath = "` + filePath + `";
         const captchaId = "` + s.Config.CaptchaAppId + `";
         let captchaObj = null;
+        let downloadUrl = "";
         
         function initCaptcha() {
             document.getElementById('loading').style.display = 'flex';
@@ -1485,10 +1569,11 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
             })
             .then(res => res.json())
             .then(data => {
-                if (data.download_token) {
+                if (data.download_url) {
+                    downloadUrl = data.download_url;
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('success').style.display = 'flex';
-                    window.location.href = '/download/' + filePath + '?token=' + data.download_token;
+                    document.getElementById('download-url').textContent = window.location.origin + downloadUrl;
                 } else {
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('error').style.display = 'flex';
@@ -1500,6 +1585,27 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
                 document.getElementById('error').style.display = 'flex';
                 document.getElementById('error-msg').textContent = '请求失败: ' + err.message;
             });
+        }
+        
+        function startDownload() {
+            if (downloadUrl) {
+                window.location.href = downloadUrl;
+            }
+        }
+        
+        function copyUrl() {
+            if (downloadUrl) {
+                const fullUrl = window.location.origin + downloadUrl;
+                navigator.clipboard.writeText(fullUrl).then(function() {
+                    const tip = document.getElementById('copied-tip');
+                    tip.classList.add('show');
+                    setTimeout(function() {
+                        tip.classList.remove('show');
+                    }, 2000);
+                }).catch(function(err) {
+                    alert('复制失败: ' + err);
+                });
+            }
         }
         
         initCaptcha();
