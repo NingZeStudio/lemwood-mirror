@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ShieldCheck, Loader2, CheckCircle, XCircle, Copy, Download } from 'lucide-vue-next';
 import { getCaptchaConfig, verifyDownload } from '@/services/api';
@@ -14,6 +14,13 @@ const verifyStatus = ref('pending');
 const errorMessage = ref('');
 const downloadUrl = ref('');
 const showCopiedTip = ref(false);
+
+const fullDownloadUrl = computed(() => {
+  if (downloadUrl.value) {
+    return window.location.origin + downloadUrl.value;
+  }
+  return '';
+});
 
 let captchaObj = null;
 
@@ -200,7 +207,7 @@ onUnmounted(() => {
             <CheckCircle class="h-16 w-16 text-green-500" />
             <span>验证成功</span>
             <div class="download-url-box">
-              {{ downloadUrl ? window.location.origin + downloadUrl : '' }}
+              {{ fullDownloadUrl }}
             </div>
             <div class="btn-group">
               <button @click="startDownload" class="btn-primary">
