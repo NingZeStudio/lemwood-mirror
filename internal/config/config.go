@@ -40,6 +40,9 @@ type Config struct {
 	DownloadUrlBase        string           `json:"download_url_base,omitempty"`
 	TwoFactorEnabled       bool             `json:"two_factor_enabled"`
 	TwoFactorSecret        string           `json:"two_factor_secret"`
+	CaptchaEnabled         bool             `json:"captcha_enabled"`
+	CaptchaAppId           string           `json:"captcha_app_id"`
+	CaptchaSecretKey       string           `json:"captcha_secret_key"`
 	Launchers              []LauncherConfig `json:"launchers"`
 }
 

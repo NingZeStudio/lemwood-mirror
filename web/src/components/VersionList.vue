@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { getStatus, getLatest } from '@/services/api';
-import { Download, History, X, Loader2, Package } from 'lucide-vue-next';
+import { useRouter } from 'vue-router';
+import { getStatus, getLatest, getCaptchaConfig } from '@/services/api';
+import { Download, History, Loader2, Package } from 'lucide-vue-next';
 import Card from '@/components/ui/Card.vue';
 import CardHeader from '@/components/ui/CardHeader.vue';
 import CardTitle from '@/components/ui/CardTitle.vue';
@@ -25,6 +26,8 @@ import leavesLogo from '@/assets/images/Leaves.png'
 import authlibinjectorLogo from '@/assets/images/authlib-injector.png'
 import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info';
 
+const router = useRouter();
+
 const EXTENDED_LAUNCHER_INFO_MAP = {
   ...LAUNCHER_INFO_MAP,
   'zl': { ...LAUNCHER_INFO_MAP['zl'], logoUrl: zlLogo },
@@ -44,6 +47,8 @@ const EXTENDED_LAUNCHER_INFO_MAP = {
 const rawLaunchers = ref({});
 const latestMap = ref({});
 const loading = ref(true);
+
+const captchaConfig = ref({ enabled: false, app_id: '' });
 
 const launcherList = computed(() => {
   return Object.keys(rawLaunchers.value).map(name => {
@@ -73,14 +78,19 @@ const launcherList = computed(() => {
 const loadData = async () => {
   loading.value = true;
   try {
-    const [statusRes, latestRes] = await Promise.all([getStatus(), getLatest()]);
+    const [statusRes, latestRes, captchaRes] = await Promise.all([
+      getStatus(),
+      getLatest(),
+      getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
+    ]);
     
     const data = statusRes.data;
     for (const key in data) {
-        data[key].sort((a, b) => String(b.tag_name || b.name).localeCompare(String(a.tag_name || b.name)));
+        data[key].sort((a, b) => String(b.tag_name || b.name).localeCompare(String(a.tag_name || a.name)));
     }
     rawLaunchers.value = data;
     latestMap.value = latestRes.data;
+    captchaConfig.value = captchaRes.data;
   } catch (e) {
     console.error(e);
   } finally {
@@ -101,9 +111,24 @@ const getAssetUrl = (launcherName, version, asset) => {
     return `/download/${launcherName}/${version.tag_name || version.name}/${asset.name}`;
 };
 
+const getAssetPath = (launcherName, version, asset) => {
+    return `${launcherName}/${version.tag_name || version.name}/${asset.name}`;
+};
 
-
-
+const handleDownload = (item) => {
+  if (!item.hasAssets || !item.latestObj) return;
+  
+  const asset = item.latestObj.assets[0];
+  const filePath = getAssetPath(item.name, item.latestObj, asset);
+  
+  if (!captchaConfig.value.enabled) {
+    const url = getAssetUrl(item.name, item.latestObj, asset);
+    window.open(url, '_blank');
+    return;
+  }
+  
+  router.push(`/verify?file=${encodeURIComponent(filePath)}`);
+};
 
 onMounted(() => {
     loadData();
@@ -189,8 +214,7 @@ defineExpose({ refresh: loadData });
              <Button
                 v-if="item.hasAssets"
                 class="w-full"
-                as="a"
-                :href="item.latestDownloadUrl"
+                @click="handleDownload(item)"
               >
                 <Download class="mr-2 h-4 w-4" />
                 下载最新版
@@ -208,7 +232,6 @@ defineExpose({ refresh: loadData });
         </CardFooter>
       </Card>
     </div>
-
   </div>
 </template>
 

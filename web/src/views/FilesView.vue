@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getStatus, getLatest } from '@/services/api';
+import { getStatus, getLatest, getCaptchaConfig } from '@/services/api';
 import { Search, File, Folder, Download, Copy, Loader2, FileArchive, HardDrive, ChevronRight, Home, ArrowLeft } from 'lucide-vue-next';
 import Input from '@/components/ui/Input.vue';
 import Button from '@/components/ui/Button.vue';
@@ -26,6 +26,7 @@ const loading = ref(true);
 const searchQuery = ref('');
 const launchers = ref({});
 const latestData = ref({});
+const captchaConfig = ref({ enabled: false, app_id: '' });
 const { copy, copied } = useClipboard();
 
 const route = useRoute();
@@ -39,7 +40,11 @@ const currentPath = ref([]);
 const loadData = async () => {
   loading.value = true;
   try {
-    const [statusRes, latestRes] = await Promise.all([getStatus(), getLatest()]);
+    const [statusRes, latestRes, captchaRes] = await Promise.all([
+      getStatus(), 
+      getLatest(),
+      getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
+    ]);
     const sortedLaunchers = {};
     Object.keys(statusRes.data).sort().forEach(key => {
         sortedLaunchers[key] = statusRes.data[key].sort((a, b) =>
@@ -48,6 +53,7 @@ const loadData = async () => {
     });
     launchers.value = sortedLaunchers;
     latestData.value = latestRes.data;
+    captchaConfig.value = captchaRes.data;
   } catch (error) {
     console.error(error);
   } finally {
@@ -90,7 +96,22 @@ const formatDate = (dateString) => {
  * @param {string} url - 要复制的URL
  */
 const copyUrl = (url) => {
-  copy(url);
+    copy(url);
+};
+
+const handleDownload = (item) => {
+    if (!captchaConfig.value.enabled) {
+        window.open(item.downloadUrl, '_blank');
+        return;
+    }
+    const launcherName = currentPath.value[0]?.id;
+    const versionName = currentPath.value[1]?.id;
+    if (!launcherName || !versionName) {
+        window.open(item.downloadUrl, '_blank');
+        return;
+    }
+    const filePath = `${launcherName}/${versionName}/${item.name}`;
+    router.push(`/verify?file=${encodeURIComponent(filePath)}`);
 };
 
 /**
@@ -360,7 +381,7 @@ watch([() => props.launcherName, () => props.versionName, currentPath], () => {
                  <Button size="icon" variant="ghost" class="h-6 w-6" @click.stop="copyUrl(item.downloadUrl)">
                      <Copy class="h-3 w-3" />
                  </Button>
-                 <Button size="icon" variant="ghost" class="h-6 w-6" as="a" :href="item.downloadUrl">
+                 <Button size="icon" variant="ghost" class="h-6 w-6" @click.stop="handleDownload(item)">
                      <Download class="h-3 w-3" />
                  </Button>
             </div>

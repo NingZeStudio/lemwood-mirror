@@ -71,6 +71,9 @@ go build -o mirror ./cmd/mirror
   "xget_enabled": true,                       // 是否启用 Xget 加速
   "download_timeout_minutes": 40,             // 单个文件下载超时时间（分钟）
   "concurrent_downloads": 3,                  // 同时进行的下载任务数量
+  "captcha_enabled": true,                    // 是否启用下载验证码
+  "captcha_app_id": "your_captcha_id",        // 极验验证码 Captcha ID
+  "captcha_secret_key": "your_private_key",   // 极验验证码 Private Key
   "launchers": [                              // 需要镜像的启动器配置列表
     {
       "name": "fcl",                          // 启动器唯一标识名称
@@ -83,6 +86,7 @@ go build -o mirror ./cmd/mirror
 **关键配置项：**
 - `github_token`: 建议配置以避免 GitHub API 频率限制。
 - `download_url_base`: 外部访问的基准 URL，用于生成 `info.json` 中的下载链接。
+- `captcha_enabled`: 启用后，用户下载文件前需完成极验滑块验证，防止机器人滥用。
 
 ### 4. 运行服务
 

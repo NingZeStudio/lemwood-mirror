@@ -11,6 +11,12 @@ const router = createRouter({
       meta: { title: '首页 - 柠枺镜像状态' }
     },
     {
+      path: '/verify',
+      name: 'verify',
+      component: () => import('@/views/VerifyView.vue'),
+      meta: { title: '安全验证 - 柠枺镜像状态' }
+    },
+    {
       path: '/files',
       name: 'files',
       component: () => import('@/views/FilesView.vue'),

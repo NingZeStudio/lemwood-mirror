@@ -179,6 +179,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (config.two_factor_enabled && config.two_factor_secret) {
                 updateTOTPQR(config.two_factor_secret);
             }
+
+            // Captcha Config
+            form.captcha_enabled.checked = config.captcha_enabled || false;
+            form.captcha_app_id.value = config.captcha_app_id || '';
+            form.captcha_secret_key.value = ''; // 不显示密钥
             
             console.log('Populating launchers...');
             // 加载启动器
@@ -287,6 +292,8 @@ document.addEventListener('DOMContentLoaded', () => {
             admin_lock_duration: parseInt(form.admin_lock_duration.value),
             two_factor_enabled: form.two_factor_enabled.checked,
             two_factor_secret: form.two_factor_secret.value,
+            captcha_enabled: form.captcha_enabled.checked,
+            captcha_app_id: form.captcha_app_id.value,
             launchers: launchers
         };
 
@@ -295,6 +302,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (form.github_token.value) {
             config.github_token = form.github_token.value;
+        }
+        if (form.captcha_secret_key.value) {
+            config.captcha_secret_key = form.captcha_secret_key.value;
         }
 
         try {

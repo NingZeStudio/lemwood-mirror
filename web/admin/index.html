@@ -144,6 +144,23 @@
                         </div>
 
                         <div class="form-section">
+                            <h4>腾讯云验证码</h4>
+                            <div class="form-group checkbox-group">
+                                <input type="checkbox" id="captcha_enabled" name="captcha_enabled">
+                                <label for="captcha_enabled">启用下载验证</label>
+                            </div>
+                            <div class="form-group">
+                                <label>Captcha ID</label>
+                                <input type="text" name="captcha_app_id" placeholder="极验验证码 Captcha ID">
+                            </div>
+                            <div class="form-group">
+                                <label>Private Key</label>
+                                <input type="password" name="captcha_secret_key" placeholder="服务端验证密钥">
+                            </div>
+                            <small>在 <a href="https://www.geetest.com/" target="_blank">极验后台</a> 创建验证码应用获取密钥</small>
+                        </div>
+
+                        <div class="form-section">
                             <div class="section-header">
                                 <h4>启动器配置</h4>
                                 <button type="button" id="add-launcher-btn" class="secondary-btn">添加启动器</button>

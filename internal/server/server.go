@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"lemwood_mirror/internal/auth"
+	"lemwood_mirror/internal/captcha"
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/download_token"
 	"lemwood_mirror/internal/stats"
 )
 
@@ -35,10 +37,14 @@ type State struct {
 	loginAttempts   map[string]int       // IP -> 失败次数
 	loginLocks      map[string]time.Time // IP -> 解锁时间
 	loginAttemptsMu sync.Mutex
+
+	// 验证码
+	captchaValidator  *captcha.Validator
+	downloadTokenMgr *download_token.Manager
 }
 
 func NewState(base string, projectRoot string, cfg *config.Config) *State {
-	return &State{
+	s := &State{
 		BasePath:    base,
 		ProjectRoot: projectRoot,
 		Config:      cfg,
@@ -49,6 +55,13 @@ func NewState(base string, projectRoot string, cfg *config.Config) *State {
 		loginAttempts: make(map[string]int),
 		loginLocks:    make(map[string]time.Time),
 	}
+
+	if cfg.CaptchaAppId != "" && cfg.CaptchaSecretKey != "" {
+		s.captchaValidator = captcha.NewValidator(cfg.CaptchaAppId, cfg.CaptchaSecretKey)
+	}
+	s.downloadTokenMgr = download_token.NewManager()
+
+	return s
 }
 
 func (s *State) UpdateIndex(launcher string, version string, infoPath string) {
@@ -587,9 +600,11 @@ func (s *State) Routes(mux *http.ServeMux) {
 		serveStatic(w, r, filepath.Join(staticDir, "assets"), "/assets/")
 	})
 
-	// 根路径处理器 - 简单处理，SPA fallback 中间件会处理其他情况
+	// 根路径处理器 - 处理静态文件和 SPA fallback
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		
+		// 根路径和 index.html
 		if path == "/" || path == "/index.html" {
 			indexPath := filepath.Join(staticDir, "index.html")
 			f, err := os.Open(indexPath)
@@ -603,17 +618,30 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
-		// 允许访问根目录下的其他合法文件（如 favicon.svg）
-		fileName := strings.TrimPrefix(path, "/")
-		if fileName != "" && !strings.Contains(fileName, "/") {
-			fullPath := filepath.Join(staticDir, fileName)
-			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-				http.ServeFile(w, r, fullPath)
-				return
+		// 检查是否是静态文件
+		relPath := strings.TrimPrefix(path, "/")
+		if relPath != "" {
+			fullPath := filepath.Join(staticDir, relPath)
+			cleanPath := filepath.Clean(fullPath)
+			
+			// 安全检查
+			absBase, _ := filepath.Abs(staticDir)
+			absPath, _ := filepath.Abs(cleanPath)
+			if strings.HasPrefix(absPath, absBase) {
+				if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
+					http.ServeFile(w, r, cleanPath)
+					return
+				}
 			}
 		}
 
-		// 其他情况交给 SPA fallback 中间件处理（返回 404 以触发 fallback）
+		// SPA fallback: 其他所有情况返回 index.html
+		indexPath := filepath.Join(staticDir, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+
 		http.NotFound(w, r)
 	})
 
@@ -661,6 +689,53 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
+		// 验证码检查
+		if s.Config.CaptchaEnabled && s.captchaValidator != nil {
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				if isBrowserRequest(r) {
+					s.serveVerifyPage(w, r, relPath)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":      "verification_required",
+					"message":    "Download requires captcha verification",
+					"captcha":    true,
+					"app_id":     s.Config.CaptchaAppId,
+				})
+				return
+			}
+
+			tokenPath, valid := s.downloadTokenMgr.Validate(token)
+			if !valid {
+				if isBrowserRequest(r) {
+					s.serveVerifyPage(w, r, relPath)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":      "invalid_token",
+					"message":    "Download token is invalid or expired",
+					"captcha":    true,
+					"app_id":     s.Config.CaptchaAppId,
+				})
+				return
+			}
+
+			if tokenPath != relPath {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":      "token_mismatch",
+					"message":    "Download token does not match requested file",
+				})
+				return
+			}
+		}
+
 		// 记录下载
 		parts := strings.Split(filepath.ToSlash(relPath), "/")
 		if len(parts) >= 2 {
@@ -681,6 +756,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/latest/", s.handleLatestLauncher)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/auth/2fa/status", s.handle2FAStatus)
+	mux.HandleFunc("/api/captcha/config", s.handleCaptchaConfig)
+	mux.HandleFunc("/api/download/verify", s.handleDownloadVerify)
 
 	// Admin API
 	mux.Handle("/api/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))
@@ -1101,4 +1178,334 @@ func (s *State) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (s *State) handleCaptchaConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": s.Config.CaptchaEnabled,
+		"app_id":  s.Config.CaptchaAppId,
+	})
+}
+
+func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !s.Config.CaptchaEnabled || s.captchaValidator == nil {
+		http.Error(w, "Captcha not enabled", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		LotNumber     string `json:"lot_number"`
+		CaptchaOutput string `json:"captcha_output"`
+		PassToken     string `json:"pass_token"`
+		GenTime       string `json:"gen_time"`
+		FilePath      string `json:"file_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	if req.LotNumber == "" || req.CaptchaOutput == "" || req.PassToken == "" || req.GenTime == "" || req.FilePath == "" {
+		http.Error(w, "Missing required parameters", http.StatusBadRequest)
+		return
+	}
+
+	ip := r.RemoteAddr
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ip = strings.Split(xff, ",")[0]
+	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		ip = xri
+	}
+	if strings.Contains(ip, ":") {
+		if host, _, err := net.SplitHostPort(ip); err == nil {
+			ip = host
+		}
+	}
+
+	result, err := s.captchaValidator.Verify(req.LotNumber, req.CaptchaOutput, req.PassToken, req.GenTime, ip)
+	if err != nil {
+		log.Printf("验证码验证失败: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "verification_failed",
+			"message": "Failed to verify captcha",
+		})
+		return
+	}
+
+	if result.Result != "success" {
+		log.Printf("验证码验证不成功: result=%s, reason=%s", result.Result, result.Reason)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "verification_failed",
+			"message": result.Reason,
+		})
+		return
+	}
+
+	fullPath := filepath.Join(s.BasePath, req.FilePath)
+	cleanPath := filepath.Clean(fullPath)
+	absBase, _ := filepath.Abs(s.BasePath)
+	absPath, _ := filepath.Abs(cleanPath)
+	if !strings.HasPrefix(absPath, absBase) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "invalid_path",
+			"message": "Invalid file path",
+		})
+		return
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil || info.IsDir() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":   "file_not_found",
+			"message": "File not found",
+		})
+		return
+	}
+
+	downloadToken := s.downloadTokenMgr.Generate(req.FilePath)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"download_token": downloadToken,
+	})
+}
+
+func isBrowserRequest(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	userAgent := r.Header.Get("User-Agent")
+	
+	if strings.Contains(accept, "text/html") {
+		return true
+	}
+	
+	if strings.Contains(userAgent, "Mozilla") ||
+	   strings.Contains(userAgent, "Chrome") ||
+	   strings.Contains(userAgent, "Safari") ||
+	   strings.Contains(userAgent, "Edge") ||
+	   strings.Contains(userAgent, "Firefox") {
+		if !strings.Contains(accept, "application/json") && accept != "" {
+			return true
+		}
+	}
+	
+	return false
+}
+
+func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	
+	html := `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安全验证 - 柠枺镜像</title>
+    <script src="https://static.geetest.com/v4/gt4.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+        }
+        @media (prefers-color-scheme: dark) {
+            body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+            .card { background: #1f2937; }
+            .header { border-bottom-color: #374151; }
+            .desc, .file-path { color: #9ca3af; }
+            h1 { color: #f3f4f6; }
+        }
+        .card {
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            max-width: 420px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .header {
+            text-align: center;
+            padding: 32px 24px 24px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .header svg {
+            width: 48px;
+            height: 48px;
+            color: #3b82f6;
+        }
+        h1 { margin: 16px 0 8px; font-size: 24px; color: #111827; }
+        .desc { color: #6b7280; font-size: 14px; }
+        .content {
+            padding: 32px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 150px;
+        }
+        .footer {
+            padding: 16px 24px;
+            border-top: 1px solid #e5e7eb;
+            text-align: center;
+        }
+        @media (prefers-color-scheme: dark) {
+            .footer { border-top-color: #374151; }
+        }
+        .file-path { font-size: 12px; color: #6b7280; word-break: break-all; }
+        .loading { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #6b7280; }
+        .spinner { width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .success { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #22c55e; }
+        .success svg { width: 48px; height: 48px; }
+        .error { display: flex; flex-direction: column; align-items: center; gap: 12px; color: #ef4444; }
+        .error svg { width: 48px; height: 48px; }
+        .retry-btn { margin-top: 16px; padding: 10px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .retry-btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <path d="m9 12 2 2 4-4"/>
+            </svg>
+            <h1>安全验证</h1>
+            <p class="desc">请完成验证后开始下载</p>
+        </div>
+        <div class="content">
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <span>正在加载验证...</span>
+            </div>
+            <div id="success" class="success" style="display:none;">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <span>验证成功，正在开始下载...</span>
+            </div>
+            <div id="error" class="error" style="display:none;">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+                <span id="error-msg">验证失败</span>
+                <button class="retry-btn" onclick="showCaptcha()">重新验证</button>
+            </div>
+        </div>
+        <div class="footer">
+            <p class="file-path">文件: ` + filepath.Base(filePath) + `</p>
+        </div>
+    </div>
+    <script>
+        const filePath = "` + filePath + `";
+        const captchaId = "` + s.Config.CaptchaAppId + `";
+        let captchaObj = null;
+        
+        function initCaptcha() {
+            document.getElementById('loading').style.display = 'flex';
+            document.getElementById('success').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            
+            initGeetest4({
+                captchaId: captchaId,
+                product: 'bind'
+            }, function(captcha) {
+                captchaObj = captcha;
+                
+                captcha.onReady(function() {
+                    document.getElementById('loading').style.display = 'none';
+                    captcha.showCaptcha();
+                });
+                
+                captcha.onSuccess(function() {
+                    const result = captcha.getValidate();
+                    if (result) {
+                        verifyCaptcha(result.lot_number, result.captcha_output, result.pass_token, result.gen_time);
+                    }
+                });
+                
+                captcha.onError(function(e) {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'flex';
+                    document.getElementById('error-msg').textContent = '验证加载失败: ' + (e.msg || '未知错误');
+                });
+                
+                captcha.onClose(function() {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'flex';
+                    document.getElementById('error-msg').textContent = '用户取消验证';
+                });
+            });
+        }
+        
+        function showCaptcha() {
+            if (captchaObj) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('success').style.display = 'none';
+                document.getElementById('error').style.display = 'none';
+                captchaObj.showCaptcha();
+            } else {
+                initCaptcha();
+            }
+        }
+        
+        function verifyCaptcha(lotNumber, captchaOutput, passToken, genTime) {
+            document.getElementById('loading').style.display = 'flex';
+            
+            fetch('/api/download/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    lot_number: lotNumber,
+                    captcha_output: captchaOutput,
+                    pass_token: passToken,
+                    gen_time: genTime,
+                    file_path: filePath
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.download_token) {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('success').style.display = 'flex';
+                    window.location.href = '/download/' + filePath + '?token=' + data.download_token;
+                } else {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('error').style.display = 'flex';
+                    document.getElementById('error-msg').textContent = data.message || '验证失败';
+                }
+            })
+            .catch(err => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'flex';
+                document.getElementById('error-msg').textContent = '请求失败: ' + err.message;
+            });
+        }
+        
+        initCaptcha();
+    </script>
+</body>
+</html>`
+	
+	w.Write([]byte(html))
 }

@@ -129,3 +129,74 @@
 ### 4.4 文件下载
 - **端点**：`GET /api/admin/files/download?path=...`
 - **功能**：从管理后台直接下载服务器上的文件。
+
+---
+
+## 5. 下载验证接口
+
+### 5.1 获取验证码配置
+- **端点**：`GET /api/captcha/config`
+- **功能**：获取极验验证码配置信息，用于前端初始化验证组件。
+- **响应示例**：
+  ```json
+  {
+    "enabled": true,
+    "app_id": "9fab8370f958912499555f6ce0cd5c56"
+  }
+  ```
+- **字段说明**：
+  - `enabled`: 是否启用下载验证
+  - `app_id`: 极验验证码 Captcha ID（前端初始化需要）
+
+### 5.2 验证下载请求
+- **端点**：`POST /api/download/verify`
+- **功能**：验证用户完成的极验滑块验证，验证通过后返回临时下载令牌。
+- **请求体**：
+  ```json
+  {
+    "lot_number": "e2f0a767a0f74926bbc8daeed22e6f27",
+    "captcha_output": "...",
+    "pass_token": "...",
+    "gen_time": "1709551234",
+    "file_path": "fcl/1.2.8.9/FCL-release-1.2.8.9-all.apk"
+  }
+  ```
+- **响应示例** (验证成功)：
+  ```json
+  {
+    "download_token": "abc123def456..."
+  }
+  ```
+- **响应示例** (验证失败)：
+  ```json
+  {
+    "error": "verification_failed",
+    "message": "pass_token expire"
+  }
+  ```
+- **说明**：
+  - `lot_number`, `captcha_output`, `pass_token`, `gen_time` 由极验前端 SDK `getValidate()` 方法返回
+  - `download_token` 有效期 5 分钟，仅可使用一次
+  - 使用令牌下载：`GET /download/{file_path}?token={download_token}`
+
+### 5.3 验证流程
+1. 用户点击下载按钮
+2. 前端调用 `GET /api/captcha/config` 检查是否启用验证
+3. 若启用，加载极验 v4 SDK 并初始化验证
+4. 用户完成滑块验证后，前端获取验证参数
+5. 前端调用 `POST /api/download/verify` 提交验证
+6. 后端验证通过后返回临时下载令牌
+7. 前端使用令牌发起下载请求
+
+---
+
+## 6. 错误码说明
+
+| 错误码 | 说明 |
+|--------|------|
+| `verification_required` | 需要完成验证码验证 |
+| `invalid_token` | 下载令牌无效或已过期 |
+| `token_mismatch` | 下载令牌与请求文件不匹配 |
+| `verification_failed` | 验证码验证失败 |
+| `file_not_found` | 请求的文件不存在 |
+| `invalid_path` | 非法的文件路径 |

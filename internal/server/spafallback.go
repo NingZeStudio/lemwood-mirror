@@ -36,6 +36,12 @@ func SPAFallbackMiddleware(next http.Handler, staticDir string) http.Handler {
 			return
 		}
 
+		// 跳过 /dist/ 和 /assets/ 路由（已有独立处理）
+		if strings.HasPrefix(path, "/dist/") || strings.HasPrefix(path, "/assets/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// 清理路径
 		relPath := strings.TrimPrefix(path, "/")
 		if relPath == "" {
@@ -59,8 +65,12 @@ func SPAFallbackMiddleware(next http.Handler, staticDir string) http.Handler {
 		if err == nil {
 			// 路径存在
 			if info.IsDir() {
-				// 精确匹配目录：不列出目录内容，返回 404
-				// 前端路由会处理这种情况（通过 fallback 到 index.html）
+				// 精确匹配目录：不列出目录内容，返回 index.html（SPA fallback）
+				indexPath := filepath.Join(staticDir, "index.html")
+				if _, err := os.Stat(indexPath); err == nil {
+					http.ServeFile(w, r, indexPath)
+					return
+				}
 				http.NotFound(w, r)
 				return
 			}
