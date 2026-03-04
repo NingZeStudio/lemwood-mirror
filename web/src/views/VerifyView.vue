@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { useRoute } from 'vue-router';
-import { ShieldCheck, Loader2, CheckCircle, XCircle, Copy, Download } from 'lucide-vue-next';
+import { useRoute, useRouter } from 'vue-router';
+import { ShieldCheck, Loader2, CheckCircle, XCircle, Copy, Download, Home } from 'lucide-vue-next';
 import { getCaptchaConfig, verifyDownload } from '@/services/api';
 
 const route = useRoute();
+const router = useRouter();
 
 const filePath = ref('');
 const captchaId = ref('');
@@ -14,6 +15,7 @@ const verifyStatus = ref('pending');
 const errorMessage = ref('');
 const downloadUrl = ref('');
 const showCopiedTip = ref(false);
+const downloadStarted = ref(false);
 
 const fullDownloadUrl = computed(() => {
   if (downloadUrl.value) {
@@ -54,7 +56,12 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
 const startDownload = () => {
   if (downloadUrl.value) {
     window.location.href = downloadUrl.value;
+    downloadStarted.value = true;
   }
+};
+
+const goToHome = () => {
+  router.push('/');
 };
 
 const copyUrl = async () => {
@@ -210,9 +217,13 @@ onUnmounted(() => {
               {{ fullDownloadUrl }}
             </div>
             <div class="btn-group">
-              <button @click="startDownload" class="btn-primary">
+              <button v-if="!downloadStarted" @click="startDownload" class="btn-primary">
                 <Download class="h-4 w-4 mr-2" />
                 直接下载
+              </button>
+              <button v-else @click="goToHome" class="btn-primary">
+                <Home class="h-4 w-4 mr-2" />
+                返回首页
               </button>
               <button @click="copyUrl" class="btn-secondary">
                 <Copy class="h-4 w-4 mr-2" />
