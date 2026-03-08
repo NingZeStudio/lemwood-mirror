@@ -110,6 +110,51 @@ func createTables() error {
 		return fmt.Errorf("记录系统启动时间失败: %w", err)
 	}
 
+	// 数据库迁移：为旧表添加新列
+	if err := migrateTables(); err != nil {
+		return fmt.Errorf("数据库迁移失败: %w", err)
+	}
+
+	return nil
+}
+
+func migrateTables() error {
+	// 检查 ip_blacklist 表是否有 source 列
+	var hasSourceColumn bool
+	rows, err := DB.Query("PRAGMA table_info(ip_blacklist)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			continue
+		}
+		if name == "source" {
+			hasSourceColumn = true
+		}
+	}
+
+	// 如果没有 source 列，添加新列
+	if !hasSourceColumn {
+		log.Println("数据库迁移: 为 ip_blacklist 表添加 source 和 ban_type 列")
+		alterQueries := []string{
+			"ALTER TABLE ip_blacklist ADD COLUMN source TEXT DEFAULT 'manual'",
+			"ALTER TABLE ip_blacklist ADD COLUMN ban_type TEXT DEFAULT 'manual'",
+		}
+		for _, q := range alterQueries {
+			if _, err := DB.Exec(q); err != nil {
+				return fmt.Errorf("添加列失败: %w, query: %s", err, q)
+			}
+		}
+	}
+
 	return nil
 }
 
