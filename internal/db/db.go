@@ -3,8 +3,11 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -75,8 +78,17 @@ func createTables() error {
 		`CREATE TABLE IF NOT EXISTS ip_blacklist (
             ip TEXT PRIMARY KEY,
             reason TEXT,
+            source TEXT DEFAULT 'manual',
+            ban_type TEXT DEFAULT 'manual',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`,
+		`CREATE TABLE IF NOT EXISTS ip_daily_traffic (
+            ip TEXT,
+            date TEXT,
+            bytes_downloaded INTEGER DEFAULT 0,
+            PRIMARY KEY (ip, date)
+        )`,
+		`CREATE INDEX IF NOT EXISTS idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
 		`CREATE TABLE IF NOT EXISTS system_info (
             key TEXT PRIMARY KEY,
             value TEXT,
@@ -121,7 +133,7 @@ func RemoveIPFromBlacklist(ip string) error {
 }
 
 func GetIPBlacklist() ([]map[string]string, error) {
-	rows, err := DB.Query("SELECT ip, reason, created_at FROM ip_blacklist ORDER BY created_at DESC")
+	rows, err := DB.Query("SELECT ip, reason, source, ban_type, created_at FROM ip_blacklist ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -129,15 +141,67 @@ func GetIPBlacklist() ([]map[string]string, error) {
 
 	list := []map[string]string{}
 	for rows.Next() {
-		var ip, reason, createdAt string
-		if err := rows.Scan(&ip, &reason, &createdAt); err != nil {
+		var ip, reason, source, banType, createdAt string
+		if err := rows.Scan(&ip, &reason, &source, &banType, &createdAt); err != nil {
 			return nil, err
 		}
 		list = append(list, map[string]string{
 			"ip":         ip,
 			"reason":     reason,
+			"source":     source,
+			"ban_type":   banType,
 			"created_at": createdAt,
 		})
 	}
 	return list, nil
+}
+
+func AddIPToBlacklistWithSource(ip, reason, source, banType string) error {
+	_, err := DB.Exec("INSERT OR REPLACE INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, ?, ?)", ip, reason, source, banType)
+	return err
+}
+
+func RecordTraffic(ip string, bytes int64) error {
+	date := time.Now().Format("2006-01-02")
+	_, err := DB.Exec(`
+		INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
+		ON CONFLICT(ip, date) DO UPDATE SET bytes_downloaded = bytes_downloaded + ?`,
+		ip, date, bytes, bytes)
+	return err
+}
+
+func GetDailyTraffic(ip string) (int64, error) {
+	date := time.Now().Format("2006-01-02")
+	var bytes int64
+	err := DB.QueryRow("SELECT bytes_downloaded FROM ip_daily_traffic WHERE ip = ? AND date = ?", ip, date).Scan(&bytes)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return bytes, err
+}
+
+func AddExternalBlacklist(ips []string) error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, 'external', 'manual')")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, ip := range ips {
+		ip = strings.TrimSpace(ip)
+		if ip == "" || strings.HasPrefix(ip, "#") {
+			continue
+		}
+		if _, err := stmt.Exec(ip, "外部黑名单"); err != nil {
+			log.Printf("添加外部黑名单IP失败: %s, %v", ip, err)
+		}
+	}
+
+	return tx.Commit()
 }

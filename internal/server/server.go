@@ -5,6 +5,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"lemwood_mirror/internal/auth"
+	"lemwood_mirror/internal/blacklist"
+	"lemwood_mirror/internal/captcha"
+	"lemwood_mirror/internal/config"
+	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/download_token"
+	"lemwood_mirror/internal/stats"
+	"lemwood_mirror/internal/traffic"
 	"log"
 	"net"
 	"net/http"
@@ -14,13 +22,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"lemwood_mirror/internal/auth"
-	"lemwood_mirror/internal/captcha"
-	"lemwood_mirror/internal/config"
-	"lemwood_mirror/internal/db"
-	"lemwood_mirror/internal/download_token"
-	"lemwood_mirror/internal/stats"
 )
 
 type State struct {
@@ -762,6 +763,22 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
+		// 获取客户端IP用于流量统计
+		clientIP := getClientIPFromRequest(r)
+
+		// 记录下载流量
+		fileSize := info.Size()
+		if err := traffic.RecordTraffic(clientIP, fileSize); err != nil {
+			log.Printf("[防刷墙] 记录流量失败: %v", err)
+		}
+
+		// 检查是否需要封禁
+		if banned, reason, trafficGB := traffic.CheckAndBan(clientIP); banned {
+			log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+			http.Error(w, fmt.Sprintf("Access Denied: %s。如有误封，请联系 %s", reason, s.Config.AppealContact), http.StatusForbidden)
+			return
+		}
+
 		// 记录下载
 		parts := strings.Split(filepath.ToSlash(relPath), "/")
 		if len(parts) >= 2 {
@@ -845,10 +862,17 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 检查黑名单
+		// 检查本地黑名单
 		if db.IsIPBlacklisted(ip) {
-			log.Printf("拒绝来自黑名单 IP 的访问: %s", ip)
-			http.Error(w, "Access Denied", http.StatusForbidden)
+			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，如有误封请联系 %s", ip, "QQ群 964498276")
+			http.Error(w, "Access Denied。如有误封，请联系QQ群 964498276", http.StatusForbidden)
+			return
+		}
+
+		// 检查外部黑名单
+		if blacklist.IsExternalBlacklisted(ip) {
+			log.Printf("[防刷墙] 拒绝来自外部黑名单 IP 的访问: %s", ip)
+			http.Error(w, "Access Denied。如有误封，请联系QQ群 964498276", http.StatusForbidden)
 			return
 		}
 

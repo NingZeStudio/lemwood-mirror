@@ -11,12 +11,14 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"lemwood_mirror/internal/auth"
+	"lemwood_mirror/internal/blacklist"
 	"lemwood_mirror/internal/browser"
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
 	"lemwood_mirror/internal/server"
+	"lemwood_mirror/internal/traffic"
 )
 
 type LauncherState struct {
@@ -39,6 +41,10 @@ func main() {
 	if err := db.InitDB(base); err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
+
+	// 初始化流量追踪器
+	traffic.InitTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
+	log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
 
 	// 启动 Token 清理协程
 	go auth.CleanupTokens()
@@ -69,6 +75,17 @@ func main() {
 		}
 		defer scanMu.Unlock()
 		log.Printf("扫描开始")
+
+		// 同步外部黑名单
+		if cfg.ExternalBlacklistURL != "" {
+			log.Printf("[黑名单同步] 开始同步外部黑名单: %s", cfg.ExternalBlacklistURL)
+			go func() {
+				if err := blacklist.SyncExternalBlacklist(cfg.ExternalBlacklistURL); err != nil {
+					log.Printf("[黑名单同步] 同步外部黑名单失败: %v", err)
+				}
+			}()
+		}
+
 		wg := sync.WaitGroup{}
 		for _, lcfg := range cfg.Launchers {
 			lcfg := lcfg

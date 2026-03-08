@@ -44,6 +44,10 @@ type Config struct {
 	CaptchaAppId           string           `json:"captcha_app_id"`
 	CaptchaSecretKey       string           `json:"captcha_secret_key"`
 	Launchers              []LauncherConfig `json:"launchers"`
+	TrafficLimitGB         int              `json:"traffic_limit_gb"`
+	BanRecordFile          string           `json:"ban_record_file"`
+	ExternalBlacklistURL   string           `json:"external_blacklist_url"`
+	AppealContact          string           `json:"appeal_contact"`
 }
 
 func LoadConfig(projectRoot string) (*Config, error) {
@@ -89,6 +93,18 @@ func LoadConfig(projectRoot string) (*Config, error) {
 	if env := os.Getenv("GITHUB_TOKEN"); env != "" {
 		cfg.GitHubToken = env
 	}
+
+	// 设置防刷墙默认值
+	if cfg.TrafficLimitGB <= 0 {
+		cfg.TrafficLimitGB = 5
+	}
+	if cfg.BanRecordFile == "" {
+		cfg.BanRecordFile = "banned_ips.txt"
+	}
+	if cfg.AppealContact == "" {
+		cfg.AppealContact = "QQ群 964498276"
+	}
+
 	return &cfg, nil
 }
 

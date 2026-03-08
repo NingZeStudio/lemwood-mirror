@@ -21,6 +21,10 @@
   "captcha_enabled": true,
   "captcha_app_id": "9fab8370f958912499555f6ce0cd5c56",
   "captcha_secret_key": "b74e2bb93f86d697a7930705ba8bf49b",
+  "traffic_limit_gb": 5,
+  "ban_record_file": "banned_ips.txt",
+  "external_blacklist_url": "https://bcr.pbh-btn.ghorg.ghostchu-services.top/combine/all.txt",
+  "appeal_contact": "QQ群 964498276",
   "launchers": [
     {
       "name": "fcl",
