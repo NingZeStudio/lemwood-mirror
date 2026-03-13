@@ -24,8 +24,8 @@ func SPAFallbackMiddleware(next http.Handler, staticDir string) http.Handler {
 			return
 		}
 
-		// 跳过 /admin/ 路由（已有独立处理）
-		if strings.HasPrefix(path, "/admin/") {
+		// 跳过 /admin 路由（包括 /admin 和 /admin/）
+		if path == "/admin" || strings.HasPrefix(path, "/admin/") {
 			next.ServeHTTP(w, r)
 			return
 		}

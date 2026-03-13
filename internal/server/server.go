@@ -810,6 +810,9 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.Handle("/api/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
 
 	// Admin UI
+	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+	})))
 	mux.Handle("/admin/", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		relPath := strings.TrimPrefix(path, "/admin/")
