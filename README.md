@@ -78,7 +78,8 @@ go build -o mirror ./cmd/mirror
     {
       "name": "fcl",                          // 启动器唯一标识名称
       "source_url": "https://github.com/FCL-Team/FoldCraftLauncher", // 官方页面或仓库 URL
-      "repo_selector": ""                     // CSS 选择器或正则，用于从 source_url 提取仓库地址
+      "repo_selector": "",                    // CSS 选择器或正则，用于从 source_url 提取仓库地址
+      "include_prerelease": true              // 是否包含预发布版本，默认 false。对于只有 pre-release 的仓库需设为 true
     }
   ]
 }
@@ -87,6 +88,7 @@ go build -o mirror ./cmd/mirror
 - `github_token`: 建议配置以避免 GitHub API 频率限制。
 - `download_url_base`: 外部访问的基准 URL，用于生成 `info.json` 中的下载链接。
 - `captcha_enabled`: 启用后，用户下载文件前需完成极验滑块验证，防止机器人滥用。
+- `include_prerelease`: 对于只有预发布版本的仓库（如某些处于早期开发阶段的启动器），需设为 `true` 才能正常获取版本。
 
 ### 4. 运行服务
 

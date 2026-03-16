@@ -192,7 +192,37 @@
 
 ---
 
-## 6. 错误码说明
+## 6. 启动器配置说明
+
+### 6.1 配置字段
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `name` | string | 是 | - | 启动器唯一标识名称，用于 API 路径和文件存储目录 |
+| `source_url` | string | 是 | - | 官方页面或 GitHub 仓库 URL |
+| `repo_selector` | string | 否 | "" | CSS 选择器或正则表达式，用于从 source_url 提取仓库地址 |
+| `include_prerelease` | bool | 否 | false | 是否包含预发布版本 |
+
+### 6.2 include_prerelease 字段说明
+
+GitHub 的 `GetLatestRelease` API 只返回最新的**正式发布**版本，不包括预发布版本。对于只有预发布版本的仓库（如某些处于早期开发阶段的启动器），需要将 `include_prerelease` 设为 `true`。
+
+**示例配置：**
+
+```json
+{
+  "name": "fcl",
+  "source_url": "https://github.com/root-S7/FoldCraftLauncher",
+  "repo_selector": "",
+  "include_prerelease": true
+}
+```
+
+当 `include_prerelease` 为 `true` 时，系统会使用 `ListReleases` API 获取所有发布版本（包括预发布），并选择最新的一个。
+
+---
+
+## 7. 错误码说明
 
 | 错误码 | 说明 |
 |--------|------|

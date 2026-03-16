@@ -15,9 +15,10 @@ import (
 // SourceURL 可以直接是 GitHub 仓库 URL（例如 https://github.com/owner/repo），在这种情况下选择器被忽略。
 
 type LauncherConfig struct {
-	Name         string `json:"name"`
-	SourceURL    string `json:"source_url"`
-	RepoSelector string `json:"repo_selector"`
+	Name              string `json:"name"`
+	SourceURL         string `json:"source_url"`
+	RepoSelector      string `json:"repo_selector"`
+	IncludePrerelease bool   `json:"include_prerelease"`
 }
 
 type Config struct {

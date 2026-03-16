@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-github/v50/github"
 	"github.com/robfig/cron/v3"
 	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/blacklist"
@@ -106,7 +107,13 @@ func main() {
 					log.Printf("%s: 解析 owner/repo 失败: %v", lcfg.Name, err)
 					return
 				}
-				rel, resp, err := ghc.LatestRelease(ctx, owner, repo)
+				var rel *github.RepositoryRelease
+				var resp *github.Response
+				if lcfg.IncludePrerelease {
+					rel, resp, err = ghc.LatestReleaseIncludingPrerelease(ctx, owner, repo)
+				} else {
+					rel, resp, err = ghc.LatestRelease(ctx, owner, repo)
+				}
 				if err != nil {
 					log.Printf("%s: 获取最新 release 失败: %v", lcfg.Name, err)
 					gh.BackoffIfRateLimited(resp)

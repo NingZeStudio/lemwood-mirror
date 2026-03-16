@@ -43,6 +43,19 @@ func (c *Client) LatestRelease(ctx context.Context, owner, repo string) (*github
     return c.cli.Repositories.GetLatestRelease(ctx, owner, repo)
 }
 
+// LatestReleaseIncludingPrerelease 获取最新的发布版本（包括 pre-release）。
+// GitHub 的 GetLatestRelease API 不返回 pre-release，所以需要使用 ListReleases。
+func (c *Client) LatestReleaseIncludingPrerelease(ctx context.Context, owner, repo string) (*github.RepositoryRelease, *github.Response, error) {
+	releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: 10})
+	if err != nil {
+		return nil, resp, err
+	}
+	if len(releases) == 0 {
+		return nil, resp, errors.New("没有找到任何 release")
+	}
+	return releases[0], resp, nil
+}
+
 // BackoffIfRateLimited 检查响应是否受到速率限制，并在需要时休眠。
 func BackoffIfRateLimited(resp *github.Response) {
     if resp == nil || resp.Rate.Remaining > 0 {
