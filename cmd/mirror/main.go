@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/go-github/v50/github"
@@ -39,13 +41,18 @@ func main() {
 	if err := server.EnsureDir(base); err != nil {
 		log.Fatalf("确保目录存在失败: %v", err)
 	}
-	if err := db.InitDB(base); err != nil {
+	if err := db.InitDB(base, cfg); err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
 
 	// 初始化流量追踪器
 	traffic.InitTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
 	log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
+
+	// 启动时立即同步一次封禁记录文件，确保与数据库一致并去重
+	if err := traffic.SyncBanRecordNow(); err != nil {
+		log.Printf("[防刷墙] 启动同步封禁记录文件失败: %v", err)
+	}
 
 	// 启动 Token 清理协程
 	go auth.CleanupTokens()
@@ -180,7 +187,19 @@ func main() {
 	// 带有手动扫描端点的 HTTP 服务器
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	log.Printf("正在启动服务器于 %s", addr)
-	if err := server.StartHTTPWithScan(addr, s, scan); err != nil {
-		log.Fatalf("http 服务器出错: %v", err)
-	}
+
+	// 捕获系统中断信号以实现优雅退出
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		if err := server.StartHTTPWithScan(addr, s, scan); err != nil {
+			log.Printf("http 服务器出错: %v", err)
+		}
+	}()
+
+	<-stop
+	log.Println("正在关闭服务...")
+	traffic.CloseTracker()
+	log.Println("服务已正常退出")
 }

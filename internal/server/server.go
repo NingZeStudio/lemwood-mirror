@@ -387,6 +387,8 @@ func (s *State) handleAdminBlacklist(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 同步封禁记录文件
+		traffic.SyncBanRecord()
 		w.WriteHeader(http.StatusCreated)
 	case http.MethodDelete:
 		ip := r.URL.Query().Get("ip")
@@ -398,6 +400,8 @@ func (s *State) handleAdminBlacklist(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 同步封禁记录文件
+		traffic.SyncBanRecord()
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -774,8 +778,9 @@ func (s *State) Routes(mux *http.ServeMux) {
 
 		// 检查是否需要封禁
 		if banned, reason, trafficGB := traffic.CheckAndBan(clientIP); banned {
+			now := time.Now().Format("2006-01-02 15:04:05")
 			log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
-			http.Error(w, fmt.Sprintf("Access Denied: %s。如有误封，请联系 %s", reason, s.Config.AppealContact), http.StatusForbidden)
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s because of %s (Used: %.2fGB). 如有误封，请联系 %s", clientIP, now, reason, trafficGB, s.Config.AppealContact), http.StatusForbidden)
 			return
 		}
 
@@ -866,16 +871,16 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 检查本地黑名单
-		if db.IsIPBlacklisted(ip) {
-			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，如有误封请联系 %s", ip, "QQ群 964498276")
-			http.Error(w, "Access Denied。如有误封，请联系QQ群 964498276", http.StatusForbidden)
+		if banned, createdAt, _ := db.GetIPBlacklistInfo(ip); banned {
+			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "QQ群 964498276")
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请联系QQ群 964498276", ip, createdAt), http.StatusForbidden)
 			return
 		}
 
 		// 检查外部黑名单
 		if blacklist.IsExternalBlacklisted(ip) {
 			log.Printf("[防刷墙] 拒绝来自外部黑名单 IP 的访问: %s", ip)
-			http.Error(w, "Access Denied。如有误封，请联系QQ群 964498276", http.StatusForbidden)
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请联系QQ群 964498276", ip), http.StatusForbidden)
 			return
 		}
 

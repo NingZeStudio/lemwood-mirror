@@ -49,6 +49,12 @@ type Config struct {
 	BanRecordFile          string           `json:"ban_record_file"`
 	ExternalBlacklistURL   string           `json:"external_blacklist_url"`
 	AppealContact          string           `json:"appeal_contact"`
+	MySQLHost              string           `json:"mysql_host"`
+	MySQLPort              int              `json:"mysql_port"`
+	MySQLUser              string           `json:"mysql_user"`
+	MySQLPassword          string           `json:"mysql_password"`
+	MySQLDatabase          string           `json:"mysql_database"`
+	MySQLMigration         bool             `json:"mysql_migration"`
 }
 
 func LoadConfig(projectRoot string) (*Config, error) {

@@ -1,36 +1,77 @@
 package traffic
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"lemwood_mirror/internal/db"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Tracker struct {
-	limitGB          int64
-	banRecordFile    string
-	appealContact    string
-	fileMutex        sync.Mutex
-	banMutex         sync.Mutex
-	storagePath      string
+	limitGB       int64
+	banRecordFile string
+	appealContact string
+	fileMutex     sync.Mutex
+	banMutex      sync.Mutex
+	storagePath   string
+	syncChan      chan struct{} // 用于异步触发文件同步
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 var defaultTracker *Tracker
 
 func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
+	ctx, cancel := context.WithCancel(context.Background())
 	defaultTracker = &Tracker{
 		limitGB:       int64(limitGB) * 1024 * 1024 * 1024,
 		banRecordFile: banRecordFile,
 		appealContact: appealContact,
 		storagePath:   storagePath,
+		syncChan:      make(chan struct{}, 1),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 	if defaultTracker.banRecordFile != "" {
 		defaultTracker.initBanRecordFile()
+		// 启动后台同步协程
+		go defaultTracker.syncWorker()
+	}
+}
+
+func (t *Tracker) syncWorker() {
+	const debounceDuration = 2 * time.Second
+	var timer *time.Timer
+
+	for {
+		select {
+		case <-t.syncChan:
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.AfterFunc(debounceDuration, func() {
+				if err := t.SyncBanRecordFile(); err != nil {
+					log.Printf("[防刷墙] 异步同步封禁记录文件失败: %v", err)
+				}
+			})
+		case <-t.ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		}
+	}
+}
+
+func CloseTracker() {
+	if defaultTracker != nil && defaultTracker.cancel != nil {
+		defaultTracker.cancel()
 	}
 }
 
@@ -66,6 +107,11 @@ func (t *Tracker) GetDailyTraffic(ip string) (int64, error) {
 	return db.GetDailyTraffic(ip)
 }
 
+// ToGB 将字节转换为 GB
+func ToGB(bytes int64) float64 {
+	return float64(bytes) / (1024 * 1024 * 1024)
+}
+
 func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 	if t == nil {
 		return false, "", 0
@@ -87,7 +133,7 @@ func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 	}
 
 	if traffic > t.limitGB {
-		trafficGB := float64(traffic) / float64(1024*1024*1024)
+		trafficGB := ToGB(traffic)
 		reason := fmt.Sprintf("单日下载流量超过%dGB限制", t.limitGB/(1024*1024*1024))
 
 		if err := db.AddIPToBlacklistWithSource(ip, reason, "local", "traffic"); err != nil {
@@ -95,7 +141,7 @@ func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 			return false, "", trafficGB
 		}
 
-		t.appendBanRecord(ip, reason, trafficGB)
+		t.TriggerSync()
 
 		log.Printf("[防刷墙] IP %s 已被封禁，原因: %s，当日流量: %.2fGB，如有误封请联系 %s",
 			ip, reason, trafficGB, t.appealContact)
@@ -106,28 +152,92 @@ func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 	return false, "", 0
 }
 
-func (t *Tracker) appendBanRecord(ip, reason string, trafficGB float64) {
-	if t.banRecordFile == "" {
+// TriggerSync 异步触发文件同步
+func (t *Tracker) TriggerSync() {
+	if t == nil || t.syncChan == nil {
 		return
+	}
+	select {
+	case t.syncChan <- struct{}{}:
+	default:
+		// 如果 channel 已满（即已有同步请求正在排队或 debounce 中），则跳过
+	}
+}
+
+// SyncBanRecordFile 从数据库重新生成封禁记录文件，确保与数据库同步并去重
+func (t *Tracker) SyncBanRecordFile() error {
+	if t == nil || t.banRecordFile == "" {
+		return nil
 	}
 
 	t.fileMutex.Lock()
 	defer t.fileMutex.Unlock()
 
-	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
-
-	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_WRONLY, 0644)
+	blacklist, err := db.GetLocalIPBlacklist()
 	if err != nil {
-		log.Printf("[防刷墙] 打开封禁记录文件失败: %v", err)
-		return
+		return fmt.Errorf("获取本地黑名单失败: %w", err)
 	}
-	defer f.Close()
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	line := fmt.Sprintf("%s | %s | %s | %.2f\n", ip, timestamp, reason, trafficGB)
-	if _, err := f.WriteString(line); err != nil {
-		log.Printf("[防刷墙] 写入封禁记录失败: %v", err)
+	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
+	
+	// 构建文件头
+	header := fmt.Sprintf(`# IP封禁记录 - 公开数据
+# 格式: IP | 封禁时间 | 封禁理由 | 当日流量(GB)
+# 如有误封，请加入 %s 进行申诉
+
+`, t.appealContact)
+
+	var content strings.Builder
+	content.WriteString(header)
+
+	for _, item := range blacklist {
+		ip := item["ip"]
+		reason := item["reason"]
+		createdAtStr := item["created_at"]
+		
+		// 格式化时间并提取日期，以便查询当时的流量
+		createdAt, err := time.Parse("2006-01-02 15:04:05", createdAtStr)
+		if err != nil {
+			createdAt, err = time.Parse(time.RFC3339, createdAtStr)
+		}
+		
+		timestamp := createdAtStr
+		date := time.Now().Format("2006-01-02")
+		if err == nil {
+			timestamp = createdAt.Format("2006-01-02 15:04:05")
+			date = createdAt.Format("2006-01-02")
+		}
+
+		// 获取封禁当天的流量，而不是今天的流量
+		traffic, _ := db.GetTrafficOnDate(ip, date)
+		trafficGB := ToGB(traffic)
+
+		line := fmt.Sprintf("%s | %s | %s | %.2f\n", ip, timestamp, reason, trafficGB)
+		content.WriteString(line)
 	}
+
+	if err := os.WriteFile(fullPath, []byte(content.String()), 0644); err != nil {
+		return fmt.Errorf("更新封禁记录文件失败: %w", err)
+	}
+
+	return nil
+}
+
+// SyncBanRecord 暴露全局异步同步函数
+func SyncBanRecord() error {
+	if defaultTracker == nil {
+		return nil
+	}
+	defaultTracker.TriggerSync()
+	return nil
+}
+
+// SyncBanRecordNow 暴露全局立即同步函数
+func SyncBanRecordNow() error {
+	if defaultTracker == nil {
+		return nil
+	}
+	return defaultTracker.SyncBanRecordFile()
 }
 
 func (t *Tracker) GetTrafficLimitGB() int {
