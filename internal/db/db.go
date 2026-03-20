@@ -20,6 +20,10 @@ var (
 	isMySQL bool
 )
 
+func IsMySQL() bool {
+	return isMySQL
+}
+
 func InitDB(storagePath string, cfg *config.Config) error {
 	dbPath := filepath.Join(storagePath, "stats.db")
 
@@ -140,12 +144,23 @@ func migrateTable(src, dst *sql.DB, tableName string) error {
 	}
 
 	placeholders := make([]string, len(cols))
-	for i := range placeholders {
+	escapedCols := make([]string, len(cols))
+	for i, col := range cols {
 		placeholders[i] = "?"
+		if isMySQL {
+			escapedCols[i] = "`" + col + "`"
+		} else {
+			escapedCols[i] = col
+		}
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		tableName, strings.Join(cols, ","), strings.Join(placeholders, ","))
+	insertCmd := "INSERT INTO"
+	if isMySQL {
+		insertCmd = "INSERT IGNORE INTO"
+	}
+
+	query := fmt.Sprintf("%s %s (%s) VALUES (%s)",
+		insertCmd, tableName, strings.Join(escapedCols, ","), strings.Join(placeholders, ","))
 
 	tx, err := dst.Begin()
 	if err != nil {
@@ -390,15 +405,15 @@ func IsIPBlacklisted(ip string) bool {
 }
 
 func GetIPBlacklistInfo(ip string) (bool, string, error) {
-	var createdAt string
-	err := DB.QueryRow("SELECT created_at FROM ip_blacklist WHERE ip = ?", ip).Scan(&createdAt)
+	var createdAtRaw interface{}
+	err := DB.QueryRow("SELECT created_at FROM ip_blacklist WHERE ip = ?", ip).Scan(&createdAtRaw)
 	if err == sql.ErrNoRows {
 		return false, "", nil
 	}
 	if err != nil {
 		return false, "", err
 	}
-	return true, createdAt, nil
+	return true, formatTime(createdAtRaw), nil
 }
 
 func AddIPToBlacklist(ip, reason string) error {
@@ -426,10 +441,14 @@ func GetIPBlacklist() ([]map[string]string, error) {
 
 	list := []map[string]string{}
 	for rows.Next() {
-		var ip, reason, source, banType, createdAt string
-		if err := rows.Scan(&ip, &reason, &source, &banType, &createdAt); err != nil {
+		var ip, reason, source, banType string
+		var createdAtRaw interface{}
+		if err := rows.Scan(&ip, &reason, &source, &banType, &createdAtRaw); err != nil {
 			return nil, err
 		}
+
+		createdAt := formatTime(createdAtRaw)
+
 		list = append(list, map[string]string{
 			"ip":         ip,
 			"reason":     reason,
@@ -450,10 +469,14 @@ func GetLocalIPBlacklist() ([]map[string]string, error) {
 
 	list := []map[string]string{}
 	for rows.Next() {
-		var ip, reason, source, banType, createdAt string
-		if err := rows.Scan(&ip, &reason, &source, &banType, &createdAt); err != nil {
+		var ip, reason, source, banType string
+		var createdAtRaw interface{}
+		if err := rows.Scan(&ip, &reason, &source, &banType, &createdAtRaw); err != nil {
 			return nil, err
 		}
+
+		createdAt := formatTime(createdAtRaw)
+
 		list = append(list, map[string]string{
 			"ip":         ip,
 			"reason":     reason,
@@ -463,6 +486,21 @@ func GetLocalIPBlacklist() ([]map[string]string, error) {
 		})
 	}
 	return list, nil
+}
+
+func formatTime(raw interface{}) string {
+	if raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case time.Time:
+		return v.Format("2006-01-02 15:04:05")
+	case []byte:
+		return string(v)
+	case string:
+		return v
+	}
+	return fmt.Sprintf("%v", raw)
 }
 
 func AddIPToBlacklistWithSource(ip, reason, source, banType string) error {

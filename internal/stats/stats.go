@@ -214,20 +214,43 @@ func GetStats(storagePath string) (*StatsData, error) {
 	}
 
 	// 30天访问量
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')").Scan(&data.Last30Visits); err != nil && err != sql.ErrNoRows {
+	var v30Query string
+	if db.IsMySQL() {
+		v30Query = "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
+	} else {
+		v30Query = "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')"
+	}
+	if err := db.DB.QueryRow(v30Query).Scan(&data.Last30Visits); err != nil && err != sql.ErrNoRows {
 		log.Printf("Error counting last 30 days visits: %v", err)
 	}
 
 	// 30天下载量
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')").Scan(&data.Last30Downloads); err != nil && err != sql.ErrNoRows {
+	var d30Query string
+	if db.IsMySQL() {
+		d30Query = "SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
+	} else {
+		d30Query = "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')"
+	}
+	if err := db.DB.QueryRow(d30Query).Scan(&data.Last30Downloads); err != nil && err != sql.ErrNoRows {
 		log.Printf("Error counting last 30 days downloads: %v", err)
 	}
 
 	// 总运行天数
 	var startTimeStr string
-	if err := db.DB.QueryRow("SELECT value FROM system_info WHERE key = 'start_time'").Scan(&startTimeStr); err == nil {
-		startTime, err := time.Parse("2006-01-02 15:04:05", startTimeStr)
-		if err == nil {
+	if err := db.DB.QueryRow("SELECT value FROM system_info WHERE `key` = 'start_time'").Scan(&startTimeStr); err == nil {
+		var startTime time.Time
+		var parseErr error
+		if db.IsMySQL() {
+			// MySQL 可能返回 time.Time 或特定字符串
+			startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
+			if parseErr != nil {
+				startTime, parseErr = time.Parse(time.RFC3339, startTimeStr)
+			}
+		} else {
+			startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
+		}
+		
+		if parseErr == nil {
 			days := int64(time.Since(startTime).Hours()/24) + 1
 			data.TotalDays = days
 		}
@@ -269,35 +292,55 @@ func GetStats(storagePath string) (*StatsData, error) {
 	dailyMap := make(map[string]*DailyStat)
 
 	// 查访问
-	vRows, err := db.DB.Query(`SELECT date(created_at), COUNT(*) FROM visits GROUP BY date(created_at) ORDER BY date(created_at) DESC LIMIT 30`)
+	var vDailyQuery string
+	if db.IsMySQL() {
+		vDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+	} else {
+		vDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+	}
+	vRows, err := db.DB.Query(vDailyQuery)
 	if err == nil {
 		defer vRows.Close()
 		for vRows.Next() {
 			var d string
 			var c int64
-			if err := vRows.Scan(&d, &c); err == nil {
-				if dailyMap[d] == nil {
-					dailyMap[d] = &DailyStat{Date: d}
-				}
-				dailyMap[d].VisitCount = c
+			if err := vRows.Scan(&d, &c); err != nil {
+				log.Printf("Error scanning daily visits: %v", err)
+				continue
 			}
+			if dailyMap[d] == nil {
+				dailyMap[d] = &DailyStat{Date: d}
+			}
+			dailyMap[d].VisitCount = c
 		}
+	} else {
+		log.Printf("Error querying daily visits: %v", err)
 	}
 
 	// 查下载
-	dRows, err := db.DB.Query(`SELECT date(created_at), COUNT(*) FROM downloads GROUP BY date(created_at) ORDER BY date(created_at) DESC LIMIT 30`)
+	var dDailyQuery string
+	if db.IsMySQL() {
+		dDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
+	} else {
+		dDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
+	}
+	dRows, err := db.DB.Query(dDailyQuery)
 	if err == nil {
 		defer dRows.Close()
 		for dRows.Next() {
 			var d string
 			var c int64
-			if err := dRows.Scan(&d, &c); err == nil {
-				if dailyMap[d] == nil {
-					dailyMap[d] = &DailyStat{Date: d}
-				}
-				dailyMap[d].DownloadCount = c
+			if err := dRows.Scan(&d, &c); err != nil {
+				log.Printf("Error scanning daily downloads: %v", err)
+				continue
 			}
+			if dailyMap[d] == nil {
+				dailyMap[d] = &DailyStat{Date: d}
+			}
+			dailyMap[d].DownloadCount = c
 		}
+	} else {
+		log.Printf("Error querying daily downloads: %v", err)
 	}
 
 	for _, v := range dailyMap {
