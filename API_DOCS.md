@@ -203,6 +203,7 @@
 | `source_url` | string | 是 | - | 官方页面或 GitHub 仓库 URL |
 | `repo_selector` | string | 否 | "" | CSS 选择器或正则表达式，用于从 source_url 提取仓库地址 |
 | `include_prerelease` | bool | 否 | false | 是否包含预发布版本 |
+| `max_versions` | int | 否 | 0 | 最多检查的版本数量，0 表示仅检查最新版本 |
 
 ### 6.2 include_prerelease 字段说明
 
@@ -221,9 +222,52 @@ GitHub 的 `GetLatestRelease` API 只返回最新的**正式发布**版本，不
 
 当 `include_prerelease` 为 `true` 时，系统会使用 `ListReleases` API 获取所有发布版本（包括预发布），并选择最新的一个。
 
+### 6.3 max_versions 字段说明
+
+`max_versions` 用于配置批量版本检查功能。当设置大于 0 的值时，系统会检查并下载指定数量的历史版本。
+
+**示例配置：**
+
+```json
+{
+  "name": "fcl",
+  "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
+  "repo_selector": "",
+  "max_versions": 2
+}
+```
+
+上述配置表示 fcl 启动器会检查并下载最近 2 个版本的所有资产文件。
+
 ---
 
-## 7. 错误码说明
+## 7. 手动扫描接口
+
+### 7.1 触发全量扫描
+- **端点**：`POST /api/scan`
+- **功能**：触发所有启动器的版本检查和更新。
+- **响应**：`202 Accepted`，返回 `Scan triggered`
+
+### 7.2 触发单启动器扫描
+- **端点**：`POST /api/scan/launcher`
+- **功能**：触发指定启动器的版本检查和更新。
+- **请求体**：
+  ```json
+  {
+    "launcher": "fcl"
+  }
+  ```
+- **响应示例** (202 Accepted)：
+  ```json
+  {
+    "status": "accepted",
+    "message": "扫描已触发"
+  }
+  ```
+
+---
+
+## 8. 错误码说明
 
 | 错误码 | 说明 |
 |--------|------|

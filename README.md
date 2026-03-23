@@ -90,7 +90,8 @@ go build -o mirror ./cmd/mirror
       "name": "fcl",                          // 启动器唯一标识名称
       "source_url": "https://github.com/FCL-Team/FoldCraftLauncher", // 官方页面或仓库 URL
       "repo_selector": "",                    // CSS 选择器或正则，用于从 source_url 提取仓库地址
-      "include_prerelease": true              // 是否包含预发布版本，默认 false。对于只有 pre-release 的仓库需设为 true
+      "include_prerelease": true,             // 是否包含预发布版本，默认 false。对于只有 pre-release 的仓库需设为 true
+      "max_versions": 2                       // 最多检查的版本数量，0 或不设置表示仅检查最新版本
     }
   ]
 }
