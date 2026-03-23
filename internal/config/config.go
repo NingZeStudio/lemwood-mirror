@@ -19,6 +19,7 @@ type LauncherConfig struct {
 	SourceURL         string `json:"source_url"`
 	RepoSelector      string `json:"repo_selector"`
 	IncludePrerelease bool   `json:"include_prerelease"`
+	MaxVersions       int    `json:"max_versions"`
 }
 
 type Config struct {

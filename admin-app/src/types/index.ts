@@ -16,6 +16,8 @@ export interface LauncherConfig {
   name: string
   source_url: string
   repo_selector: string
+  include_prerelease?: boolean
+  max_versions?: number
 }
 
 export interface Config {

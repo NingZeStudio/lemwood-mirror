@@ -12,8 +12,8 @@ import {
   Space,
   Image,
 } from 'antd'
-import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons'
-import { getConfig, updateConfig } from '@/api/config'
+import { PlusOutlined, MinusCircleOutlined, SyncOutlined } from '@ant-design/icons'
+import { getConfig, updateConfig, triggerLauncherScan } from '@/api/config'
 import type { Config } from '@/types'
 import { generateTOTPSecret, getTOTPQRCodeUrl } from '@/lib/utils'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
@@ -23,6 +23,7 @@ export function ConfigPage() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [totpSecret, setTotpSecret] = useState('')
+  const [scanningLauncher, setScanningLauncher] = useState<string | null>(null)
   const { isMobile } = useBreakpoint()
 
   useEffect(() => {
@@ -82,6 +83,18 @@ export function ConfigPage() {
   const handleTOTPEnabledChange = (checked: boolean) => {
     if (checked && !totpSecret) {
       handleGenerateTOTP()
+    }
+  }
+
+  const handleScanLauncher = async (launcherName: string) => {
+    setScanningLauncher(launcherName)
+    try {
+      await triggerLauncherScan(launcherName)
+      message.success(`已触发 ${launcherName} 的更新扫描`)
+    } catch {
+      message.error(`触发 ${launcherName} 更新扫描失败`)
+    } finally {
+      setScanningLauncher(null)
     }
   }
 
@@ -327,6 +340,38 @@ export function ConfigPage() {
                     label="版本选择器 (可选)"
                   >
                     <Input />
+                  </Form.Item>
+                  <Form.Item
+                    {...restField}
+                    name={[name, 'max_versions']}
+                    label="最大版本数"
+                    extra="0 表示仅检查最新版本"
+                  >
+                    <InputNumber min={0} max={50} style={{ width: '100%' }} />
+                  </Form.Item>
+                  <Form.Item
+                    {...restField}
+                    name={[name, 'include_prerelease']}
+                    label="包含预发布版本"
+                    valuePropName="checked"
+                  >
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate>
+                    {({ getFieldValue }) => {
+                      const launcherName = getFieldValue(['launchers', name, 'name'])
+                      return (
+                        <Button
+                          type="default"
+                          icon={<SyncOutlined spin={scanningLauncher === launcherName} />}
+                          onClick={() => handleScanLauncher(launcherName)}
+                          disabled={!launcherName || scanningLauncher !== null}
+                          loading={scanningLauncher === launcherName}
+                        >
+                          请求更新
+                        </Button>
+                      )
+                    }}
                   </Form.Item>
                 </Card>
               ))}

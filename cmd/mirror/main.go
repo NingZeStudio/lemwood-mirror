@@ -31,6 +31,168 @@ type LauncherState struct {
 	LastScan time.Time
 }
 
+type Scanner struct {
+	cfg       *config.Config
+	base      string
+	s         *server.State
+	ghc       *gh.Client
+	mu        sync.Mutex
+	scanMu    sync.Mutex
+	launchers map[string]*LauncherState
+}
+
+func NewScanner(cfg *config.Config, base string, s *server.State, ghc *gh.Client) *Scanner {
+	launchers := make(map[string]*LauncherState)
+	for _, l := range cfg.Launchers {
+		ls := &LauncherState{Name: l.Name}
+		if v := s.GetLatestVersion(l.Name); v != "" {
+			ls.Version = v
+			log.Printf("%s: 发现本地版本 %s", l.Name, v)
+		}
+		launchers[l.Name] = ls
+	}
+	return &Scanner{
+		cfg:       cfg,
+		base:      base,
+		s:         s,
+		ghc:       ghc,
+		launchers: launchers,
+	}
+}
+
+func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
+	timeout := time.Duration(sc.cfg.DownloadTimeoutMinutes) * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	repoURL, err := browser.ResolveRepoURL(lcfg.SourceURL, lcfg.RepoSelector)
+	if err != nil {
+		log.Printf("%s: 解析仓库地址失败: %v", lcfg.Name, err)
+		return
+	}
+	log.Printf("%s: 使用仓库 %s", lcfg.Name, repoURL)
+	owner, repo, err := gh.ParseOwnerRepo(repoURL)
+	if err != nil {
+		log.Printf("%s: 解析 owner/repo 失败: %v", lcfg.Name, err)
+		return
+	}
+
+	var releases []*github.RepositoryRelease
+	var resp *github.Response
+
+	if lcfg.MaxVersions > 0 {
+		releases, resp, err = sc.ghc.ListReleases(ctx, owner, repo, lcfg.MaxVersions)
+	} else {
+		var rel *github.RepositoryRelease
+		if lcfg.IncludePrerelease {
+			rel, resp, err = sc.ghc.LatestReleaseIncludingPrerelease(ctx, owner, repo)
+		} else {
+			rel, resp, err = sc.ghc.LatestRelease(ctx, owner, repo)
+		}
+		if err == nil {
+			releases = []*github.RepositoryRelease{rel}
+		}
+	}
+
+	if err != nil {
+		log.Printf("%s: 获取 release 失败: %v", lcfg.Name, err)
+		gh.BackoffIfRateLimited(resp)
+		return
+	}
+
+	for _, rel := range releases {
+		version := rel.GetTagName()
+		if version == "" {
+			version = rel.GetName()
+		}
+
+		sc.mu.Lock()
+		ls := sc.launchers[lcfg.Name]
+		currentVersion := ls.Version
+		sc.mu.Unlock()
+
+		if currentVersion != version {
+			if err := sc.s.ClearLatestFlags(lcfg.Name); err != nil {
+				log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
+			}
+		}
+
+		downer := downloader.NewDownloader(sc.cfg.DownloadTimeoutMinutes, sc.cfg.ConcurrentDownloads)
+		infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, sc.base, sc.cfg.ProxyURL, sc.cfg.AssetProxyURL, sc.cfg.XgetEnabled, sc.cfg.XgetDomain, rel, sc.cfg.ServerAddress, sc.cfg.ServerPort, sc.cfg.DownloadUrlBase, true)
+		if err != nil {
+			log.Printf("%s: 下载/检查失败: %v", lcfg.Name, err)
+			continue
+		}
+
+		sc.s.UpdateIndex(lcfg.Name, version, infoPath)
+		sc.mu.Lock()
+		ls.RepoURL = repoURL
+		if ls.Version == "" || version != currentVersion {
+			ls.Version = version
+		}
+		ls.LastScan = time.Now()
+		sc.mu.Unlock()
+
+		if currentVersion != version {
+			log.Printf("%s: 已更新至 %s", lcfg.Name, version)
+		}
+	}
+}
+
+func (sc *Scanner) ScanAll() {
+	if !sc.scanMu.TryLock() {
+		log.Printf("扫描已在进行中，跳过此次执行")
+		return
+	}
+	defer sc.scanMu.Unlock()
+	log.Printf("扫描开始")
+
+	if sc.cfg.ExternalBlacklistURL != "" {
+		log.Printf("[黑名单同步] 开始同步外部黑名单: %s", sc.cfg.ExternalBlacklistURL)
+		go func() {
+			if err := blacklist.SyncExternalBlacklist(sc.cfg.ExternalBlacklistURL); err != nil {
+				log.Printf("[黑名单同步] 同步外部黑名单失败: %v", err)
+			}
+		}()
+	}
+
+	wg := sync.WaitGroup{}
+	for _, lcfg := range sc.cfg.Launchers {
+		lcfg := lcfg
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sc.scanLauncher(lcfg)
+		}()
+	}
+	wg.Wait()
+	log.Printf("扫描完成")
+}
+
+func (sc *Scanner) ScanLauncher(launcherName string) {
+	if !sc.scanMu.TryLock() {
+		log.Printf("扫描已在进行中，跳过此次执行")
+		return
+	}
+	defer sc.scanMu.Unlock()
+
+	var lcfg *config.LauncherConfig
+	for i := range sc.cfg.Launchers {
+		if sc.cfg.Launchers[i].Name == launcherName {
+			lcfg = &sc.cfg.Launchers[i]
+			break
+		}
+	}
+	if lcfg == nil {
+		log.Printf("未找到启动器: %s", launcherName)
+		return
+	}
+
+	log.Printf("开始扫描启动器: %s", launcherName)
+	sc.scanLauncher(*lcfg)
+	log.Printf("启动器 %s 扫描完成", launcherName)
+}
+
 func main() {
 	projectRoot, _ := os.Getwd()
 	cfg, err := config.LoadConfig(projectRoot)
@@ -45,16 +207,13 @@ func main() {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
 
-	// 初始化流量追踪器
 	traffic.InitTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
 	log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
 
-	// 启动时立即同步一次封禁记录文件，确保与数据库一致并去重
 	if err := traffic.SyncBanRecordNow(); err != nil {
 		log.Printf("[防刷墙] 启动同步封禁记录文件失败: %v", err)
 	}
 
-	// 启动 Token 清理协程
 	go auth.CleanupTokens()
 
 	s := server.NewState(base, projectRoot, cfg)
@@ -63,137 +222,26 @@ func main() {
 	}
 	ghc := gh.NewClient(cfg.GitHubToken)
 
-	var mu sync.Mutex
-	var scanMu sync.Mutex
-	launchers := make(map[string]*LauncherState)
-	for _, l := range cfg.Launchers {
-		ls := &LauncherState{Name: l.Name}
-		// 从磁盘索引中初始化当前版本
-		if v := s.GetLatestVersion(l.Name); v != "" {
-			ls.Version = v
-			log.Printf("%s: 发现本地版本 %s", l.Name, v)
-		}
-		launchers[l.Name] = ls
-	}
+	scanner := NewScanner(cfg, base, s, ghc)
 
-	scan := func() {
-		if !scanMu.TryLock() {
-			log.Printf("扫描已在进行中，跳过此次执行")
-			return
-		}
-		defer scanMu.Unlock()
-		log.Printf("扫描开始")
+	go scanner.ScanAll()
 
-		// 同步外部黑名单
-		if cfg.ExternalBlacklistURL != "" {
-			log.Printf("[黑名单同步] 开始同步外部黑名单: %s", cfg.ExternalBlacklistURL)
-			go func() {
-				if err := blacklist.SyncExternalBlacklist(cfg.ExternalBlacklistURL); err != nil {
-					log.Printf("[黑名单同步] 同步外部黑名单失败: %v", err)
-				}
-			}()
-		}
-
-		wg := sync.WaitGroup{}
-		for _, lcfg := range cfg.Launchers {
-			lcfg := lcfg
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				timeout := time.Duration(cfg.DownloadTimeoutMinutes) * time.Minute
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
-				defer cancel()
-				repoURL, err := browser.ResolveRepoURL(lcfg.SourceURL, lcfg.RepoSelector)
-				if err != nil {
-					log.Printf("%s: 解析仓库地址失败: %v", lcfg.Name, err)
-					return
-				}
-				log.Printf("%s: 使用仓库 %s", lcfg.Name, repoURL)
-				owner, repo, err := gh.ParseOwnerRepo(repoURL)
-				if err != nil {
-					log.Printf("%s: 解析 owner/repo 失败: %v", lcfg.Name, err)
-					return
-				}
-				var rel *github.RepositoryRelease
-				var resp *github.Response
-				if lcfg.IncludePrerelease {
-					rel, resp, err = ghc.LatestReleaseIncludingPrerelease(ctx, owner, repo)
-				} else {
-					rel, resp, err = ghc.LatestRelease(ctx, owner, repo)
-				}
-				if err != nil {
-					log.Printf("%s: 获取最新 release 失败: %v", lcfg.Name, err)
-					gh.BackoffIfRateLimited(resp)
-					return
-				}
-				version := rel.GetTagName()
-				if version == "" {
-					version = rel.GetName()
-				}
-				
-				// 检查版本并执行下载/修复
-				mu.Lock()
-				ls := launchers[lcfg.Name]
-				currentVersion := ls.Version
-				mu.Unlock()
-				
-				// 如果版本相同，也继续执行下载流程以检查文件完整性（downloader 内部会跳过已存在的文件）
-				// 但我们只在版本变化时清除 latest 标记
-				if currentVersion != version {
-					// 清除该启动器所有旧版本的 latest 标记
-					if err := s.ClearLatestFlags(lcfg.Name); err != nil {
-						log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
-					}
-				}
-				
-				downer := downloader.NewDownloader(cfg.DownloadTimeoutMinutes, cfg.ConcurrentDownloads)
-				infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, base, cfg.ProxyURL, cfg.AssetProxyURL, cfg.XgetEnabled, cfg.XgetDomain, rel, cfg.ServerAddress, cfg.ServerPort, cfg.DownloadUrlBase, true)
-				if err != nil {
-					log.Printf("%s: 下载/检查失败: %v", lcfg.Name, err)
-					return
-				}
-				
-				s.UpdateIndex(lcfg.Name, version, infoPath)
-				mu.Lock()
-				ls.RepoURL = repoURL
-				ls.Version = version
-				ls.LastScan = time.Now()
-				mu.Unlock()
-				
-				if currentVersion != version {
-					log.Printf("%s: 已更新至 %s", lcfg.Name, version)
-				} else {
-					// 版本未变，只是检查了一遍文件
-					// log.Printf("%s: 版本 %s 检查完毕", lcfg.Name, version)
-				}
-			}()
-		}
-		wg.Wait()
-		log.Printf("扫描完成")
-	}
-
-	// 初始扫描
-	go scan()
-
-	// 定时任务
 	c := cron.New()
-	_, err = c.AddFunc(cfg.CheckCron, scan)
+	_, err = c.AddFunc(cfg.CheckCron, scanner.ScanAll)
 	if err != nil {
 		log.Fatalf("无效的 cron 表达式 %q: %v", cfg.CheckCron, err)
 	}
 	c.Start()
 	defer c.Stop()
 
-	// 带有手动扫描端点的 HTTP 服务器
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	log.Printf("正在启动服务器于 %s", addr)
 
-	// 捕获系统中断信号以实现优雅退出
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		if err := server.StartHTTPWithScan(addr, s, scan); err != nil {
+		if err := server.StartHTTPWithScan(addr, s, scanner.ScanAll, scanner.ScanLauncher); err != nil {
 			log.Printf("http 服务器出错: %v", err)
 		}
 	}()

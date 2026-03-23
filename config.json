@@ -35,7 +35,8 @@
     {
       "name": "fcl",
       "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
-      "repo_selector": ""
+      "repo_selector": "",
+      "max_versions": 2
     },
     {
       "name": "zl",

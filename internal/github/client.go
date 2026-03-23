@@ -56,6 +56,18 @@ func (c *Client) LatestReleaseIncludingPrerelease(ctx context.Context, owner, re
 	return releases[0], resp, nil
 }
 
+// ListReleases 获取指定数量的 release 列表。
+func (c *Client) ListReleases(ctx context.Context, owner, repo string, limit int) ([]*github.RepositoryRelease, *github.Response, error) {
+	releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: limit})
+	if err != nil {
+		return nil, resp, err
+	}
+	if len(releases) > limit {
+		releases = releases[:limit]
+	}
+	return releases, resp, nil
+}
+
 // BackoffIfRateLimited 检查响应是否受到速率限制，并在需要时休眠。
 func BackoffIfRateLimited(resp *github.Response) {
     if resp == nil || resp.Rate.Remaining > 0 {

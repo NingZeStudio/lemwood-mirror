@@ -9,3 +9,7 @@ export async function getConfig(): Promise<Config> {
 export async function updateConfig(data: ConfigUpdateRequest): Promise<void> {
   await api.post('/admin/config', data)
 }
+
+export async function triggerLauncherScan(launcher: string): Promise<void> {
+  await api.post('/api/scan/launcher', { launcher })
+}
