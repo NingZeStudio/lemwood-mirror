@@ -428,8 +428,21 @@ func AddIPToBlacklist(ip, reason string) error {
 }
 
 func RemoveIPFromBlacklist(ip string) error {
-	_, err := DB.Exec("DELETE FROM ip_blacklist WHERE ip = ?", ip)
-	return err
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM ip_blacklist WHERE ip = ?", ip); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec("DELETE FROM ip_daily_traffic WHERE ip = ?", ip); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func GetIPBlacklist() ([]map[string]string, error) {
