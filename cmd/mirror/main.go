@@ -100,40 +100,43 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 		return
 	}
 
-	for _, rel := range releases {
+	for i, rel := range releases {
 		version := rel.GetTagName()
 		if version == "" {
 			version = rel.GetName()
 		}
 
-		sc.mu.Lock()
-		ls := sc.launchers[lcfg.Name]
-		currentVersion := ls.Version
-		sc.mu.Unlock()
+		isLatest := (i == 0)
 
-		if currentVersion != version {
-			if err := sc.s.ClearLatestFlags(lcfg.Name); err != nil {
-				log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
+		if isLatest {
+			sc.mu.Lock()
+			ls := sc.launchers[lcfg.Name]
+			currentVersion := ls.Version
+			sc.mu.Unlock()
+
+			if currentVersion != version {
+				if err := sc.s.ClearLatestFlags(lcfg.Name); err != nil {
+					log.Printf("%s: 清除旧版本 latest 标记失败: %v", lcfg.Name, err)
+				}
 			}
 		}
 
 		downer := downloader.NewDownloader(sc.cfg.DownloadTimeoutMinutes, sc.cfg.ConcurrentDownloads)
-		infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, sc.base, sc.cfg.ProxyURL, sc.cfg.AssetProxyURL, sc.cfg.XgetEnabled, sc.cfg.XgetDomain, rel, sc.cfg.ServerAddress, sc.cfg.ServerPort, sc.cfg.DownloadUrlBase, true)
+		infoPath, err := downer.DownloadLatest(ctx, lcfg.Name, sc.base, sc.cfg.ProxyURL, sc.cfg.AssetProxyURL, sc.cfg.XgetEnabled, sc.cfg.XgetDomain, rel, sc.cfg.ServerAddress, sc.cfg.ServerPort, sc.cfg.DownloadUrlBase, isLatest)
 		if err != nil {
 			log.Printf("%s: 下载/检查失败: %v", lcfg.Name, err)
 			continue
 		}
 
 		sc.s.UpdateIndex(lcfg.Name, version, infoPath)
-		sc.mu.Lock()
-		ls.RepoURL = repoURL
-		if ls.Version == "" || version != currentVersion {
+		
+		if isLatest {
+			sc.mu.Lock()
+			ls := sc.launchers[lcfg.Name]
+			ls.RepoURL = repoURL
 			ls.Version = version
-		}
-		ls.LastScan = time.Now()
-		sc.mu.Unlock()
-
-		if currentVersion != version {
+			ls.LastScan = time.Now()
+			sc.mu.Unlock()
 			log.Printf("%s: 已更新至 %s", lcfg.Name, version)
 		}
 	}
