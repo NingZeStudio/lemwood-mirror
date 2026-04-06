@@ -40,6 +40,7 @@ const EXTENDED_LAUNCHER_INFO_MAP = {
   'leaves': { ...LAUNCHER_INFO_MAP['leaves'], logoUrl: leavesLogo },
   'leaf': { ...LAUNCHER_INFO_MAP['leaf'], logoUrl: leafLogo },
   'luminol': { ...LAUNCHER_INFO_MAP['luminol'], logoUrl: luminolLogo },
+  'fcl_dl': { ...LAUNCHER_INFO_MAP['fcl_dl'], logoUrl: fclLogo },
   'authlib-injector': { ...LAUNCHER_INFO_MAP['authlib-injector'], logoUrl: authlibinjectorLogo }
 };
 
