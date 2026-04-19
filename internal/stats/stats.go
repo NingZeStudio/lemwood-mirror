@@ -26,6 +26,11 @@ type IPInfo struct {
 var (
 	ipCache = make(map[string]*IPInfo)
 	ipMutex sync.RWMutex
+
+	statsCache     *StatsData
+	statsCacheTime time.Time
+	statsMutex     sync.RWMutex
+	statsCacheTTL  = 5 * time.Minute
 )
 
 // RecordVisit 记录访问
@@ -184,6 +189,14 @@ type DailyStat struct {
 }
 
 func GetStats(storagePath string) (*StatsData, error) {
+	statsMutex.RLock()
+	if statsCache != nil && time.Since(statsCacheTime) < statsCacheTTL {
+		cached := statsCache
+		statsMutex.RUnlock()
+		return cached, nil
+	}
+	statsMutex.RUnlock()
+
 	data := &StatsData{
 		TopDownloads:    []DownloadRank{},
 		GeoDistribution: []GeoStat{},
@@ -194,163 +207,222 @@ func GetStats(storagePath string) (*StatsData, error) {
 		return data, nil
 	}
 
-	// 获取磁盘占用
-	if storagePath != "" {
-		if diskInfo, err := GetDiskUsage(storagePath); err == nil {
-			data.Disk = diskInfo
-		} else {
-			log.Printf("Error getting disk usage for %s: %v", storagePath, err)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if storagePath != "" {
+			if diskInfo, err := GetDiskUsage(storagePath); err == nil {
+				mu.Lock()
+				data.Disk = diskInfo
+				mu.Unlock()
+			} else {
+				log.Printf("Error getting disk usage for %s: %v", storagePath, err)
+			}
 		}
-	}
+	}()
 
-	// 总访问量
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM visits").Scan(&data.TotalVisits); err != nil && err != sql.ErrNoRows {
-		log.Printf("Error counting visits: %v", err)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var totalVisits int64
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM visits").Scan(&totalVisits); err != nil && err != sql.ErrNoRows {
+			log.Printf("Error counting visits: %v", err)
+		}
+		mu.Lock()
+		data.TotalVisits = totalVisits
+		mu.Unlock()
+	}()
 
-	// 总下载量
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM downloads").Scan(&data.TotalDownloads); err != nil && err != sql.ErrNoRows {
-		log.Printf("Error counting downloads: %v", err)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var totalDownloads int64
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM downloads").Scan(&totalDownloads); err != nil && err != sql.ErrNoRows {
+			log.Printf("Error counting downloads: %v", err)
+		}
+		mu.Lock()
+		data.TotalDownloads = totalDownloads
+		mu.Unlock()
+	}()
 
-	// 30天访问量
-	var v30Query string
-	if db.IsMySQL() {
-		v30Query = "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
-	} else {
-		v30Query = "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')"
-	}
-	if err := db.DB.QueryRow(v30Query).Scan(&data.Last30Visits); err != nil && err != sql.ErrNoRows {
-		log.Printf("Error counting last 30 days visits: %v", err)
-	}
-
-	// 30天下载量
-	var d30Query string
-	if db.IsMySQL() {
-		d30Query = "SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
-	} else {
-		d30Query = "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')"
-	}
-	if err := db.DB.QueryRow(d30Query).Scan(&data.Last30Downloads); err != nil && err != sql.ErrNoRows {
-		log.Printf("Error counting last 30 days downloads: %v", err)
-	}
-
-	// 总运行天数
-	var startTimeStr string
-	if err := db.DB.QueryRow("SELECT value FROM system_info WHERE `key` = 'start_time'").Scan(&startTimeStr); err == nil {
-		var startTime time.Time
-		var parseErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var v30 int64
+		var q string
 		if db.IsMySQL() {
-			// MySQL 可能返回 time.Time 或特定字符串
-			startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
-			if parseErr != nil {
-				startTime, parseErr = time.Parse(time.RFC3339, startTimeStr)
-			}
+			q = "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
 		} else {
-			startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
+			q = "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')"
 		}
-		
-		if parseErr == nil {
-			days := int64(time.Since(startTime).Hours()/24) + 1
-			data.TotalDays = days
+		if err := db.DB.QueryRow(q).Scan(&v30); err != nil && err != sql.ErrNoRows {
+			log.Printf("Error counting last 30 days visits: %v", err)
 		}
-	}
+		mu.Lock()
+		data.Last30Visits = v30
+		mu.Unlock()
+	}()
 
-	// 下载排行 (Top 10)
-	rows, err := db.DB.Query(`
-        SELECT launcher, version, COUNT(*) as c 
-        FROM downloads 
-        GROUP BY launcher, version 
-        ORDER BY c DESC 
-        LIMIT 10`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var r DownloadRank
-			rows.Scan(&r.Launcher, &r.Version, &r.Count)
-			data.TopDownloads = append(data.TopDownloads, r)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var d30 int64
+		var q string
+		if db.IsMySQL() {
+			q = "SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
+		} else {
+			q = "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')"
 		}
-	}
-
-	// 地域分布
-	rows2, err := db.DB.Query(`
-        SELECT country, COUNT(*) as c 
-        FROM visits 
-        WHERE country != '' AND country != 'Local'
-        GROUP BY country 
-        ORDER BY c DESC`)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var g GeoStat
-			rows2.Scan(&g.Country, &g.Count)
-			data.GeoDistribution = append(data.GeoDistribution, g)
+		if err := db.DB.QueryRow(q).Scan(&d30); err != nil && err != sql.ErrNoRows {
+			log.Printf("Error counting last 30 days downloads: %v", err)
 		}
-	}
+		mu.Lock()
+		data.Last30Downloads = d30
+		mu.Unlock()
+	}()
 
-	// 每日统计
-	dailyMap := make(map[string]*DailyStat)
-
-	// 查访问
-	var vDailyQuery string
-	if db.IsMySQL() {
-		vDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
-	} else {
-		vDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
-	}
-	vRows, err := db.DB.Query(vDailyQuery)
-	if err == nil {
-		defer vRows.Close()
-		for vRows.Next() {
-			var d string
-			var c int64
-			if err := vRows.Scan(&d, &c); err != nil {
-				log.Printf("Error scanning daily visits: %v", err)
-				continue
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var startTimeStr string
+		if err := db.DB.QueryRow("SELECT value FROM system_info WHERE `key` = 'start_time'").Scan(&startTimeStr); err == nil {
+			var startTime time.Time
+			var parseErr error
+			if db.IsMySQL() {
+				startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
+				if parseErr != nil {
+					startTime, parseErr = time.Parse(time.RFC3339, startTimeStr)
+				}
+			} else {
+				startTime, parseErr = time.Parse("2006-01-02 15:04:05", startTimeStr)
 			}
-			if dailyMap[d] == nil {
-				dailyMap[d] = &DailyStat{Date: d}
+			if parseErr == nil {
+				days := int64(time.Since(startTime).Hours()/24) + 1
+				mu.Lock()
+				data.TotalDays = days
+				mu.Unlock()
 			}
-			dailyMap[d].VisitCount = c
 		}
-	} else {
-		log.Printf("Error querying daily visits: %v", err)
-	}
+	}()
 
-	// 查下载
-	var dDailyQuery string
-	if db.IsMySQL() {
-		dDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
-	} else {
-		dDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
-	}
-	dRows, err := db.DB.Query(dDailyQuery)
-	if err == nil {
-		defer dRows.Close()
-		for dRows.Next() {
-			var d string
-			var c int64
-			if err := dRows.Scan(&d, &c); err != nil {
-				log.Printf("Error scanning daily downloads: %v", err)
-				continue
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rows, err := db.DB.Query(`
+			SELECT launcher, version, COUNT(*) as c
+			FROM downloads
+			GROUP BY launcher, version
+			ORDER BY c DESC
+			LIMIT 10`)
+		if err == nil {
+			defer rows.Close()
+			var ranks []DownloadRank
+			for rows.Next() {
+				var r DownloadRank
+				rows.Scan(&r.Launcher, &r.Version, &r.Count)
+				ranks = append(ranks, r)
 			}
-			if dailyMap[d] == nil {
-				dailyMap[d] = &DailyStat{Date: d}
-			}
-			dailyMap[d].DownloadCount = c
+			mu.Lock()
+			data.TopDownloads = ranks
+			mu.Unlock()
 		}
-	} else {
-		log.Printf("Error querying daily downloads: %v", err)
-	}
+	}()
 
-	for _, v := range dailyMap {
-		data.DailyStats = append(data.DailyStats, *v)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rows, err := db.DB.Query(`
+			SELECT country, COUNT(*) as c
+			FROM visits
+			WHERE country != '' AND country != 'Local'
+			GROUP BY country
+			ORDER BY c DESC
+			LIMIT 50`)
+		if err == nil {
+			defer rows.Close()
+			var geos []GeoStat
+			for rows.Next() {
+				var g GeoStat
+				rows.Scan(&g.Country, &g.Count)
+				geos = append(geos, g)
+			}
+			mu.Lock()
+			data.GeoDistribution = geos
+			mu.Unlock()
+		}
+	}()
 
-	// 排序
-	sort.Slice(data.DailyStats, func(i, j int) bool {
-		return data.DailyStats[i].Date > data.DailyStats[j].Date
-	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dailyMap := make(map[string]*DailyStat)
+
+		var vDailyQuery string
+		if db.IsMySQL() {
+			vDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+		} else {
+			vDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+		}
+		vRows, err := db.DB.Query(vDailyQuery)
+		if err == nil {
+			defer vRows.Close()
+			for vRows.Next() {
+				var d string
+				var c int64
+				if err := vRows.Scan(&d, &c); err != nil {
+					continue
+				}
+				if dailyMap[d] == nil {
+					dailyMap[d] = &DailyStat{Date: d}
+				}
+				dailyMap[d].VisitCount = c
+			}
+		}
+
+		var dDailyQuery string
+		if db.IsMySQL() {
+			dDailyQuery = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
+		} else {
+			dDailyQuery = "SELECT date(created_at) as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
+		}
+		dRows, err := db.DB.Query(dDailyQuery)
+		if err == nil {
+			defer dRows.Close()
+			for dRows.Next() {
+				var d string
+				var c int64
+				if err := dRows.Scan(&d, &c); err != nil {
+					continue
+				}
+				if dailyMap[d] == nil {
+					dailyMap[d] = &DailyStat{Date: d}
+				}
+				dailyMap[d].DownloadCount = c
+			}
+		}
+
+		var daily []DailyStat
+		for _, v := range dailyMap {
+			daily = append(daily, *v)
+		}
+		sort.Slice(daily, func(i, j int) bool {
+			return daily[i].Date > daily[j].Date
+		})
+
+		mu.Lock()
+		data.DailyStats = daily
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+
+	statsMutex.Lock()
+	statsCache = data
+	statsCacheTime = time.Now()
+	statsMutex.Unlock()
 
 	return data, nil
 }

@@ -268,8 +268,10 @@ func createTables() error {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE INDEX idx_visits_created_at ON visits(created_at)`,
+			`CREATE INDEX idx_visits_country ON visits(country)`,
 			`CREATE INDEX idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX idx_downloads_file_name ON downloads(file_name)`,
+			`CREATE INDEX idx_downloads_launcher_version ON downloads(launcher, version)`,
 		}
 	} else {
 		queries = []string{
@@ -313,8 +315,10 @@ func createTables() error {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
 			`CREATE INDEX IF NOT EXISTS idx_visits_created_at ON visits(created_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_visits_country ON visits(country)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_file_name ON downloads(file_name)`,
+			`CREATE INDEX IF NOT EXISTS idx_downloads_launcher_version ON downloads(launcher, version)`,
 		}
 	}
 
