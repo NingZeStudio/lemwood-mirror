@@ -16,7 +16,7 @@ export const LAUNCHER_INFO_MAP: Record<string, LauncherInfo> = {
   'leaves': { displayName: 'Leaves 服务端' },
   'leaf': { displayName: 'Leaf 服务端' },
   'luminol': { displayName: 'Luminol 服务端' },
-  'authlib-injector': { displayName: '【开发者】authlib-injector 库' }
+  'authlib-injector': { displayName: '【开发者】authlib-injector 库' },
   'fcl_di': { displayName: '【直装版】FoldCraftLauncher' }
 };
 
