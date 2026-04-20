@@ -770,18 +770,25 @@ func (s *State) Routes(mux *http.ServeMux) {
 		// 获取客户端IP用于流量统计
 		clientIP := getClientIPFromRequest(r)
 
-		// 记录下载流量
-		fileSize := info.Size()
-		if err := traffic.RecordTraffic(clientIP, fileSize); err != nil {
-			log.Printf("[防刷墙] 记录流量失败: %v", err)
-		}
+		// 创建计数器来跟踪实际传输的字节数
+		counter := &traffic.CountingWriter{}
+		countingWriter := &responseWriterCounter{ResponseWriter: w, counter: counter}
 
-		// 检查是否需要封禁
-		if banned, reason, trafficGB := traffic.CheckAndBan(clientIP); banned {
-			now := time.Now().Format("2006-01-02 15:04:05")
-			log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
-			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s because of %s (Used: %.2fGB). 如有误封，请联系 %s", clientIP, now, reason, trafficGB, s.Config.AppealContact), http.StatusForbidden)
-			return
+		// 使用自定义的 ResponseWriter 来统计实际传输的流量
+		http.ServeFile(countingWriter, r, cleanPath)
+
+		// 记录实际下载流量
+		if counter.Total > 0 {
+			if err := traffic.RecordTraffic(clientIP, counter.Total); err != nil {
+				log.Printf("[防刷墙] 记录流量失败: %v", err)
+			}
+
+			// 检查是否需要封禁
+			if banned, reason, trafficGB := traffic.CheckAndBan(clientIP); banned {
+				log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+				// 注意：此时响应可能已经部分发送，无法再返回错误信息
+				return
+			}
 		}
 
 		// 记录下载
@@ -792,8 +799,6 @@ func (s *State) Routes(mux *http.ServeMux) {
 			fileName := filepath.Base(relPath)
 			stats.RecordDownload(r, fileName, launcher, version)
 		}
-
-		http.ServeFile(w, r, cleanPath)
 	})
 
 	// API 端点
@@ -1647,4 +1652,16 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
 </html>`
 	
 	w.Write([]byte(html))
+}
+
+// responseWriterCounter 包装 http.ResponseWriter 以统计实际写入的字节数
+type responseWriterCounter struct {
+	http.ResponseWriter
+	counter *traffic.CountingWriter
+}
+
+func (rw *responseWriterCounter) Write(p []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(p)
+	rw.counter.Total += int64(n)
+	return n, err
 }
