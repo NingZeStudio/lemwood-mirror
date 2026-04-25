@@ -211,10 +211,13 @@ func main() {
 	}
 
 	traffic.InitTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
-	log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
-
-	if err := traffic.SyncBanRecordNow(); err != nil {
-		log.Printf("[防刷墙] 启动同步封禁记录文件失败: %v", err)
+	if cfg.TrafficLimitGB > 0 {
+		log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
+		if err := traffic.SyncBanRecordNow(); err != nil {
+			log.Printf("[防刷墙] 启动同步封禁记录文件失败: %v", err)
+		}
+	} else {
+		log.Println("防刷墙已禁用，仅使用外部黑名单")
 	}
 
 	go auth.CleanupTokens()

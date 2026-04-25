@@ -38,9 +38,9 @@ func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) 
 		ctx:           ctx,
 		cancel:        cancel,
 	}
-	if defaultTracker.banRecordFile != "" {
+	// limitGB 为 0 时禁用防刷墙
+	if limitGB > 0 && defaultTracker.banRecordFile != "" {
 		defaultTracker.initBanRecordFile()
-		// 启动后台同步协程
 		go defaultTracker.syncWorker()
 	}
 }

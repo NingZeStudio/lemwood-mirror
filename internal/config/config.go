@@ -102,8 +102,8 @@ func LoadConfig(projectRoot string) (*Config, error) {
 		cfg.GitHubToken = env
 	}
 
-	// 设置防刷墙默认值
-	if cfg.TrafficLimitGB <= 0 {
+	// 设置防刷墙默认值（0 表示禁用）
+	if cfg.TrafficLimitGB < 0 {
 		cfg.TrafficLimitGB = 5
 	}
 	if cfg.BanRecordFile == "" {
