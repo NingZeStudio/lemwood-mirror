@@ -113,15 +113,13 @@ func ToGB(bytes int64) float64 {
 }
 
 func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
-	if t == nil {
+	if t == nil || t.limitGB == 0 {
 		return false, "", 0
 	}
 
-	// 使用互斥锁确保检查和封禁的原子性
 	t.banMutex.Lock()
 	defer t.banMutex.Unlock()
 
-	// 先检查是否已在黑名单中，避免重复封禁和记录
 	if db.IsIPBlacklisted(ip) {
 		return false, "", 0
 	}
