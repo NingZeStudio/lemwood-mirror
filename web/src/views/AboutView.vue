@@ -43,8 +43,63 @@ const updateMetaDescription = (desc) => {
             天使投资人 & 赞助商
         </CardTitle>
       </CardHeader>
-      <CardContent class="relative z-10">
+      <CardContent class="relative z-10 space-y-4">
+          <div class="flex items-center gap-3 p-4 rounded-lg bg-gradient-to-r from-amber-500/15 to-amber-500/5 border border-amber-500/30 ring-1 ring-amber-500/20">
+              <div class="flex-shrink-0">
+                  <div class="h-12 w-12 rounded-full bg-amber-500/25 flex items-center justify-center">
+                      <Heart class="h-6 w-6 text-amber-600 dark:text-amber-500" />
+                  </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 mb-1">
+                      <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 uppercase tracking-wide">置顶</span>
+                  </div>
+                  <h3 class="text-lg font-bold text-foreground truncate">Swung 0x48 <span class="text-sm font-normal text-muted-foreground ml-1">[MobileGlues开发者]</span></h3>
+                  <p class="text-sm text-muted-foreground">
+                      赞助 <span class="font-bold text-amber-600 dark:text-amber-500">1000 元</span> 用于服务器续费
+                  </p>
+              </div>
+          </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">菜花</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">懵逼的兔子</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">5 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">我的世界良心君 <span class="text-sm font-normal text-muted-foreground ml-1">[Baidu博主]</span></h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">5 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
               <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
                   <div class="flex-shrink-0">
                       <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
@@ -130,14 +185,13 @@ const updateMetaDescription = (desc) => {
             <CardContent class="px-4 pb-4 md:px-6 md:pb-6 space-y-4">
                  <div class="flex items-start gap-4">
                      <div class="space-y-1">
-                         <h4 class="font-semibold text-foreground">核心开发</h4>
-                         <p class="text-sm text-muted-foreground">由 <span class="text-foreground font-medium">梦泽</span> 设计与编码。</p>
-                         <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 text-xs text-muted-foreground mt-1">
-                             <span class="flex items-center gap-1"><Mail class="h-3 w-3" /> mengze2@foxmail.com</span>
-                             <span class="hidden sm:inline border-l h-3"></span>
-                             <span>Github：JanePHPDev</span>
-                             <span>暂无其他联系方式</span>
-                         </div>
+                          <h4 class="font-semibold text-foreground">核心开发</h4>
+                          <p class="text-sm text-muted-foreground">由 <span class="text-foreground font-medium">琪初QiTry</span> 设计与编码。</p>
+                          <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 text-xs text-muted-foreground mt-1">
+                              <span class="flex items-center gap-1"><Mail class="h-3 w-3" /> qitryt@sina.cn</span>
+                              <span class="hidden sm:inline border-l h-3"></span>
+                              <span>Github：qitry</span>
+                          </div>
                      </div>
                  </div>
                  <div class="space-y-1 pt-2 border-t border-dashed border-white/10">
