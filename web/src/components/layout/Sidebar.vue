@@ -3,6 +3,7 @@ import { useRoute } from 'vue-router'
 import { cn } from '@/lib/utils'
 import { Home, Folder, BarChart2, FileText, Github, Info } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
+import siteLogo from '@/assets/vue.svg'
 
 const route = useRoute()
 
@@ -19,7 +20,7 @@ const links = [
   <div class="hidden border-r bg-muted/40 md:block md:w-64 lg:w-72 h-full flex flex-col">
     <div class="flex h-14 items-center border-b px-4 lg:h-[60px] lg:px-6">
       <a href="/" class="flex items-center gap-2 font-semibold">
-        <img src="https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/b4ee27d31312bdb9.svg" alt="Logo" class="h-6 w-6">
+        <img :src="siteLogo" alt="Logo" class="h-6 w-6">
         <span>柠枺镜像</span>
       </a>
       <Button variant="outline" size="icon" class="ml-auto h-8 w-8">

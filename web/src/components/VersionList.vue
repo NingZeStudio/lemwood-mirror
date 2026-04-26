@@ -24,6 +24,7 @@ import luminolLogo from '@/assets/images/c25a955166388e1257c23d01c78a62e6.webp'
 import leafLogo from '@/assets/images/leaf.png'
 import leavesLogo from '@/assets/images/Leaves.png'
 import authlibinjectorLogo from '@/assets/images/authlib-injector.png'
+import amethystLogo from '@/assets/images/amethyst.png'
 import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info';
 
 const router = useRouter();
@@ -41,7 +42,9 @@ const EXTENDED_LAUNCHER_INFO_MAP = {
   'leaf': { ...LAUNCHER_INFO_MAP['leaf'], logoUrl: leafLogo },
   'luminol': { ...LAUNCHER_INFO_MAP['luminol'], logoUrl: luminolLogo },
   'fcl_dl': { ...LAUNCHER_INFO_MAP['fcl_dl'], logoUrl: fclLogo },
-  'authlib-injector': { ...LAUNCHER_INFO_MAP['authlib-injector'], logoUrl: authlibinjectorLogo }
+  'fcl_di': { ...LAUNCHER_INFO_MAP['fcl_di'], logoUrl: fclLogo },
+  'authlib-injector': { ...LAUNCHER_INFO_MAP['authlib-injector'], logoUrl: authlibinjectorLogo },
+  'aamc': { ...LAUNCHER_INFO_MAP['aamc'], logoUrl: amethystLogo }
 };
 
 

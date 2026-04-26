@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDark, useToggle } from '@vueuse/core'
 import { Menu, Sun, Moon, Home, Folder, BarChart2, FileText, Info, Settings, Palette, Image, Upload, X } from 'lucide-vue-next'
+import siteLogo from '@/assets/vue.svg'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import Footer from '@/components/layout/Footer.vue'
 import Button from '@/components/ui/Button.vue'
@@ -123,7 +124,7 @@ const links = [
           </SheetTrigger>
           <SheetContent side="left" class="flex flex-col">
             <div class="flex items-center gap-2 font-semibold mb-6">
-               <img src="https://cdn.mengze.vip/gh/JanePHPDev/Blog-Static-Resource@main/images/b4ee27d31312bdb9.svg" alt="Logo" class="h-6 w-6">
+               <img :src="siteLogo" alt="Logo" class="h-6 w-6">
                <span>柠枺镜像</span>
             </div>
             <nav class="grid gap-2 text-lg font-medium">
