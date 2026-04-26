@@ -35,5 +35,5 @@ export async function uploadFile(path: string, file: File): Promise<void> {
 
 export function getDownloadUrl(path: string): string {
   const token = localStorage.getItem('admin_token')
-  return `/api/admin/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token || '')}`
+  return `https://mirror.lemwood.icu/api/admin/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token || '')}`
 }

@@ -213,8 +213,8 @@ const currentItems = computed(() => {
              type: 'file',
              size: asset.size,
              downloadUrl: asset.url && asset.url.startsWith('http')
-              ? asset.url
-              : `${window.location.origin}/download/${launcherName}/${versionName}/${asset.name}`
+ ? asset.url
+ : `https://mirror.lemwood.icu/download/${launcherName}/${versionName}/${asset.name}`
          })).filter(f => !query || f.name.toLowerCase().includes(query));
     }
     return [];

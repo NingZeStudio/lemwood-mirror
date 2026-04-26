@@ -236,7 +236,7 @@ const updateMetaDescription = (desc) => {
         <div class="hidden lg:block space-y-4 border-b pb-8">
              <h1 class="text-4xl font-extrabold tracking-tight lg:text-5xl">API 文档</h1>
              <p class="text-lg text-muted-foreground max-w-2xl">
-                 Lemwood Mirror 提供了一套简单、强大的 RESTful API，用于获取启动器版本信息、下载链接及站点统计数据。所有接口的基础路径为 <code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono border">/api</code>。
+                 Lemwood Mirror 提供了一套简单、强大的 RESTful API，用于获取启动器版本信息、下载链接及站点统计数据。所有接口的基础路径为 <code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono border">https://mirror.lemwood.icu/api</code>。
              </p>
         </div>
 
