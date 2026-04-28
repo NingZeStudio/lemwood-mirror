@@ -236,7 +236,7 @@ const updateMetaDescription = (desc) => {
         <div class="hidden lg:block space-y-4 border-b pb-8">
              <h1 class="text-4xl font-extrabold tracking-tight lg:text-5xl">API 文档</h1>
              <p class="text-lg text-muted-foreground max-w-2xl">
-                 Lemwood Mirror 提供了一套简单、强大的 RESTful API，用于获取启动器版本信息、下载链接及站点统计数据。所有接口的基础路径为 <code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono border">https://mirror.lemwood.icu/api</code>。
+                 Lemwood Mirror 提供了一套简单、强大的 RESTful API，用于获取启动器版本信息、下载链接及站点统计数据。所有接口的基础路径为 <code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono border">https://mirror.lemwood.cn/api</code>。
              </p>
         </div>
 
@@ -302,7 +302,7 @@ const updateMetaDescription = (desc) => {
                              <span class="text-sm font-medium text-muted-foreground flex items-center gap-2">
                                  <Terminal class="h-4 w-4" /> cURL Request
                              </span>
-                             <Button variant="ghost" size="icon" class="h-7 w-7" @click="copyCode(`curl -X ${endpoint.method} 'https://mirror.lemwood.icu${endpoint.path}'`, `curl-${i}`)">
+                             <Button variant="ghost" size="icon" class="h-7 w-7" @click="copyCode(`curl -X ${endpoint.method} 'https://mirror.lemwood.cn${endpoint.path}'`, `curl-${i}`)">
                                  <Check v-if="copiedState[`curl-${i}`]" class="h-3.5 w-3.5 text-green-500" />
                                  <Copy v-else class="h-3.5 w-3.5 text-muted-foreground" />
                              </Button>
@@ -311,7 +311,7 @@ const updateMetaDescription = (desc) => {
                             <div class="p-4 overflow-x-auto custom-scrollbar">
                                 <pre><code class="font-mono text-sm text-[#c9d1d9]" v-html="highlightCode(
                                     `curl -X ${endpoint.method} \
-  'https://mirror.lemwood.icu${endpoint.path}'`,
+  'https://mirror.lemwood.cn${endpoint.path}'`,
                                     'bash'
                                 )"></code></pre>
                             </div>

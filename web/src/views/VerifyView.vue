@@ -19,7 +19,7 @@ const downloadStarted = ref(false);
 
 const fullDownloadUrl = computed(() => {
   if (downloadUrl.value) {
-    return 'https://mirror.lemwood.icu' + downloadUrl.value;
+    return 'https://mirror.lemwood.cn' + downloadUrl.value;
   }
   return '';
 });
@@ -66,7 +66,7 @@ const goToHome = () => {
 
 const copyUrl = async () => {
   if (downloadUrl.value) {
-    const fullUrl = 'https://mirror.lemwood.icu' + downloadUrl.value;
+    const fullUrl = 'https://mirror.lemwood.cn' + downloadUrl.value;
     try {
       await navigator.clipboard.writeText(fullUrl);
       showCopiedTip.value = true;
