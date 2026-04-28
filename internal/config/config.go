@@ -110,7 +110,7 @@ func LoadConfig(projectRoot string) (*Config, error) {
 		cfg.BanRecordFile = "banned_ips.txt"
 	}
 	if cfg.AppealContact == "" {
-		cfg.AppealContact = "QQ群 964498276"
+		cfg.AppealContact = "QQ群 https://qm.qq.com/q/FOGt99aayY"
 	}
 
 	return &cfg, nil

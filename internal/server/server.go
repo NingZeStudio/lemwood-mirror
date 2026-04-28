@@ -877,15 +877,15 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 
 		// 检查本地黑名单
 		if banned, createdAt, _ := db.GetIPBlacklistInfo(ip); banned {
-			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "QQ群 964498276")
-			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请联系QQ群 964498276", ip, createdAt), http.StatusForbidden)
+			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "https://qm.qq.com/q/FOGt99aayY")
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip, createdAt), http.StatusForbidden)
 			return
 		}
 
 		// 检查外部黑名单
 		if blacklist.IsExternalBlacklisted(ip) {
 			log.Printf("[防刷墙] 拒绝来自外部黑名单 IP 的访问: %s", ip)
-			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请联系QQ群 964498276", ip), http.StatusForbidden)
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip), http.StatusForbidden)
 			return
 		}
 

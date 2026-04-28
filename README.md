@@ -77,7 +77,7 @@ go build -o mirror ./cmd/mirror
   "captcha_secret_key": "your_private_key",   // 极验验证码 Private Key
   "traffic_limit_gb": 5,                      // 单 IP 每日下载流量限制 (GB)
   "ban_record_file": "banned_ips.txt",        // 公开封禁记录文件名
-  "appeal_contact": "QQ群 964498276",         // 申诉联系方式
+  "appeal_contact": "QQ群 https://qm.qq.com/q/FOGt99aayY", // 申诉联系方式
   "external_blacklist_url": "",               // 外部黑名单 URL (每 10 分钟同步一次)
   "mysql_host": "",                           // MySQL 主机 (留空则默认使用 SQLite)
   "mysql_port": 3306,                         // MySQL 端口
