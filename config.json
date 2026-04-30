@@ -15,7 +15,7 @@
   "xget_enabled": true,
   "download_timeout_minutes": 40,
   "concurrent_downloads": 3,
-  "download_url_base": "http://127.0.0.1:8080",
+  "download_url_base": "https://miawa.cn",
   "two_factor_enabled": false,
   "two_factor_secret": "",
   "captcha_enabled": true,

@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -949,6 +950,100 @@ func (s *State) InitFromDisk() error {
 		}
 		return nil
 	})
+}
+
+func (s *State) FixAssetURLs() error {
+	if s.Config.DownloadUrlBase == "" {
+		return nil
+	}
+	
+	baseURL := s.Config.DownloadUrlBase
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "https://" + baseURL
+	}
+	
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("解析 download_url_base 失败: %w", err)
+	}
+	targetDomain := parsedURL.Host
+	targetScheme := parsedURL.Scheme
+	
+	// 第一阶段：只持有读锁，复制文件路径列表
+	s.mu.RLock()
+	paths := make([]string, 0, len(s.infoCache))
+	for path := range s.infoCache {
+		paths = append(paths, path)
+	}
+	s.mu.RUnlock()
+	
+	// 第二阶段：无锁状态下进行文件 IO 和处理
+	fixedCount := 0
+	for _, infoPath := range paths {
+		content, err := os.ReadFile(infoPath)
+		if err != nil {
+			continue
+		}
+		
+		var info map[string]interface{}
+		if err := json.Unmarshal(content, &info); err != nil {
+			continue
+		}
+		
+		assets, ok := info["assets"].([]interface{})
+		if !ok {
+			continue
+		}
+		
+		changed := false
+		for _, asset := range assets {
+			assetMap, ok := asset.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			
+			assetURL, ok := assetMap["url"].(string)
+			if !ok {
+				continue
+			}
+			
+			parsedAssetURL, err := url.Parse(assetURL)
+			if err != nil {
+				continue
+			}
+			
+			if parsedAssetURL.Host != targetDomain {
+				newURL := fmt.Sprintf("%s://%s%s", targetScheme, targetDomain, parsedAssetURL.Path)
+				assetMap["url"] = newURL
+				changed = true
+			}
+		}
+		
+		if changed {
+			newContent, err := json.MarshalIndent(info, "", "  ")
+			if err != nil {
+				continue
+			}
+			
+			if err := os.WriteFile(infoPath, newContent, 0o644); err != nil {
+				log.Printf("修复 %s 的 URL 失败: %v", infoPath, err)
+				continue
+			}
+			
+			// 第三阶段：最小化持有写锁，仅更新缓存
+			s.mu.Lock()
+			s.infoCache[infoPath] = info
+			s.mu.Unlock()
+			
+			fixedCount++
+		}
+	}
+	
+	if fixedCount > 0 {
+		log.Printf("[URL 统一性检查] 修复了 %d 个 index.json 文件中的下载链接", fixedCount)
+	}
+	
+	return nil
 }
 
 // pickLatest 选择最新版本

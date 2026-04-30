@@ -214,7 +214,7 @@ const currentItems = computed(() => {
              size: asset.size,
              downloadUrl: asset.url && asset.url.startsWith('http')
  ? asset.url
- : `https://mirror.lemwood.cn/download/${launcherName}/${versionName}/${asset.name}`
+ : `https://miawa.cn/download/${launcherName}/${versionName}/${asset.name}`
          })).filter(f => !query || f.name.toLowerCase().includes(query));
     }
     return [];

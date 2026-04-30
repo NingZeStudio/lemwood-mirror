@@ -229,6 +229,12 @@ func main() {
 	if err := s.InitFromDisk(); err != nil {
 		log.Printf("初始化索引失败: %v", err)
 	}
+	
+	// 修复 index.json 中的 URL 域名不一致问题
+	if err := s.FixAssetURLs(); err != nil {
+		log.Printf("修复资产 URL 失败: %v", err)
+	}
+	
 	ghc := gh.NewClient(cfg.GitHubToken)
 
 	scanner := NewScanner(cfg, base, s, ghc)
