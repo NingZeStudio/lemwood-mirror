@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"lemwood_mirror/internal/db"
@@ -19,10 +20,19 @@ type IPInfo struct {
 	Region  string `json:"regionName"`
 	City    string `json:"city"`
 	Query   string `json:"query"`
-	Expires time.Time // 缓存过期时间
+	Expires time.Time
 }
 
-// IP 缓存，避免重复请求
+type writeTask struct {
+	query string
+	args  []interface{}
+}
+
+type ipInfoTask struct {
+	ip       string
+	callback func(info *IPInfo)
+}
+
 var (
 	ipCache = make(map[string]*IPInfo)
 	ipMutex sync.RWMutex
@@ -31,28 +41,198 @@ var (
 	statsCacheTime time.Time
 	statsMutex     sync.RWMutex
 	statsCacheTTL  = 5 * time.Minute
+
+	writeQueue     chan *writeTask
+	ipInfoQueue    chan *ipInfoTask
+	workerWg       sync.WaitGroup
+	workerCtx      context.Context
+	workerCancel   context.CancelFunc
 )
 
-// RecordVisit 记录访问
+const (
+	defaultWorkers    = 4
+	defaultQueueSize  = 1000
+)
+
+func InitWritePool(workers int, queueSize int) {
+	if workers <= 0 {
+		workers = defaultWorkers
+	}
+	if queueSize <= 0 {
+		queueSize = defaultQueueSize
+	}
+
+	workerCtx, workerCancel = context.WithCancel(context.Background())
+	writeQueue = make(chan *writeTask, queueSize)
+	ipInfoQueue = make(chan *ipInfoTask, queueSize)
+
+	for i := 0; i < workers; i++ {
+		workerWg.Add(1)
+		go writeWorker()
+	}
+
+	workerWg.Add(1)
+	go ipInfoWorker()
+
+	log.Printf("[Stats] 写入工作池已初始化: %d workers, queue size: %d", workers, queueSize)
+}
+
+func CloseWritePool() {
+	if workerCancel != nil {
+		workerCancel()
+		workerWg.Wait()
+	}
+}
+
+func writeWorker() {
+	defer workerWg.Done()
+	for {
+		select {
+		case <-workerCtx.Done():
+			return
+		case task, ok := <-writeQueue:
+			if !ok {
+				return
+			}
+			_, err := db.DB.Exec(task.query, task.args...)
+			if err != nil {
+				log.Printf("数据库写入失败: %v", err)
+			}
+		}
+	}
+}
+
+func ipInfoWorker() {
+	defer workerWg.Done()
+	client := &http.Client{Timeout: 5 * time.Second}
+	for {
+		select {
+		case <-workerCtx.Done():
+			return
+		case task, ok := <-ipInfoQueue:
+			if !ok {
+				return
+			}
+			info := fetchIPInfo(client, task.ip)
+			if info != nil {
+				ipMutex.Lock()
+				ipCache[task.ip] = info
+				ipMutex.Unlock()
+			}
+			if task.callback != nil {
+				task.callback(info)
+			}
+		}
+	}
+}
+
+func fetchIPInfo(client *http.Client, ip string) *IPInfo {
+	if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || ip == "localhost" {
+		return &IPInfo{Country: "Local", Region: "Local", City: "Local"}
+	}
+
+	resp, err := client.Get("http://ip-api.com/json/" + ip + "?lang=zh-CN")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var info IPInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil
+	}
+
+	if info.Status == "success" {
+		info.Expires = time.Now().Add(24 * time.Hour)
+		return &info
+	}
+	return nil
+}
+
+func getIPInfoAsync(ip string, callback func(info *IPInfo)) {
+	ipMutex.RLock()
+	if info, ok := ipCache[ip]; ok {
+		if time.Now().Before(info.Expires) {
+			ipMutex.RUnlock()
+			if callback != nil {
+				callback(info)
+			}
+			return
+		}
+	}
+	ipMutex.RUnlock()
+
+	if ipInfoQueue == nil {
+		if callback != nil {
+			callback(nil)
+		}
+		return
+	}
+
+	select {
+	case ipInfoQueue <- &ipInfoTask{ip: ip, callback: callback}:
+	default:
+		if callback != nil {
+			callback(nil)
+		}
+	}
+}
+
+func getIPInfoSync(ip string) *IPInfo {
+	ipMutex.RLock()
+	if info, ok := ipCache[ip]; ok {
+		if time.Now().Before(info.Expires) {
+			ipMutex.RUnlock()
+			return info
+		}
+	}
+	ipMutex.RUnlock()
+
+	if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || ip == "localhost" {
+		return &IPInfo{Country: "Local", Region: "Local", City: "Local"}
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://ip-api.com/json/" + ip + "?lang=zh-CN")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var info IPInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil
+	}
+
+	if info.Status == "success" {
+		info.Expires = time.Now().Add(24 * time.Hour)
+		ipMutex.Lock()
+		ipCache[ip] = &info
+		ipMutex.Unlock()
+		return &info
+	}
+	return nil
+}
+
 func RecordVisit(r *http.Request) {
 	ip := getClientIP(r)
 	path := r.URL.Path
 	ua := r.UserAgent()
 	referer := r.Referer()
 
-	// 忽略静态资源和非API请求
-	if strings.HasPrefix(path, "/dist/") || 
-	   strings.HasPrefix(path, "/assets/") ||
-	   path == "/favicon.svg" ||
-	   path == "/" ||
-	   path == "/index.html" {
+	if strings.HasPrefix(path, "/dist/") ||
+		strings.HasPrefix(path, "/assets/") ||
+		path == "/favicon.svg" ||
+		path == "/" ||
+		path == "/index.html" {
 		return
 	}
 
-	// 异步处理
-	go func() {
-		// 获取 IP 信息
-		info := getIPInfo(ip)
+	if writeQueue == nil {
+		return
+	}
+
+	getIPInfoAsync(ip, func(info *IPInfo) {
 		country, region, city := "", "", ""
 		if info != nil {
 			country = info.Country
@@ -60,31 +240,41 @@ func RecordVisit(r *http.Request) {
 			city = info.City
 		}
 
-		_, err := db.DB.Exec(`INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			ip, path, ua, referer, country, region, city)
-		if err != nil {
-			log.Printf("Failed to record visit: %v", err)
+		task := &writeTask{
+			query: `INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			args:  []interface{}{ip, path, ua, referer, country, region, city},
 		}
-	}()
+		select {
+		case writeQueue <- task:
+		default:
+			log.Printf("写入队列已满，丢弃访问记录: %s", ip)
+		}
+	})
 }
 
-// RecordDownload 记录下载
 func RecordDownload(r *http.Request, fileName, launcher, version string) {
 	ip := getClientIP(r)
 
-	go func() {
-		info := getIPInfo(ip)
+	if writeQueue == nil {
+		return
+	}
+
+	getIPInfoAsync(ip, func(info *IPInfo) {
 		country := ""
 		if info != nil {
 			country = info.Country
 		}
 
-		_, err := db.DB.Exec(`INSERT INTO downloads (file_name, launcher, version, ip, country) VALUES (?, ?, ?, ?, ?)`,
-			fileName, launcher, version, ip, country)
-		if err != nil {
-			log.Printf("Failed to record download: %v", err)
+		task := &writeTask{
+			query: `INSERT INTO downloads (file_name, launcher, version, ip, country) VALUES (?, ?, ?, ?, ?)`,
+			args:  []interface{}{fileName, launcher, version, ip, country},
 		}
-	}()
+		select {
+		case writeQueue <- task:
+		default:
+			log.Printf("写入队列已满，丢弃下载记录: %s", ip)
+		}
+	})
 }
 
 func getClientIP(r *http.Request) string {
@@ -99,14 +289,11 @@ func getClientIP(r *http.Request) string {
 		ip = strings.Split(ip, ",")[0]
 	}
 	ip = strings.TrimSpace(ip)
-	// 去掉端口号
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
 		if !strings.Contains(ip, "]") {
 			ip = ip[:idx]
 		} else if strings.HasSuffix(ip, "]") {
-			// [::1]
 		} else {
-			// [::1]:8080 -> [::1]
 			lastColon := strings.LastIndex(ip, ":")
 			closingBracket := strings.LastIndex(ip, "]")
 			if lastColon > closingBracket {
@@ -118,47 +305,6 @@ func getClientIP(r *http.Request) string {
 	return ip
 }
 
-func getIPInfo(ip string) *IPInfo {
-	// 本地 IP
-	if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || ip == "localhost" {
-		return &IPInfo{Country: "Local", Region: "Local", City: "Local"}
-	}
-
-	ipMutex.RLock()
-	if info, ok := ipCache[ip]; ok {
-		// 检查缓存是否过期（24小时）
-		if time.Now().Before(info.Expires) {
-			ipMutex.RUnlock()
-			return info
-		}
-	}
-	ipMutex.RUnlock()
-
-	// 请求 ip-api.com
-	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://ip-api.com/json/" + ip + "?lang=zh-CN")
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	var info IPInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil
-	}
-
-	if info.Status == "success" {
-		// 设置缓存过期时间为24小时
-		info.Expires = time.Now().Add(24 * time.Hour)
-		ipMutex.Lock()
-		ipCache[ip] = &info
-		ipMutex.Unlock()
-		return &info
-	}
-	return nil
-}
-
-// 统计数据结构
 type StatsData struct {
 	TotalVisits     int64          `json:"total_visits"`
 	TotalDownloads  int64          `json:"total_downloads"`

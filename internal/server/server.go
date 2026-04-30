@@ -957,32 +957,18 @@ func (s *State) pickLatest(versions map[string]string) string {
 		return ""
 	}
 
-	// 收集所有标记为 is_latest 的版本
 	var latestFlagged []string
 	for v, infoPath := range versions {
-		var info map[string]interface{}
-		var exists bool
-
-		// 优先从内存缓存获取
-		info, exists = s.infoCache[infoPath]
+		info, exists := s.infoCache[infoPath]
 		if !exists {
-			// 如果内存中没有，尝试读取磁盘（通常发生在启动初始化时）
-			if content, err := os.ReadFile(infoPath); err == nil {
-				if err := json.Unmarshal(content, &info); err == nil {
-					// 这里不更新 s.infoCache，因为 pickLatest 可能在持有锁的情况下被调用
-					// 而 s.infoCache 的更新已经在 UpdateIndex 或 InitFromDisk 中处理
-				}
-			}
+			continue
 		}
 
-		if info != nil {
-			if isLatest, ok := info["is_latest"].(bool); ok && isLatest {
-				latestFlagged = append(latestFlagged, v)
-			}
+		if isLatest, ok := info["is_latest"].(bool); ok && isLatest {
+			latestFlagged = append(latestFlagged, v)
 		}
 	}
 
-	// 如果有多个版本被标记为 latest（虽然理论上不应该），选择其中版本号最高的一个
 	if len(latestFlagged) > 0 {
 		latest := latestFlagged[0]
 		for _, v := range latestFlagged[1:] {
@@ -993,7 +979,6 @@ func (s *State) pickLatest(versions map[string]string) string {
 		return latest
 	}
 
-	// 如果没有找到标记为 is_latest 的版本，使用版本比较作为后备方案
 	var stableVersions []string
 	var unstableVersions []string
 
@@ -1005,7 +990,6 @@ func (s *State) pickLatest(versions map[string]string) string {
 		}
 	}
 
-	// 优先从稳定版中选择最新的
 	if len(stableVersions) > 0 {
 		latest := stableVersions[0]
 		for _, v := range stableVersions[1:] {
@@ -1016,7 +1000,6 @@ func (s *State) pickLatest(versions map[string]string) string {
 		return latest
 	}
 
-	// 如果没有稳定版，从非稳定版中选择最新的
 	if len(unstableVersions) > 0 {
 		latest := unstableVersions[0]
 		for _, v := range unstableVersions[1:] {
@@ -1112,97 +1095,117 @@ func parseFirstInt(s string) (int, error) {
 
 func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-    
-    result := make(map[string][]map[string]any)
-    for launcher, versions := range s.index {
-        var list []map[string]any
-        for v, p := range versions {
-             info := map[string]any{
-                 "tag_name": v,
-             }
-             
-             // 先从缓存获取 index.json 内容
-             if fileInfo, ok := s.infoCache[p]; ok {
-                 for k, val := range fileInfo {
-                     // 排除 is_latest 字段
-                     if k != "is_latest" {
-                         info[k] = val
-                     }
-                 }
-             } else {
-                 // 缓存不存在时，读取文件并更新缓存
-                 if content, err := os.ReadFile(p); err == nil {
-                     var fileInfo map[string]any
-                     if err := json.Unmarshal(content, &fileInfo); err == nil {
-                         s.infoCache[p] = fileInfo // 更新缓存
-                         for k, val := range fileInfo {
-                             // 排除 is_latest 字段
-                             if k != "is_latest" {
-                                 info[k] = val
-                             }
-                         }
-                     }
-                 }
-             }
-             
-             list = append(list, info)
-        }
-        sort.Slice(list, func(i, j int) bool {
-             v1, _ := list[i]["tag_name"].(string)
-             v2, _ := list[j]["tag_name"].(string)
-             return compareVersions(v1, v2) > 0
-        })
-        result[launcher] = list
-    }
-    
+	indexCopy := make(map[string]map[string]string)
+	for k, v := range s.index {
+		indexCopy[k] = make(map[string]string)
+		for vk, vv := range v {
+			indexCopy[k][vk] = vv
+		}
+	}
+	infoCacheCopy := make(map[string]map[string]interface{})
+	for k, v := range s.infoCache {
+		infoCacheCopy[k] = v
+	}
+	s.mu.RUnlock()
+
+	result := make(map[string][]map[string]any)
+	for launcher, versions := range indexCopy {
+		var list []map[string]any
+		for v, p := range versions {
+			info := map[string]any{
+				"tag_name": v,
+			}
+
+			if fileInfo, ok := infoCacheCopy[p]; ok {
+				for k, val := range fileInfo {
+					if k != "is_latest" {
+						info[k] = val
+					}
+				}
+			} else {
+				if content, err := os.ReadFile(p); err == nil {
+					var fileInfo map[string]any
+					if err := json.Unmarshal(content, &fileInfo); err == nil {
+						infoCacheCopy[p] = fileInfo
+						s.mu.Lock()
+						s.infoCache[p] = fileInfo
+						s.mu.Unlock()
+						for k, val := range fileInfo {
+							if k != "is_latest" {
+								info[k] = val
+							}
+						}
+					}
+				}
+			}
+
+			list = append(list, info)
+		}
+		sort.Slice(list, func(i, j int) bool {
+			v1, _ := list[i]["tag_name"].(string)
+			v2, _ := list[j]["tag_name"].(string)
+			return compareVersions(v1, v2) > 0
+		})
+		result[launcher] = list
+	}
+
 	json.NewEncoder(w).Encode(result)
 }
 
 func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
 	launcher := strings.TrimPrefix(r.URL.Path, "/api/status/")
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if versions, ok := s.index[launcher]; ok {
-        var list []map[string]any
-        for v, p := range versions {
-             info := map[string]any{"tag_name": v}
-             
-             // 先从缓存获取 index.json 内容
-             if fileInfo, ok := s.infoCache[p]; ok {
-                 for k, val := range fileInfo {
-                     // 排除 is_latest 字段
-                     if k != "is_latest" {
-                         info[k] = val
-                     }
-                 }
-             } else {
-                 // 缓存不存在时，读取文件并更新缓存
-                 if content, err := os.ReadFile(p); err == nil {
-                     var fileInfo map[string]any
-                     if err := json.Unmarshal(content, &fileInfo); err == nil {
-                         s.infoCache[p] = fileInfo // 更新缓存
-                         for k, val := range fileInfo {
-                             // 排除 is_latest 字段
-                             if k != "is_latest" {
-                                 info[k] = val
-                             }
-                         }
-                     }
-                 }
-             }
-             
-             list = append(list, info)
-        }
-        sort.Slice(list, func(i, j int) bool {
-             v1, _ := list[i]["tag_name"].(string)
-             v2, _ := list[j]["tag_name"].(string)
-             return compareVersions(v1, v2) > 0
-        })
-		json.NewEncoder(w).Encode(list)
-	} else {
+	versions, ok := s.index[launcher]
+	if !ok {
+		s.mu.RUnlock()
 		http.NotFound(w, r)
+		return
 	}
+	versionsCopy := make(map[string]string)
+	for k, v := range versions {
+		versionsCopy[k] = v
+	}
+	infoCacheCopy := make(map[string]map[string]interface{})
+	for k, v := range s.infoCache {
+		infoCacheCopy[k] = v
+	}
+	s.mu.RUnlock()
+
+	var list []map[string]any
+	for v, p := range versionsCopy {
+		info := map[string]any{"tag_name": v}
+
+		if fileInfo, ok := infoCacheCopy[p]; ok {
+			for k, val := range fileInfo {
+				if k != "is_latest" {
+					info[k] = val
+				}
+			}
+		} else {
+			if content, err := os.ReadFile(p); err == nil {
+				var fileInfo map[string]any
+				if err := json.Unmarshal(content, &fileInfo); err == nil {
+					infoCacheCopy[p] = fileInfo
+					s.mu.Lock()
+					s.infoCache[p] = fileInfo
+					s.mu.Unlock()
+					for k, val := range fileInfo {
+						if k != "is_latest" {
+							info[k] = val
+						}
+					}
+				}
+			}
+		}
+
+		list = append(list, info)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		v1, _ := list[i]["tag_name"].(string)
+		v2, _ := list[j]["tag_name"].(string)
+		return compareVersions(v1, v2) > 0
+	})
+	json.NewEncoder(w).Encode(list)
 }
 
 func (s *State) handleFiles(w http.ResponseWriter, r *http.Request) {

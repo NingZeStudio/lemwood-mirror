@@ -48,10 +48,10 @@ func InitDB(storagePath string, cfg *config.Config) error {
 			return fmt.Errorf("连接 MySQL 失败: %w", err)
 		}
 
-		// MySQL 连接池设置
-		DB.SetMaxOpenConns(10)
-		DB.SetMaxIdleConns(5)
+		DB.SetMaxOpenConns(25)
+		DB.SetMaxIdleConns(10)
 		DB.SetConnMaxLifetime(time.Hour)
+		DB.SetConnMaxIdleTime(30 * time.Minute)
 
 		// 检查是否需要从 SQLite 迁移
 		if cfg.MySQLMigration {
@@ -83,10 +83,9 @@ func InitDB(storagePath string, cfg *config.Config) error {
 			return fmt.Errorf("打开 SQLite 失败: %w", err)
 		}
 
-		// 限制最大连接数为 1，避免 SQLite 锁定
 		DB.SetMaxOpenConns(1)
+		DB.SetConnMaxIdleTime(5 * time.Minute)
 
-		// 性能优化：启用 WAL 模式
 		pragmas := []string{
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA synchronous=NORMAL",

@@ -21,6 +21,7 @@ import (
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
 	"lemwood_mirror/internal/server"
+	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 )
 
@@ -222,6 +223,8 @@ func main() {
 
 	go auth.CleanupTokens()
 
+	stats.InitWritePool(4, 1000)
+
 	s := server.NewState(base, projectRoot, cfg)
 	if err := s.InitFromDisk(); err != nil {
 		log.Printf("初始化索引失败: %v", err)
@@ -254,6 +257,7 @@ func main() {
 
 	<-stop
 	log.Println("正在关闭服务...")
+	stats.CloseWritePool()
 	traffic.CloseTracker()
 	log.Println("服务已正常退出")
 }

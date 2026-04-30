@@ -168,17 +168,11 @@ func (t *Tracker) SyncBanRecordFile() error {
 		return nil
 	}
 
-	t.fileMutex.Lock()
-	defer t.fileMutex.Unlock()
-
 	blacklist, err := db.GetLocalIPBlacklist()
 	if err != nil {
 		return fmt.Errorf("获取本地黑名单失败: %w", err)
 	}
 
-	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
-	
-	// 构建文件头
 	header := fmt.Sprintf(`# IP封禁记录 - 公开数据
 # 格式: IP | 封禁时间 | 封禁理由 | 当日流量(GB)
 # 如有误封，请加入 %s 进行申诉
@@ -192,13 +186,12 @@ func (t *Tracker) SyncBanRecordFile() error {
 		ip := item["ip"]
 		reason := item["reason"]
 		createdAtStr := item["created_at"]
-		
-		// 格式化时间并提取日期，以便查询当时的流量
+
 		createdAt, err := time.Parse("2006-01-02 15:04:05", createdAtStr)
 		if err != nil {
 			createdAt, err = time.Parse(time.RFC3339, createdAtStr)
 		}
-		
+
 		timestamp := createdAtStr
 		date := time.Now().Format("2006-01-02")
 		if err == nil {
@@ -206,7 +199,6 @@ func (t *Tracker) SyncBanRecordFile() error {
 			date = createdAt.Format("2006-01-02")
 		}
 
-		// 获取封禁当天的流量，而不是今天的流量
 		traffic, _ := db.GetTrafficOnDate(ip, date)
 		trafficGB := ToGB(traffic)
 
@@ -214,7 +206,14 @@ func (t *Tracker) SyncBanRecordFile() error {
 		content.WriteString(line)
 	}
 
-	if err := os.WriteFile(fullPath, []byte(content.String()), 0644); err != nil {
+	contentBytes := []byte(content.String())
+	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
+
+	t.fileMutex.Lock()
+	err = os.WriteFile(fullPath, contentBytes, 0644)
+	t.fileMutex.Unlock()
+
+	if err != nil {
 		return fmt.Errorf("更新封禁记录文件失败: %w", err)
 	}
 

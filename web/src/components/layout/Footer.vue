@@ -19,7 +19,7 @@ import { Github, Heart } from 'lucide-vue-next'
               <Github class="h-5 w-5" />
           </a>
           <a href="https://beian.miit.gov.cn/" target="_blank" class="text-xs text-muted-foreground hover:text-foreground flex items-center">
-              新ICP备2024015133号-3
+              新ICP备2024015133号-6
           </a>
       </div>
     </div>

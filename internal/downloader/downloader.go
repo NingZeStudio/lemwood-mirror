@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -271,23 +272,37 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 	if err != nil {
 		return err
 	}
-	defer func() {
-		f.Close()
-		os.Remove(partial)
-	}()
+
+	bufWriter := bufio.NewWriterSize(f, 64*1024)
 
 	progressWriter := &progressWriter{
 		total:      resp.ContentLength,
 		fileName:   name,
 		lastUpdate: time.Now(),
 	}
-	if _, err := io.Copy(f, io.TeeReader(resp.Body, progressWriter)); err != nil {
+
+	written, err := io.Copy(bufWriter, io.TeeReader(resp.Body, progressWriter))
+	if err != nil {
+		f.Close()
+		os.Remove(partial)
+		return err
+	}
+
+	if err := bufWriter.Flush(); err != nil {
+		f.Close()
+		os.Remove(partial)
 		return err
 	}
 
 	if err := f.Close(); err != nil {
+		os.Remove(partial)
 		return err
 	}
+
+	if written != resp.ContentLength && resp.ContentLength > 0 {
+		log.Printf("警告: 下载 %s 字节数不匹配 (期望: %d, 实际: %d)", name, resp.ContentLength, written)
+	}
+
 	if err := os.Rename(partial, outfile); err != nil {
 		return err
 	}
