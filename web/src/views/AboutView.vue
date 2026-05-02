@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted } from 'vue'
-import { ExternalLink, Github, Mail, Server, Code, Layers, Heart, Coffee } from 'lucide-vue-next'
+import { ExternalLink, Github, Mail, Server, Code, Layers, Heart, Coffee, MessageCircle } from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
@@ -126,6 +126,45 @@ const updateMetaDescription = (desc) => {
                       </p>
                   </div>
               </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">马铃薯_potato</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">1 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">苦瓜</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
+              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                  <div class="flex-shrink-0">
+                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
+                      </div>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                      <h3 class="text-lg font-bold text-foreground truncate">Janson</h3>
+                      <p class="text-sm text-muted-foreground">
+                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
+                      </p>
+                  </div>
+              </div>
           </div>
       </CardContent>
     </Card>
@@ -162,6 +201,11 @@ const updateMetaDescription = (desc) => {
                              <span class="flex items-center gap-1"><Mail class="h-3 w-3" /> 3436464181@qq.com</span>
                              <span class="hidden sm:inline border-l h-3"></span>
                              <span>QQ: 3436464181</span>
+                         </div>
+                         <div class="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                             <a href="https://qm.qq.com/q/FOGt99aayY" target="_blank" class="flex items-center gap-1 hover:text-foreground transition-colors">
+                                 <MessageCircle class="h-3 w-3" /> QQ群：1077373741
+                             </a>
                          </div>
                      </div>
                  </div>

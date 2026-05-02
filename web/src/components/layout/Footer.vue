@@ -1,5 +1,5 @@
 <script setup>
-import { Github, Heart } from 'lucide-vue-next'
+import { Github, Heart, MessageCircle } from 'lucide-vue-next'
 </script>
 
 <template>
@@ -15,6 +15,9 @@ import { Github, Heart } from 'lucide-vue-next'
         </p>
       </div>
       <div class="flex gap-4">
+          <a href="https://qm.qq.com/q/FOGt99aayY" target="_blank" class="text-muted-foreground hover:text-foreground">
+              <MessageCircle class="h-5 w-5" />
+          </a>
           <a href="https://github.com/JanePHPDev/lemwood_mirror_NewWeb" target="_blank" class="text-muted-foreground hover:text-foreground">
               <Github class="h-5 w-5" />
           </a>
