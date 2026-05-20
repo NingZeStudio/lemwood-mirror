@@ -1,51 +1,60 @@
-# 柠枺镜像 (Lemwood Mirror)
+# 柠枺镜像
 
-本项目实现自动从 GitHub 获取指定启动器（fcl、zl、zl2）的最新 release，并将资产文件下载到本地存储结构，同时提供一个简单的黑白风格前端页面展示版本信息与下载链接，并具备基本文件浏览功能。
+柠枺镜像是一个面向启动器分发场景的 GitHub Release 镜像服务。
+它会定时扫描上游仓库，下载并保留最近几个版本的资产文件，对外提供站点页面、下载链接、统计接口和下载验证流程。
 
-## 🌐 在线演示
-- **官方镜像站**: [https://mirror.lemwood.icu/](https://mirror.lemwood.icu/)
+## 项目能做什么
 
-## 功能概述
-- 通过浏览器模拟（colly）获取启动器的 GitHub 仓库地址。
-- 使用 GitHub API（go-github v50）获取最新 release（仅最新，不取历史）。
-- 支持并发下载，可通过配置限制并发数（默认为 3）。
-- 每 10 分钟自动检查更新（可通过配置调整）。
-- 启动时执行异步初始扫描，不阻塞 Web 服务启动。
-- 下载 release 资产到 `download/启动器名/版本号/`，并生成 `info.json`。
-- 集成 SQLite 数据库，并支持 **MySQL 数据库**（支持自动从 SQLite 迁移数据）。
-- 具备防刷墙功能，支持单 IP 每日流量限制，并自动生成公开的封禁记录文件 `banned_ips.txt`。
-- 提供详细的数据统计功能，包括访问量、下载排行、地域分布和每日趋势图表。
-- 提供完善的 HTTP API 接口和后台管理功能（详见 [API 文档](API_DOCS.md)）。
+- 定时扫描 GitHub 仓库并同步 release 资产
+- 按启动器保留最近几个版本，避免本地存储无限增长
+- 生成结构化版本索引，供前端页面和 API 查询
+- 提供公共查询接口、下载准备接口和验证码验证接口
+- 记录访问量、下载量、热门资源、地区分布和每日趋势
+- 支持单 IP 流量限制、黑名单和公开封禁记录
+- 提供后台管理能力，用于配置、黑名单和文件管理
 
-## 目录结构
-- `cmd/mirror`：主程序入口。
-- `internal/...`：配置、浏览器模拟、GitHub 交互、下载、存储、HTTP 服务。
-- `web/`：前端 Vue 项目源码。
-- `web/dist`：构建后的前端静态资源（由后端托管）。
-- `download`：下载文件根目录（默认）。
-- `.github/workflows`：GitHub Actions 工作流，用于自动构建。
+## 目录概览
 
-## 部署说明
+- `cmd/mirror`：后端程序入口
+- `internal/config`：配置加载与保存
+- `internal/github`：GitHub API 封装
+- `internal/downloader`：版本索引生成与资产下载
+- `internal/server`：HTTP 路由、下载验证和静态站点托管
+- `internal/stats`：访问与下载统计
+- `internal/traffic`：流量限制与封禁逻辑
+- `web`：用户站点前端源码
+- `admin-app`：后台管理前端源码
+- `download`：镜像文件、数据库和封禁记录的默认存储目录
 
-### 1. 环境准备
-- **Go**: 1.21 或更高版本（用于构建后端）。
-- **Node.js & npm**: 最新稳定版（用于构建前端）。
-- **操作系统**: Windows Server 2022 / Linux。  
-如果你在GitHub Actions中下载了构建好的二进制文件，无需安装Go和Node.js等环境，直接解压运行即可。
+## 快速开始
 
-### 2. 构建项目
+### 环境要求
 
-#### 前端构建
-进入 `web` 目录进行构建：
+- Go 1.21 或更高版本
+- Node.js 18 或更高版本
+- npm
+- Windows 或 Linux
+
+### 构建前端
+
+用户站点和后台都需要先构建静态资源，后端启动后会直接托管它们。
+
 ```bash
 cd web
 npm install
 npm run build
 ```
-构建产物将存放在 `web/dist` 目录中，后端会自动托管此目录。
 
-#### 后端构建
-在项目根目录执行：
+```bash
+cd ../admin-app
+npm install
+npm run build
+```
+
+### 构建后端
+
+在仓库根目录执行：
+
 ```powershell
 # Windows
 go build -o mirror.exe ./cmd/mirror
@@ -54,107 +63,175 @@ go build -o mirror.exe ./cmd/mirror
 go build -o mirror ./cmd/mirror
 ```
 
-### 3. 配置文件 (config.json)
+### 运行服务
 
-在运行前，请根据实际情况修改项目根目录下的 `config.json`：
-
-```json
-{
-  "server_address": "http://your-domain.com", // 服务器访问地址，用于生成 index.json 中的链接
-  "server_port": 8080,                        // HTTP 服务监听端口
-  "download_url_base": "https://mirror.lemwood.icu", // 外部下载链接的基准地址（如 CDN 或反代地址）
-  "check_cron": "*/10 * * * *",               // 定时任务表达式，默认每 10 分钟扫描一次
-  "storage_path": "download",                 // 下载文件和数据库的存储路径
-  "github_token": "your_github_token",        // GitHub PAT 令牌，用于解除 API 请求频率限制
-  "proxy_url": "",                            // 全局 HTTP 代理地址
-  "asset_proxy_url": "",                      // GitHub Release 资产下载加速代理前缀
-  "xget_domain": "https://xget.xi-xu.me",      // Xget 加速服务域名
-  "xget_enabled": true,                       // 是否启用 Xget 加速
-  "download_timeout_minutes": 40,             // 单个文件下载超时时间（分钟）
-  "concurrent_downloads": 3,                  // 同时进行的下载任务数量
-  "captcha_enabled": true,                    // 是否启用下载验证码
-  "captcha_app_id": "your_captcha_id",        // 极验验证码 Captcha ID
-  "captcha_secret_key": "your_private_key",   // 极验验证码 Private Key
-  "traffic_limit_gb": 5,                      // 单 IP 每日下载流量限制 (GB)
-  "ban_record_file": "banned_ips.txt",        // 公开封禁记录文件名
-  "appeal_contact": "QQ群 https://qm.qq.com/q/FOGt99aayY", // 申诉联系方式
-  "external_blacklist_url": "",               // 外部黑名单 URL (每 10 分钟同步一次)
-  "mysql_host": "",                           // MySQL 主机 (留空则默认使用 SQLite)
-  "mysql_port": 3306,                         // MySQL 端口
-  "mysql_user": "user",                       // MySQL 用户
-  "mysql_password": "password",               // MySQL 密码
-  "mysql_database": "mirror",                 // MySQL 数据库名
-  "mysql_migration": true,                    // 启动时是否自动从 SQLite 迁移数据
-  "launchers": [                              // 需要镜像的启动器配置列表
-    {
-      "name": "fcl",                          // 启动器唯一标识名称
-      "source_url": "https://github.com/FCL-Team/FoldCraftLauncher", // 官方页面或仓库 URL
-      "repo_selector": "",                    // CSS 选择器或正则，用于从 source_url 提取仓库地址
-      "include_prerelease": true,             // 是否包含预发布版本，默认 false。对于只有 pre-release 的仓库需设为 true
-      "max_versions": 2                       // 最多检查的版本数量，0 或不设置表示仅检查最新版本
-    }
-  ]
-}
-```
-**关键配置项：**
-- `github_token`: 建议配置以避免 GitHub API 频率限制。
-- `download_url_base`: 外部访问的基准 URL，用于生成 `info.json` 中的下载链接。
-- `captcha_enabled`: 启用后，用户下载文件前需完成极验滑块验证，防止机器人滥用。
-- `include_prerelease`: 对于只有预发布版本的仓库（如某些处于早期开发阶段的启动器），需设为 `true` 才能正常获取版本。
-
-### 4. 运行服务
-
-#### 直接运行
 ```powershell
 # Windows
-./mirror.exe
+.\mirror.exe
 
 # Linux
 chmod +x mirror
 ./mirror
 ```
 
-#### 使用环境变量 (可选)
-可以通过环境变量覆盖配置：
+也可以直接开发运行：
+
 ```powershell
-$env:GITHUB_TOKEN = "your_token"
-./mirror.exe
+go run ./cmd/mirror
 ```
 
-### 5. 反向代理 (推荐)
-建议使用 Nginx 进行反向代理，并开启 HTTPS：
+## 配置说明
+
+运行前需要编辑根目录的 `config.json`。
+下面的示例保留了最常用字段，并使用当前代码中的实际配置结构。
+
+```json
+{
+  "server_address": "",
+  "server_port": 8080,
+  "check_cron": "*/10 * * * *",
+  "storage_path": "download",
+  "github_token": "",
+  "admin_user": "admin",
+  "admin_password": "bcrypt-hash",
+  "admin_enabled": true,
+  "admin_max_retries": 10,
+  "admin_lock_duration": 120,
+  "proxy_url": "",
+  "asset_proxy_url": "",
+  "xget_domain": "https://xget.xi-xu.me",
+  "xget_enabled": true,
+  "download_timeout_minutes": 40,
+  "concurrent_downloads": 3,
+  "download_url_base": "https://mirror.example.com",
+  "two_factor_enabled": false,
+  "two_factor_secret": "",
+  "captcha_enabled": true,
+  "captcha_app_id": "your_captcha_id",
+  "captcha_secret_key": "your_captcha_secret",
+  "traffic_limit_gb": 0,
+  "ban_record_file": "banned_ips.txt",
+  "external_blacklist_url": "",
+  "appeal_contact": "QQ群 https://qm.qq.com/q/FOGt99aayY",
+  "mysql_host": "",
+  "mysql_port": 3306,
+  "mysql_user": "",
+  "mysql_password": "",
+  "mysql_database": "",
+  "mysql_migration": false,
+  "launchers": [
+    {
+      "name": "fcl",
+      "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
+      "repo_selector": "",
+      "include_prerelease": false,
+      "max_versions": 2
+    }
+  ]
+}
+```
+
+### 关键字段
+
+- `download_url_base`：对外下载链接的基准地址，通常填你的反代域名或 CDN 域名。
+- `github_token`：建议填写，用于降低 GitHub API 限流风险。
+- `captcha_enabled`：开启后，浏览器下载会先走验证码验证流程。
+- `traffic_limit_gb`：单 IP 每日下载流量上限，`0` 表示关闭该限制。
+- `external_blacklist_url`：外部黑名单同步地址。
+- `mysql_*`：填写后可切换到 MySQL；留空时默认使用 SQLite。
+
+### 启动器字段
+
+- `name`：启动器唯一标识，也会出现在 API 路径和文件目录中。
+- `source_url`：GitHub 仓库地址，或可解析到仓库地址的来源页面。
+- `repo_selector`：从 `source_url` 提取仓库地址时使用的选择器或规则。
+- `include_prerelease`：是否把预发布版本也纳入扫描结果。
+- `max_versions`：该启动器要拉取并保留的最近版本数量。
+
+### `max_versions` 规则
+
+- `max_versions > 0`：按配置值拉取并保留最近 N 个版本。
+- `max_versions = 0`：使用默认值 `3`。
+
+例如：
+
+- `max_versions: 1` 表示只保留最近 1 个版本
+- `max_versions: 2` 表示保留最近 2 个版本
+- `max_versions: 0` 表示按默认值保留最近 3 个版本
+
+## 下载流程
+
+项目当前的浏览器下载链路分为两种情况。
+
+### 验证码关闭
+
+1. 前端调用 `POST /api/download/prepare`
+2. 服务端返回 `download_token`、`download_url`、`landing_url`
+3. 前端进入下载引导页，调用 `GET /api/download/landing?token=...`
+4. 引导页触发真实下载 `/download/...`
+
+### 验证码开启
+
+1. 前端调用 `GET /api/captcha/config` 获取验证码配置
+2. 用户完成验证后，前端调用 `POST /api/download/verify`
+3. 服务端返回 `download_token`、`download_url`、`landing_url`
+4. 前端进入下载引导页，调用 `GET /api/download/landing?token=...`
+5. 引导页触发真实下载 `/download/...`
+
+### 额外说明
+
+- `download_token` 默认有效期为 5 分钟
+- token 设计为短时一次性下载令牌
+- `landing_url` 用于单独页面接力下载和回跳来源站点
+- 非浏览器请求在验证码开启时访问 `/download/...`，会收到 JSON 错误而不是 HTML 页面
+
+## 统计与风控
+
+### 数据统计
+
+- 访问记录：IP、路径、User-Agent、Referer、地区信息
+- 下载记录：启动器、版本、文件名、来源 IP
+- 聚合接口：总访问量、总下载量、最近 30 天数据、热门下载、地区分布、每日趋势
+
+### 流量限制
+
+- 支持单 IP 每日下载流量上限
+- 超限后可自动封禁
+- 可同步外部黑名单
+- 封禁记录可写入公开文件，例如 `banned_ips.txt`
+
+## 部署建议
+
+生产环境建议使用 Nginx 或其他反向代理，并开启 HTTPS。
+
 ```nginx
 server {
     listen 443 ssl;
-    server_name mirror.lemwood.icu;
+    server_name mirror.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-## 使用说明
-- **前端首页**: 显示各启动器最新版本信息、下载量统计与下载链接。
-- **手动刷新**: 点击“手动刷新”或访问 `POST /api/scan` 将立即触发一次版本检查。
-- **文件浏览**: 访问 `/files` 可视化浏览存储目录结构。
+## 验证是否工作正常
 
-## 数据统计
-系统内置了数据统计功能，自动记录用户的访问和下载行为。默认存储在 `storage_path` 下的 `stats.db` (SQLite) 中，也可配置为使用 **MySQL**。
-- **访问统计**: 记录 IP、User-Agent、地理位置、封禁时间等信息。
-- **下载统计**: 记录具体下载的启动器、版本和文件名。
-- **可视化面板**: 前端提供直观的每日趋势、下载分布图表。
+- 打开首页，确认用户站点能够展示启动器版本列表
+- 访问 `/api/status`，确认能返回版本索引
+- 访问 `/api/latest`，确认能返回每个启动器的最新版本号
+- 访问 `/api/stats`，确认统计接口正常
+- 执行一次实际下载，确认下载引导页和真实下载链路可用
 
-## 🛡️ 防刷墙 (Anti-Abuse)
-- **流量限制**: 支持单 IP 每日下载流量上限。
-- **自动封禁**: 触发限制后自动封禁 IP，并支持从外部黑名单实时同步。
-- **公开透明**: 封禁记录会自动同步到 `banned_ips.txt` 供用户查阅。
-- **申诉指引**: 封禁页面会显示 IP、封禁原因、当前流量及申诉联系方式。
+## 文档入口
 
-## 📖 API 文档
-详细的 API 接口说明请参阅 [API 文档](API_DOCS.md)。
+- 公共 API 文档：`API_DOCS.md`
+- 站内 API 速查页：用户站点中的 `/api`
 
----
-*Powered by Lemwood Mirror Team*
+## 许可
+
+本项目使用仓库中的 `LICENSE`。

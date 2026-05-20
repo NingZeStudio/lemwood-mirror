@@ -31,26 +31,54 @@ const isNavOpen = ref(false)
 const copiedState = ref({})
 const { copy } = useClipboard()
 
+const apiBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/api` : 'https://mirror.example.com/api'
+const fileBaseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mirror.example.com'
+
 const endpoints = [
   {
     method: 'GET',
     path: '/api/status',
-    title: '获取所有版本状态',
-    desc: '返回所有启动器及完整版本列表，包含版本号、发布时间、下载链接。此接口数据量较大，建议仅在初始化时调用。',
+    title: '获取所有启动器状态',
+    desc: '返回所有启动器的版本列表，按版本从新到旧排序。适合初始化页面或构建完整版本索引。',
+    response: `{
+  "fcl": [
+    {
+      "launcher": "fcl",
+      "tag_name": "1.3.0.7",
+      "name": "1.3.0.7",
+      "published_at": "2024-01-01T00:00:00Z",
+      "assets": [
+        {
+          "name": "FCL-release-1.3.0.7-all.apk",
+          "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+          "size": 12345678
+        }
+      ]
+    }
+  ],
+  "zl": [],
+  "zl2": []
+}`
+  },
+  {
+    method: 'GET',
+    path: '/api/status/{launcher}',
+    title: '获取指定启动器状态',
+    desc: '返回单个启动器的全部版本信息。',
+    params: [
+      { name: 'launcher', type: 'string', required: true, desc: '启动器标识，例如 fcl、zl、zl2' }
+    ],
     response: `[
   {
-    "hmcl": [
+    "launcher": "fcl",
+    "tag_name": "1.3.0.7",
+    "name": "1.3.0.7",
+    "published_at": "2024-01-01T00:00:00Z",
+    "assets": [
       {
-        "tag_name": "v3.5.9",
-        "name": "HMCL v3.5.9",
-        "published_at": "2024-01-15T10:30:00Z",
-        "assets": [
-          {
-            "name": "HMCL-3.5.9.exe",
-            "size": 2856128,
-            "url": "https://..."
-          }
-        ]
+        "name": "FCL-release-1.3.0.7-all.apk",
+        "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+        "size": 12345678
       }
     ]
   }
@@ -58,64 +86,140 @@ const endpoints = [
   },
   {
     method: 'GET',
-    path: '/api/status/{launcher}',
-    title: '获取指定启动器状态',
-    desc: '返回特定启动器的历史版本信息。',
-    params: [
-      { name: 'launcher', type: 'string', required: true, desc: '启动器标识 (如 hmcl, pcl2)' }
-    ],
-    response: `[
-  {
-    "tag_name": "v3.5.9",
-    "published_at": "2024-01-15T10:30:00Z",
-    "assets": []
-  }
-]`
-  },
-  {
-    method: 'GET',
     path: '/api/latest',
     title: '获取所有最新版本',
-    desc: '快速检查所有启动器的最新版本号，适合用于检测更新。',
+    desc: '返回每个启动器的最新版本号，适合快速检查更新。',
     response: `{
-  "hmcl": "v3.5.9",
-  "pcl2": "Snapshot-20240115",
-  "bakaxl": "v3.5.1"
+  "fcl": "1.3.0.7",
+  "zl": "141400",
+  "zl2": "2.4.4"
 }`
   },
   {
     method: 'GET',
     path: '/api/latest/{launcher}',
     title: '获取指定启动器最新版本',
-    desc: '查询单个启动器的最新发布版本详情。',
+    desc: '返回纯文本版本号，不是 JSON 对象。',
     params: [
-      { name: 'launcher', type: 'string', required: true, desc: '启动器标识' }
+      { name: 'launcher', type: 'string', required: true, desc: '启动器标识，例如 fcl' }
     ],
-    response: `{
-  "tag_name": "v3.5.9",
-  "name": "HMCL v3.5.9",
-  "published_at": "2024-01-15T10:30:00Z"
-}`
+    response: `1.3.0.7`
   },
   {
     method: 'GET',
     path: '/api/stats',
     title: '获取统计数据',
-    desc: '获取站点的访问统计、下载量、热门排行、地域分布等数据。',
+    desc: '返回访问量、下载量、磁盘占用、热门资源和每日趋势。',
     response: `{
-  "totalDownloads": 152304,
-  "totalVisits": 89234,
-  "topDownloads": [...]
+  "total_visits": 1500,
+  "total_downloads": 450,
+  "total_days": 15,
+  "last_30_visits": 300,
+  "last_30_downloads": 80,
+  "disk": {
+    "total": 53687091200,
+    "free": 10737418240,
+    "used": 42949672960
+  },
+  "top_downloads": [
+    {
+      "launcher": "fcl",
+      "version": "1.3.0.7",
+      "count": 120
+    }
+  ],
+  "geo_distribution": [
+    {
+      "country": "China",
+      "count": 300
+    }
+  ],
+  "daily_stats": [
+    {
+      "date": "2026-05-20",
+      "visit_count": 80,
+      "download_count": 22
+    }
+  ]
+}`
+  },
+  {
+    method: 'GET',
+    path: '/api/captcha/config',
+    title: '获取验证码配置',
+    desc: '返回站点是否启用验证码，以及前端初始化所需的 app_id。',
+    response: `{
+  "enabled": true,
+  "app_id": "your_captcha_id"
 }`
   },
   {
     method: 'POST',
-    path: '/api/scan',
-    title: '触发手动扫描',
-    desc: '强制同步上游仓库检查新版本。此接口受频率限制。',
+    path: '/api/download/prepare',
+    title: '准备下载',
+    desc: '在无需验证码时生成下载 token、真实下载地址和 landing 地址。',
+    requestBody: `{
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "home-latest-download"
+}`,
     response: `{
-  "success": true,
-  "message": "扫描完成"
+  "download_token": "32-byte-random-token",
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "landing_url": "/api/download/landing?token=32-byte-random-token"
+}`
+  },
+  {
+    method: 'GET',
+    path: '/api/download/landing?token={token}',
+    title: '获取下载引导信息',
+    desc: '下载引导页使用该接口读取下载地址、来源信息和文件名。',
+    params: [
+      { name: 'token', type: 'string', required: true, desc: '下载 token' }
+    ],
+    response: `{
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "home-latest-download",
+  "file_name": "FCL-release-1.3.0.7-all.apk",
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "flow": "prepare"
+}`
+  },
+  {
+    method: 'POST',
+    path: '/api/download/verify',
+    title: '验证后生成下载 token',
+    desc: '在验证码开启时提交验证结果，成功后返回下载 token 和 landing 地址。',
+    requestBody: `{
+  "lot_number": "e2f0a767a0f74926bbc8daeed22e6f27",
+  "captcha_output": "captcha_output",
+  "pass_token": "pass_token",
+  "gen_time": "1709551234",
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "verify-download"
+}`,
+    response: `{
+  "download_token": "32-byte-random-token",
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "landing_url": "/api/download/landing?token=32-byte-random-token"
+}`
+  },
+  {
+    method: 'GET',
+    path: '/download/{token}/{file_path}',
+    title: '真实文件下载',
+    desc: '返回真实文件流。验证码开启时，无 token 的浏览器请求会进入验证页，非浏览器请求会收到 JSON 错误。',
+    params: [
+      { name: 'token', type: 'string', required: true, desc: '下载 token，验证码关闭时浏览器可不直接使用此路径' },
+      { name: 'file_path', type: 'string', required: true, desc: '目标文件相对路径' }
+    ],
+    response: `{
+  "error": "verification_required",
+  "message": "Download requires captcha verification",
+  "captcha": true,
+  "app_id": "your_captcha_id"
 }`
   }
 ]
@@ -128,6 +232,24 @@ const methodClasses = {
 }
 
 const getMethodClass = (method) => methodClasses[method] || 'bg-muted text-muted-foreground border-border'
+
+const buildCurlSnippet = (endpoint) => {
+  const targetPath = endpoint.path.startsWith('/download/')
+    ? endpoint.path.replace('{token}', '32-byte-random-token').replace('{file_path}', 'fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk')
+    : endpoint.path
+        .replace('{launcher}', 'fcl')
+        .replace('{token}', '32-byte-random-token')
+
+  const fullUrl = targetPath.startsWith('/api/') ? `${apiBaseUrl}${targetPath.slice(4)}` : `${fileBaseUrl}${targetPath}`
+
+  if (endpoint.method === 'POST' && endpoint.requestBody) {
+    return `curl -X ${endpoint.method} '${fullUrl}' \\
+  -H 'Content-Type: application/json' \\
+  -d '${endpoint.requestBody}'`
+  }
+
+  return `curl -X ${endpoint.method} '${fullUrl}'`
+}
 
 const filteredEndpoints = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
@@ -159,7 +281,7 @@ const highlightCode = (code, lang) => hljs.highlight(code, { language: lang }).v
 
 onMounted(() => {
   document.title = 'API 文档 - 柠枺镜像状态'
-  updateMetaDescription('柠枺镜像站 API 接口文档，提供版本查询、文件下载、统计信息等接口')
+  updateMetaDescription('柠枺镜像站 API 速查页，提供公共查询接口与下载流程接口示例')
 })
 
 const updateMetaDescription = (desc) => {
@@ -179,7 +301,7 @@ const updateMetaDescription = (desc) => {
       <CardHeader class="space-y-2">
         <CardTitle class="text-3xl">API 文档</CardTitle>
         <CardDescription>
-          Lemwood Mirror 提供一套简单、直观的 RESTful API，用于获取版本信息、下载链接和站点统计数据。
+          这里展示当前站点公开可用的查询接口和下载流程接口。完整说明请以仓库中的 API 文档为准。
         </CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -292,21 +414,35 @@ const updateMetaDescription = (desc) => {
               </Table>
             </div>
 
+            <div v-if="endpoint.requestBody" class="space-y-2 min-w-0">
+              <div class="flex items-center justify-between px-1">
+                <span class="text-sm font-medium text-muted-foreground">Request Body</span>
+                <Button variant="ghost" size="icon" class="h-8 w-8" @click="copyCode(endpoint.requestBody, `body-${i}`)">
+                  <Check v-if="copiedState[`body-${i}`]" class="h-4 w-4 text-emerald-500" />
+                  <Copy v-else class="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </div>
+              <div class="overflow-hidden rounded-lg border bg-slate-950">
+                <div class="overflow-x-auto p-4">
+                  <pre><code class="font-mono text-sm text-slate-50" v-html="highlightCode(endpoint.requestBody, 'json')"></code></pre>
+                </div>
+              </div>
+            </div>
+
             <div class="grid gap-6 xl:grid-cols-2">
               <div class="space-y-2 min-w-0">
                 <div class="flex items-center justify-between px-1">
                   <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <Terminal class="h-4 w-4" /> cURL Request
                   </span>
-                  <Button variant="ghost" size="icon" class="h-8 w-8" @click="copyCode(`curl -X ${endpoint.method} 'https://miawa.cn${endpoint.path}'`, `curl-${i}`)">
+                  <Button variant="ghost" size="icon" class="h-8 w-8" @click="copyCode(buildCurlSnippet(endpoint), `curl-${i}`)">
                     <Check v-if="copiedState[`curl-${i}`]" class="h-4 w-4 text-emerald-500" />
                     <Copy v-else class="h-4 w-4 text-muted-foreground" />
                   </Button>
                 </div>
                 <div class="overflow-hidden rounded-lg border bg-slate-950">
                   <div class="overflow-x-auto p-4">
-                    <pre><code class="font-mono text-sm text-slate-50" v-html="highlightCode(`curl -X ${endpoint.method} \
-  'https://miawa.cn${endpoint.path}'`, 'bash')"></code></pre>
+                    <pre><code class="font-mono text-sm text-slate-50" v-html="highlightCode(buildCurlSnippet(endpoint), 'bash')"></code></pre>
                   </div>
                 </div>
               </div>

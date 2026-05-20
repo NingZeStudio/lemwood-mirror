@@ -1,279 +1,430 @@
-# Lemwood Mirror API 详细技术文档
+# 柠枺镜像 API 文档
 
-本文档提供了 Lemwood Mirror 系统的完整 API 参考，涵盖了公共访问接口和受保护的后台管理接口。
+本文档只覆盖公共查询接口和下载相关接口。
+后台管理接口、登录接口和手动扫描接口不在本文档范围内。
 
----
+## 1. 基础约定
 
-## 1. 核心设计与安全规范
+### 1.1 Base URL
 
-### 1.1 认证机制
-- **认证方式**：基于 Bearer Token。
-- **Token 获取**：通过 `POST /api/login` 接口，支持基于 TOTP 的两步验证 (2FA)。
-- **两步验证 (TOTP)**：兼容 Microsoft Authenticator、Google Authenticator 等标准验证器。
-- **安全加固**：建议在 **HTTPS** 环境下运行，以确保登录凭证和 TOTP 密钥的安全传输。
-- **Token 有效期**：24 小时。
-- **使用方式**：在请求头中携带 `Authorization: <token>`，或者在 Cookie 中携带 `admin_token=<token>`。
+- 站内调用通常使用相对路径：`/api/...`
+- 外部调用可拼接你的站点域名，例如：`https://mirror.example.com/api`
 
-### 1.2 登录流程
-1. **验证 2FA 状态** (可选)：客户端调用 `GET /api/auth/2fa/status` 检查是否启用了双重验证。
-2. **提交凭据**：将用户名、密码及可选的 TOTP 验证码发送至 `POST /api/login`。
-3. **后端验证**：服务器验证用户名并使用 **Bcrypt**（Cost: 14）对密码进行哈希比对。
-4. **颁发令牌**：验证通过后，服务器返回认证 Token，客户端将其存储在 `localStorage` 或 Cookie 中。
+### 1.2 内容类型
 
-### 1.3 安全中间件
-所有 API 请求均经过安全中间件处理：
-- **IP 黑名单**：拦截 `ip_blacklist` 表中的 IP。被封禁时，响应将包含 IP 地址、封禁时间及原因。
-- **流量限制**：单 IP 每日下载流量达到限制（默认 5GB）后自动封禁，并在响应中告知已用流量。
-- **路径遍历保护**：禁止包含 `..` 的路径请求。
-- **CORS 支持**：支持跨域访问，允许 `GET, POST, OPTIONS` 方法。
-- **访问统计**：自动记录所有有效请求的 IP、路径、UA 和地理位置。
+- 查询接口通常返回 `application/json`
+- `GET /api/latest/{launcher}` 返回纯文本
+- 真实文件下载由 `/download/...` 返回文件流
 
----
+### 1.3 常见状态码
 
-## 2. 身份认证接口
+- `200 OK`：请求成功
+- `400 Bad Request`：缺少参数或参数格式错误
+- `403 Forbidden`：下载令牌无效、验证失败或触发流量限制
+- `404 Not Found`：启动器或文件不存在
+- `500 Internal Server Error`：服务端执行失败
 
-### 2.1 管理员登录
-- **端点**：`POST /api/login`
-- **请求体**：
-  ```json
-  {
-    "username": "admin",
-    "password": "your_password",
-    "otp_code": "123456" 
-  }
-  ```
-- **响应示例** (200 OK)：
-  ```json
-  {
-    "token": "4e7...a3f"
-  }
-  ```
-- **安全特性**：
-  - **暴力破解防护**：同一 IP 连续登录失败（包括密码错误和验证码错误）达到上限（默认 10 次）将被锁定。
-  - **锁定时长**：锁定时间默认为 120 分钟（2 小时）。
+### 1.4 下载令牌
 
-### 2.2 获取 2FA 状态
-- **端点**：`GET /api/auth/2fa/status`
-- **功能**：查询当前系统是否启用了两步验证，供登录页 UI 适配。
-- **响应示例**：
-  ```json
-  {
-    "enabled": true
-  }
-  ```
+- `download_token` 默认有效期为 5 分钟
+- `landing` 接口只读取 token，不消耗 token
+- `/download/...` 在验证码开启时会消费 token
 
----
+## 2. 公共查询接口
 
-## 3. 公共查询接口
+### 2.1 获取所有启动器状态
 
-### 3.1 获取所有启动器状态
-- **端点**：`GET /api/status`
-- **功能**：返回所有启动器的所有版本详细信息。
+- 方法：`GET`
+- 路径：`/api/status`
+- 说明：返回所有启动器的版本列表，按版本从新到旧排序。
 
-### 3.2 获取指定启动器状态
-- **端点**：`GET /api/status/{launcher_id}`
-- **功能**：返回指定启动器的所有版本详细信息。
-
-### 3.3 获取所有启动器最新版本
-- **端点**：`GET /api/latest`
-- **功能**：返回所有启动器的最新稳定版本号。
-- **响应头**：`X-Latest-Versions`
-
-### 3.4 获取指定启动器最新版本
-- **端点**：`GET /api/latest/{launcher_id}`
-- **功能**：返回指定启动器的最新稳定版本号（纯文本）。
-- **响应头**：`X-Latest-Version`
-
-### 3.5 获取系统统计信息
-- **端点**：`GET /api/stats`
-- **功能**：返回系统访问量、下载量、运行时间及磁盘占用等统计数据。
-- **响应格式**：
-  ```json
-  {
-    "total_visits": 1500,        // 总访问量
-    "total_downloads": 450,      // 总下载量
-    "total_days": 15,            // 系统累计运行天数
-    "last_30_visits": 300,       // 最近 30 天访问量
-    "last_30_downloads": 80,     // 最近 30 天下载量
-    "disk": {
-      "total": 53687091200,      // 磁盘总空间 (Bytes)
-      "free": 10737418240,       // 磁盘剩余空间 (Bytes)
-      "used": 42949672960        // 磁盘已用空间 (Bytes)
-    },
-    "top_downloads": [...],      // 热门资源排行
-    "geo_distribution": [...],   // 地理位置分布
-    "daily_stats": [...]         // 每日趋势数据
-  }
-  ```
-
----
-
-## 4. 后台管理接口 (需认证)
-
-### 4.1 获取/更新系统配置
-- **端点**：`GET/POST /api/admin/config`
-- **GET**：返回脱敏后的系统配置（不包含密码哈希和 TOTP 密钥）。
-- **POST**：更新系统配置。支持修改管理员密码、GitHub Token、TOTP 配置等。
-- **TOTP 设置流程**：
-  1. 生成新密钥：前端随机生成 Base32 字符串并显示二维码。
-  2. 保存配置：用户确认后点击保存，密钥被持久化到服务器。
-  3. 启用验证：勾选“启用两步验证”并保存，后续登录将强制要求验证码。
-
-### 4.2 管理 IP 黑名单
-- **端点**：`GET/POST/DELETE /api/admin/blacklist`
-- **功能**：查询、添加或删除 IP 黑名单。
-
-### 4.3 管理文件
-- **端点**：`GET/DELETE /api/admin/files`
-- **功能**：浏览或删除下载目录下的文件和文件夹。
-
-### 4.4 文件下载
-- **端点**：`GET /api/admin/files/download?path=...`
-- **功能**：从管理后台直接下载服务器上的文件。
-
----
-
-## 5. 下载验证接口
-
-### 5.1 获取验证码配置
-- **端点**：`GET /api/captcha/config`
-- **功能**：获取极验验证码配置信息，用于前端初始化验证组件。
-- **响应示例**：
-  ```json
-  {
-    "enabled": true,
-    "app_id": "9fab8370f958912499555f6ce0cd5c56"
-  }
-  ```
-- **字段说明**：
-  - `enabled`: 是否启用下载验证
-  - `app_id`: 极验验证码 Captcha ID（前端初始化需要）
-
-### 5.2 验证下载请求
-- **端点**：`POST /api/download/verify`
-- **功能**：验证用户完成的极验滑块验证，验证通过后返回临时下载令牌和下载链接。
-- **请求体**：
-  ```json
-  {
-    "lot_number": "e2f0a767a0f74926bbc8daeed22e6f27",
-    "captcha_output": "...",
-    "pass_token": "...",
-    "gen_time": "1709551234",
-    "file_path": "fcl/1.2.8.9/FCL-release-1.2.8.9-all.apk"
-  }
-  ```
-- **响应示例** (验证成功)：
-  ```json
-  {
-    "download_token": "abc123def456...",
-    "download_url": "/download/abc123def456.../fcl/1.2.8.9/FCL-release-1.2.8.9-all.apk"
-  }
-  ```
-- **响应示例** (验证失败)：
-  ```json
-  {
-    "error": "verification_failed",
-    "message": "pass_token expire"
-  }
-  ```
-- **说明**：
-  - `lot_number`, `captcha_output`, `pass_token`, `gen_time` 由极验前端 SDK `getValidate()` 方法返回
-  - `download_token` 有效期 5 分钟，仅可使用一次
-  - `download_url` 为完整的下载链接，可直接用于下载或复制给下载器使用
-  - 下载链接格式：`/download/(token)/文件路径`
-
-### 5.3 验证流程
-1. 用户点击下载按钮
-2. 前端调用 `GET /api/captcha/config` 检查是否启用验证
-3. 若启用，加载极验 v4 SDK 并初始化验证
-4. 用户完成滑块验证后，前端获取验证参数
-5. 前端调用 `POST /api/download/verify` 提交验证
-6. 后端验证通过后返回临时下载令牌和下载链接
-7. 前端可选择直接下载或复制链接供下载器使用
-
----
-
-## 6. 启动器配置说明
-
-### 6.1 配置字段
-
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `name` | string | 是 | - | 启动器唯一标识名称，用于 API 路径和文件存储目录 |
-| `source_url` | string | 是 | - | 官方页面或 GitHub 仓库 URL |
-| `repo_selector` | string | 否 | "" | CSS 选择器或正则表达式，用于从 source_url 提取仓库地址 |
-| `include_prerelease` | bool | 否 | false | 是否包含预发布版本 |
-| `max_versions` | int | 否 | 0 | 最多检查的版本数量，0 表示仅检查最新版本 |
-
-### 6.2 include_prerelease 字段说明
-
-GitHub 的 `GetLatestRelease` API 只返回最新的**正式发布**版本，不包括预发布版本。对于只有预发布版本的仓库（如某些处于早期开发阶段的启动器），需要将 `include_prerelease` 设为 `true`。
-
-**示例配置：**
+响应示例：
 
 ```json
 {
-  "name": "fcl",
-  "source_url": "https://github.com/root-S7/FoldCraftLauncher",
-  "repo_selector": "",
-  "include_prerelease": true
+  "fcl": [
+    {
+      "launcher": "fcl",
+      "tag_name": "1.3.0.7",
+      "name": "1.3.0.7",
+      "published_at": "2024-01-01T00:00:00Z",
+      "assets": [
+        {
+          "name": "FCL-release-1.3.0.7-all.apk",
+          "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+          "size": 12345678
+        }
+      ]
+    }
+  ],
+  "zl": [],
+  "zl2": []
 }
 ```
 
-当 `include_prerelease` 为 `true` 时，系统会使用 `ListReleases` API 获取所有发布版本（包括预发布），并选择最新的一个。
+### 2.2 获取指定启动器状态
 
-### 6.3 max_versions 字段说明
+- 方法：`GET`
+- 路径：`/api/status/{launcher}`
+- 路径参数：
+  - `launcher`：启动器标识，例如 `fcl`、`zl`、`zl2`
+- 说明：返回单个启动器的版本列表。
 
-`max_versions` 用于配置批量版本检查功能。当设置大于 0 的值时，系统会检查并下载指定数量的历史版本。
+响应示例：
 
-**示例配置：**
+```json
+[
+  {
+    "launcher": "fcl",
+    "tag_name": "1.3.0.7",
+    "name": "1.3.0.7",
+    "published_at": "2024-01-01T00:00:00Z",
+    "assets": [
+      {
+        "name": "FCL-release-1.3.0.7-all.apk",
+        "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+        "size": 12345678
+      }
+    ]
+  }
+]
+```
+
+错误场景：
+
+- `404 Not Found`：启动器不存在
+
+### 2.3 获取所有启动器最新版本
+
+- 方法：`GET`
+- 路径：`/api/latest`
+- 说明：返回每个启动器的最新版本号。
+- 响应头：`X-Latest-Versions`
+
+响应示例：
 
 ```json
 {
-  "name": "fcl",
-  "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
-  "repo_selector": "",
-  "max_versions": 2
+  "fcl": "1.3.0.7",
+  "zl": "141400",
+  "zl2": "2.4.4"
 }
 ```
 
-上述配置表示 fcl 启动器会检查并下载最近 2 个版本的所有资产文件。
+### 2.4 获取指定启动器最新版本
 
----
+- 方法：`GET`
+- 路径：`/api/latest/{launcher}`
+- 路径参数：
+  - `launcher`：启动器标识
+- 说明：返回纯文本版本号，而不是 JSON 对象。
+- 响应头：`X-Latest-Version`
 
-## 7. 手动扫描接口
+响应示例：
 
-### 7.1 触发全量扫描
-- **端点**：`POST /api/scan`
-- **功能**：触发所有启动器的版本检查和更新。
-- **响应**：`202 Accepted`，返回 `Scan triggered`
+```text
+1.3.0.7
+```
 
-### 7.2 触发单启动器扫描
-- **端点**：`POST /api/scan/launcher`
-- **功能**：触发指定启动器的版本检查和更新。
-- **请求体**：
-  ```json
-  {
-    "launcher": "fcl"
-  }
-  ```
-- **响应示例** (202 Accepted)：
-  ```json
-  {
-    "status": "accepted",
-    "message": "扫描已触发"
-  }
-  ```
+错误场景：
 
----
+- `404 Not Found`：启动器不存在
 
-## 8. 错误码说明
+### 2.5 获取站点统计信息
 
-| 错误码 | 说明 |
-|--------|------|
-| `verification_required` | 需要完成验证码验证 |
-| `invalid_token` | 下载令牌无效或已过期 |
-| `token_mismatch` | 下载令牌与请求文件不匹配 |
-| `verification_failed` | 验证码验证失败 |
+- 方法：`GET`
+- 路径：`/api/stats`
+- 说明：返回访问量、下载量、磁盘占用、热门资源和趋势数据。
+- 缓存：服务端会返回 `Cache-Control: public, max-age=300`
+
+响应示例：
+
+```json
+{
+  "total_visits": 1500,
+  "total_downloads": 450,
+  "total_days": 15,
+  "last_30_visits": 300,
+  "last_30_downloads": 80,
+  "disk": {
+    "total": 53687091200,
+    "free": 10737418240,
+    "used": 42949672960
+  },
+  "top_downloads": [
+    {
+      "launcher": "fcl",
+      "version": "1.3.0.7",
+      "count": 120
+    }
+  ],
+  "geo_distribution": [
+    {
+      "country": "China",
+      "count": 300
+    }
+  ],
+  "daily_stats": [
+    {
+      "date": "2026-05-20",
+      "visit_count": 80,
+      "download_count": 22
+    }
+  ]
+}
+```
+
+### 2.6 获取验证码配置
+
+- 方法：`GET`
+- 路径：`/api/captcha/config`
+- 说明：前端在发起浏览器下载前可先读取验证码配置。
+
+响应示例：
+
+```json
+{
+  "enabled": true,
+  "app_id": "your_captcha_id"
+}
+```
+
+字段说明：
+
+- `enabled`：是否启用验证码
+- `app_id`：验证码前端初始化所需的应用 ID
+
+## 3. 下载相关接口
+
+### 3.1 准备下载
+
+- 方法：`POST`
+- 路径：`/api/download/prepare`
+- 说明：在不需要验证码时，浏览器可先调用该接口生成下载 token 和 landing 地址。
+
+请求体：
+
+```json
+{
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "home-latest-download"
+}
+```
+
+字段说明：
+
+- `file_path`：必填，目标文件相对路径
+- `return_url`：可选，下载完成后前端可用于跳转来源页面
+- `source`：可选，自定义来源标记
+
+成功响应：
+
+```json
+{
+  "download_token": "32-byte-random-token",
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "landing_url": "/api/download/landing?token=32-byte-random-token"
+}
+```
+
+错误场景：
+
+- `400 Bad Request`：缺少 `file_path`
+- `403 Forbidden`：文件路径非法
+- `404 Not Found`：文件不存在
+
+### 3.2 获取下载引导信息
+
+- 方法：`GET`
+- 路径：`/api/download/landing`
+- Query：
+  - `token`：必填，下载 token
+- 说明：前端单独页面可用它读取下载地址、来源信息和文件名。
+
+请求示例：
+
+```text
+GET /api/download/landing?token=32-byte-random-token
+```
+
+成功响应：
+
+```json
+{
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "home-latest-download",
+  "file_name": "FCL-release-1.3.0.7-all.apk",
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "flow": "prepare"
+}
+```
+
+`flow` 可能值：
+
+- `prepare`：来自无需验证码的准备流程
+- `verify`：来自验证码验证通过后的流程
+
+错误场景：
+
+- `400 Bad Request`
+
+```json
+{
+  "error": "missing_token",
+  "message": "Missing token"
+}
+```
+
+- `403 Forbidden`
+
+```json
+{
+  "error": "expired_token",
+  "message": "Download token is invalid or expired"
+}
+```
+
+### 3.3 验证后生成下载 token
+
+- 方法：`POST`
+- 路径：`/api/download/verify`
+- 说明：在验证码开启时，前端完成验证后调用此接口。
+
+请求体：
+
+```json
+{
+  "lot_number": "e2f0a767a0f74926bbc8daeed22e6f27",
+  "captcha_output": "captcha_output",
+  "pass_token": "pass_token",
+  "gen_time": "1709551234",
+  "file_path": "fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "return_url": "https://example.com/back",
+  "source": "verify-download"
+}
+```
+
+字段说明：
+
+- `lot_number`、`captcha_output`、`pass_token`、`gen_time`：验证码前端 SDK 返回的参数
+- `file_path`：必填，目标文件相对路径
+- `return_url`：可选
+- `source`：可选
+
+成功响应：
+
+```json
+{
+  "download_token": "32-byte-random-token",
+  "download_url": "/download/32-byte-random-token/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+  "landing_url": "/api/download/landing?token=32-byte-random-token"
+}
+```
+
+错误场景：
+
+- `400 Bad Request`
+  - 验证码未启用
+  - 缺少必填字段
+- `403 Forbidden`
+
+```json
+{
+  "error": "verification_failed",
+  "message": "captcha validation failed reason"
+}
+```
+
+- `500 Internal Server Error`
+
+```json
+{
+  "error": "verification_failed",
+  "message": "Failed to verify captcha"
+}
+```
+
+### 3.4 真实文件下载
+
+- 方法：`GET`
+- 路径：`/download/{token}/{file_path}`
+- 说明：返回真实文件流。
+
+在验证码关闭时：
+
+- 可直接访问真实文件路径
+- 前端通常仍建议走 `prepare -> landing -> download` 流程
+
+在验证码开启时：
+
+- 浏览器直接访问无 token 的 `/download/...`，服务端会返回验证页面
+- 非浏览器请求直接访问无 token 的 `/download/...`，服务端会返回 JSON 错误：
+
+```json
+{
+  "error": "verification_required",
+  "message": "Download requires captcha verification",
+  "captcha": true,
+  "app_id": "your_captcha_id"
+}
+```
+
+无效 token 错误：
+
+```json
+{
+  "error": "invalid_token",
+  "message": "Download token is invalid or expired",
+  "captcha": true,
+  "app_id": "your_captcha_id"
+}
+```
+
+token 与文件路径不匹配时：
+
+```json
+{
+  "error": "token_mismatch",
+  "message": "Download token does not match requested file"
+}
+```
+
+## 4. 浏览器下载流程
+
+### 4.1 验证码关闭
+
+1. 前端发起 `POST /api/download/prepare`
+2. 读取返回的 `landing_url`
+3. 下载引导页调用 `GET /api/download/landing`
+4. 页面自动触发 `/download/...`
+
+### 4.2 验证码开启
+
+1. 前端先调用 `GET /api/captcha/config`
+2. 用户完成验证码
+3. 前端调用 `POST /api/download/verify`
+4. 下载引导页调用 `GET /api/download/landing`
+5. 页面自动触发 `/download/...`
+
+## 5. 错误码速查
+
+| 错误码 | 含义 |
+| --- | --- |
+| `missing_required_parameters` | 缺少必填参数 |
+| `missing_token` | 缺少下载 token |
+| `expired_token` | token 已过期或不存在 |
+| `verification_required` | 当前下载需要先完成验证码 |
+| `verification_failed` | 验证码校验失败 |
+| `invalid_token` | token 无效或已过期 |
+| `token_mismatch` | token 对应文件与当前请求不一致 |
 | `file_not_found` | 请求的文件不存在 |
-| `invalid_path` | 非法的文件路径 |
+| `invalid_path` | 请求路径非法 |
+
+## 6. 注意事项
+
+- `GET /api/latest/{launcher}` 返回纯文本，不是 JSON。
+- `max_versions = 0` 的当前语义是“使用默认值 3”，不是“仅最新版本”。
+- `return_url` 和 `source` 由前端显式传入，服务端不会自动推断来源站点。
+- 站内 API 速查页用于快速浏览与复制示例，正式接入请以本文档为准。
