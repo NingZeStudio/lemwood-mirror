@@ -727,27 +727,29 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
-		// 验证码检查
-		if s.Config.CaptchaEnabled && s.captchaValidator != nil {
-			// 尝试从查询参数获取 token
-			token := r.URL.Query().Get("token")
-			var filePath string
+		// 提取 query 参数中的 token
+		token := r.URL.Query().Get("token")
+		var filePath string
 
-			if token == "" {
-				// 尝试从路径中提取 token: /download/(token)/文件路径
-				parts := strings.SplitN(relPath, "/", 2)
-				if len(parts) == 2 {
-					potentialToken := parts[0]
-					potentialPath := parts[1]
-					
-					// 检查这个 token 是否有效
-					if _, valid := s.downloadTokenMgr.Peek(potentialToken); valid {
-						token = potentialToken
-						filePath = potentialPath
-					}
+		// 如果没有 query token，尝试从路径中提取 token: /download/(token)/文件路径
+		if token == "" {
+			parts := strings.SplitN(relPath, "/", 2)
+			if len(parts) == 2 {
+				potentialToken := parts[0]
+				potentialPath := parts[1]
+				
+				// 检查这个 token 是否有效，或者它的长度为 64 (标准的 token 长度)
+				_, valid := s.downloadTokenMgr.Peek(potentialToken)
+				if valid || len(potentialToken) == 64 {
+					token = potentialToken
+					filePath = potentialPath
+					relPath = potentialPath // 无论验证码是否开启，都在这里剥离 token
 				}
 			}
+		}
 
+		// 验证码检查
+		if s.Config.CaptchaEnabled && s.captchaValidator != nil {
 			if token == "" {
 				// 没有 token，检查是否是浏览器请求
 				if isBrowserRequest(r) {
