@@ -1,402 +1,365 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { getStatus, getLatest, getCaptchaConfig } from '@/services/api';
-import { Search, File, Folder, Download, Copy, Loader2, FileArchive, HardDrive, ChevronRight, Home, ArrowLeft } from 'lucide-vue-next';
-import Input from '@/components/ui/Input.vue';
-import Button from '@/components/ui/Button.vue';
-import Badge from '@/components/ui/Badge.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
-import { cn } from '@/lib/utils';
-import { useClipboard } from '@vueuse/core';
-import { getLauncherDisplayName } from '@/lib/launcher-info';
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  ArrowLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  File,
+  FileArchive,
+  Folder,
+  HardDrive,
+  Home,
+  Search
+} from 'lucide-vue-next'
+import { useClipboard } from '@vueuse/core'
+import { getStatus, getLatest, getCaptchaConfig } from '@/services/api'
+import { getLauncherDisplayName } from '@/lib/launcher-info'
+import { cn } from '@/lib/utils'
+import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
+import CardContent from '@/components/ui/CardContent.vue'
+import Input from '@/components/ui/Input.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
-/**
- * 文件浏览页面的路由参数
- * @typedef {{ launcherName?: string, versionName?: string }} RouteProps
- */
-
-/** @type {RouteProps} */
 const props = defineProps({
   launcherName: String,
   versionName: String
-});
+})
 
-const loading = ref(true);
-const searchQuery = ref('');
-const launchers = ref({});
-const latestData = ref({});
-const captchaConfig = ref({ enabled: false, app_id: '' });
-const { copy, copied } = useClipboard();
+const loading = ref(true)
+const searchQuery = ref('')
+const launchers = ref({})
+const latestData = ref({})
+const captchaConfig = ref({ enabled: false, app_id: '' })
+const { copy, copied } = useClipboard()
 
-const route = useRoute();
-const router = useRouter();
-// 导航路径栈
-const currentPath = ref([]);
+const route = useRoute()
+const router = useRouter()
+const currentPath = ref([])
 
-/**
- * 加载启动器和版本数据
- */
 const loadData = async () => {
-  loading.value = true;
+  loading.value = true
   try {
     const [statusRes, latestRes, captchaRes] = await Promise.all([
-      getStatus(), 
+      getStatus(),
       getLatest(),
       getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
-    ]);
-    const sortedLaunchers = {};
-    Object.keys(statusRes.data).sort().forEach(key => {
+    ])
+
+    const sortedLaunchers = {}
+    Object.keys(statusRes.data)
+      .sort()
+      .forEach((key) => {
         sortedLaunchers[key] = statusRes.data[key].sort((a, b) =>
-            String(b.tag_name || b.name).localeCompare(String(a.tag_name || a.name))
-        );
-    });
-    launchers.value = sortedLaunchers;
-    latestData.value = latestRes.data;
-    captchaConfig.value = captchaRes.data;
+          String(b.tag_name || b.name).localeCompare(String(a.tag_name || a.name))
+        )
+      })
+
+    launchers.value = sortedLaunchers
+    latestData.value = latestRes.data
+    captchaConfig.value = captchaRes.data
   } catch (error) {
-    console.error(error);
+    console.error(error)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
-};
+}
 
-/**
- * 根据文件扩展名获取图标
- * @param {string} filename - 文件名
- * @returns {import('lucide-vue-next').Component} 图标组件
- */
 const getFileIcon = (filename) => {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return FileArchive;
-  if (['exe', 'msi', 'apk', 'dmg'].includes(ext)) return HardDrive;
-  return File;
-};
+  const ext = filename.split('.').pop()?.toLowerCase()
+  if (['zip', 'tar', 'gz', '7z', 'rar'].includes(ext)) return FileArchive
+  if (['exe', 'msi', 'apk', 'dmg'].includes(ext)) return HardDrive
+  return File
+}
 
-/**
- * 格式化日期
- * @param {string} dateString - 日期字符串
- * @returns {string} 格式化后的日期
- */
 const formatDate = (dateString) => {
-  if (!dateString) return '未知';
+  if (!dateString) return '未知'
   try {
     return new Date(dateString).toLocaleDateString('zh-CN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-    });
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
   } catch {
-    return dateString;
+    return dateString
   }
-};
+}
 
-/**
- * 复制URL到剪贴板
- * @param {string} url - 要复制的URL
- */
 const copyUrl = (url) => {
-    copy(url);
-};
+  copy(url)
+}
 
 const handleDownload = (item) => {
-    if (!captchaConfig.value.enabled) {
-        window.open(item.downloadUrl, '_blank');
-        return;
-    }
-    const launcherName = currentPath.value[0]?.id;
-    const versionName = currentPath.value[1]?.id;
-    if (!launcherName || !versionName) {
-        window.open(item.downloadUrl, '_blank');
-        return;
-    }
-    const filePath = `${launcherName}/${versionName}/${item.name}`;
-    router.push(`/verify?file=${encodeURIComponent(filePath)}`);
-};
+  if (!captchaConfig.value.enabled) {
+    window.open(item.downloadUrl, '_blank')
+    return
+  }
 
-/**
- * 导航到指定项目
- * @param {Object} item - 要导航到的项目
- * @param {'launcher'|'version'} type - 项目类型
- */
+  const launcherName = currentPath.value[0]?.id
+  const versionName = currentPath.value[1]?.id
+  if (!launcherName || !versionName) {
+    window.open(item.downloadUrl, '_blank')
+    return
+  }
+
+  const filePath = `${launcherName}/${versionName}/${item.name}`
+  router.push(`/verify?file=${encodeURIComponent(filePath)}`)
+}
+
 const navigateTo = (item, type) => {
-    if (type === 'launcher') {
-        currentPath.value = [{ name: getLauncherDisplayName(item.id), id: item.id, type: 'launcher', displayName: item.id }];
-    } else if (type === 'version') {
-        currentPath.value.push({ name: item.name, id: item.id, type: 'version', data: item.data });
-    }
-    updateUrl();
-};
+  if (type === 'launcher') {
+    currentPath.value = [
+      { name: getLauncherDisplayName(item.id), id: item.id, type: 'launcher', displayName: item.id }
+    ]
+  } else if (type === 'version') {
+    currentPath.value.push({ name: item.name, id: item.id, type: 'version', data: item.data })
+  }
+  updateUrl()
+}
 
-/**
- * 返回上一级
- */
 const navigateUp = () => {
-    currentPath.value.pop();
-    updateUrl();
-};
+  currentPath.value.pop()
+  updateUrl()
+}
 
-/**
- * 导航到指定面包屑
- * @param {number} index - 面包屑索引
- */
 const navigateToBreadcrumb = (index) => {
-    if (index === -1) {
-        currentPath.value = [];
-        router.push({ name: 'files' });
-    } else {
-        // 只保留到指定索引的路径
-        currentPath.value = currentPath.value.slice(0, index + 1);
-        updateUrl();
-    }
-};
+  if (index === -1) {
+    currentPath.value = []
+    router.push({ name: 'files' })
+  } else {
+    currentPath.value = currentPath.value.slice(0, index + 1)
+    updateUrl()
+  }
+}
 
-/**
- * 更新URL以反映当前路径
- */
 const updateUrl = () => {
-    if (currentPath.value.length === 0) {
-        router.push({ name: 'files' });
-    } else if (currentPath.value.length === 1) {
-        router.push({ name: 'files-launcher', params: { launcherName: currentPath.value[0].id } });
-    } else if (currentPath.value.length >= 2) {
-        router.push({
-            name: 'files-version',
-            params: {
-                launcherName: currentPath.value[0].id,
-                versionName: currentPath.value[1].id
-            }
-        });
-    }
-};
+  if (currentPath.value.length === 0) {
+    router.push({ name: 'files' })
+  } else if (currentPath.value.length === 1) {
+    router.push({ name: 'files-launcher', params: { launcherName: currentPath.value[0].id } })
+  } else if (currentPath.value.length >= 2) {
+    router.push({
+      name: 'files-version',
+      params: {
+        launcherName: currentPath.value[0].id,
+        versionName: currentPath.value[1].id
+      }
+    })
+  }
+}
 
-/**
- * 当前层级的项目列表
- */
 const currentItems = computed(() => {
-    const query = searchQuery.value.toLowerCase().trim();
-    const depth = currentPath.value.length;
+  const query = searchQuery.value.toLowerCase().trim()
+  const depth = currentPath.value.length
 
-    if (depth === 0) {
-        // 根目录：显示启动器
-        return Object.keys(launchers.value).map(name => ({
-            id: name,
-            name: getLauncherDisplayName(name),
-            displayName: name, // 保留原始名称用于路由等用途
-            type: 'launcher',
-            count: launchers.value[name].length,
-            latest: latestData.value[name]
-        })).filter(l => !query || l.name.toLowerCase().includes(query));
-    } else if (depth === 1) {
-        // 启动器目录：显示版本
-        const launcherName = currentPath.value[0].id;
-        const versions = launchers.value[launcherName] || [];
+  if (depth === 0) {
+    return Object.keys(launchers.value)
+      .map((name) => ({
+        id: name,
+        name: getLauncherDisplayName(name),
+        displayName: name,
+        type: 'launcher',
+        count: launchers.value[name].length,
+        latest: latestData.value[name]
+      }))
+      .filter((l) => !query || l.name.toLowerCase().includes(query))
+  }
 
-        return versions.map(v => ({
-            id: v.tag_name || v.name,
-            name: v.tag_name || v.name,
-            type: 'version',
-            date: v.published_at,
-            isLatest: latestData.value[launcherName] === (v.tag_name || v.name),
-            data: v,
-            fileCount: v.assets?.length || 0
-        })).filter(v => !query || v.name.toLowerCase().includes(query));
-    } else if (depth === 2) {
-         // 版本目录：显示文件
-         const versionData = currentPath.value[1].data;
-         const launcherName = currentPath.value[0].id;
-         const versionName = currentPath.value[1].id;
+  if (depth === 1) {
+    const launcherName = currentPath.value[0].id
+    const versions = launchers.value[launcherName] || []
 
-         return (versionData.assets || []).map(asset => ({
-             id: asset.name,
-             name: asset.name,
-             type: 'file',
-             size: asset.size,
-             downloadUrl: asset.url && asset.url.startsWith('http')
- ? asset.url
- : `https://miawa.cn/download/${launcherName}/${versionName}/${asset.name}`
-         })).filter(f => !query || f.name.toLowerCase().includes(query));
-    }
-    return [];
-});
+    return versions
+      .map((v) => ({
+        id: v.tag_name || v.name,
+        name: v.tag_name || v.name,
+        type: 'version',
+        date: v.published_at,
+        isLatest: latestData.value[launcherName] === (v.tag_name || v.name),
+        data: v,
+        fileCount: v.assets?.length || 0
+      }))
+      .filter((v) => !query || v.name.toLowerCase().includes(query))
+  }
 
-/**
- * 初始化页面数据和路径
- */
+  if (depth === 2) {
+    const versionData = currentPath.value[1].data
+    const launcherName = currentPath.value[0].id
+    const versionName = currentPath.value[1].id
+
+    return (versionData.assets || [])
+      .map((asset) => ({
+        id: asset.name,
+        name: asset.name,
+        type: 'file',
+        size: asset.size,
+        downloadUrl:
+          asset.url && asset.url.startsWith('http')
+            ? asset.url
+            : `https://miawa.cn/download/${launcherName}/${versionName}/${asset.name}`
+      }))
+      .filter((f) => !query || f.name.toLowerCase().includes(query))
+  }
+
+  return []
+})
+
 onMounted(async () => {
-  await loadData();
+  await loadData()
 
-  // 使用路由参数初始化路径
-  if (props.launcherName) {
-    if (launchers.value[props.launcherName]) {
-      currentPath.value = [{ name: getLauncherDisplayName(props.launcherName), id: props.launcherName, type: 'launcher', displayName: props.launcherName }];
+  if (props.launcherName && launchers.value[props.launcherName]) {
+    currentPath.value = [
+      {
+        name: getLauncherDisplayName(props.launcherName),
+        id: props.launcherName,
+        type: 'launcher',
+        displayName: props.launcherName
+      }
+    ]
 
-      if (props.versionName) {
-        const versions = launchers.value[props.launcherName] || [];
-        const versionData = versions.find(v => (v.tag_name || v.name) === props.versionName);
+    if (props.versionName) {
+      const versions = launchers.value[props.launcherName] || []
+      const versionData = versions.find((v) => (v.tag_name || v.name) === props.versionName)
 
-        if (versionData) {
-          currentPath.value.push({
-            name: props.versionName,
-            id: props.versionName,
-            type: 'version',
-            data: versionData
-          });
-        }
+      if (versionData) {
+        currentPath.value.push({
+          name: props.versionName,
+          id: props.versionName,
+          type: 'version',
+          data: versionData
+        })
       }
     }
   }
-});
+})
 
-/**
- * 更新页面标题和 SEO meta 信息
- */
 const updateMetaInfo = () => {
-  const baseTitle = '文件列表 - 柠枺镜像状态';
-  let title = baseTitle;
-  let description = '浏览和下载 Minecraft 启动器版本文件';
-  
-  if (currentPath.value.length === 1) {
-    const launcher = currentPath.value[0];
-    title = `${launcher.name} - 柠枺镜像状态`;
-    description = `浏览 ${launcher.name} 的所有版本`;
-  } else if (currentPath.value.length >= 2) {
-    const launcher = currentPath.value[0];
-    const version = currentPath.value[1];
-    title = `${version.name} - ${launcher.name} - 柠枺镜像状态`;
-    description = `下载 ${launcher.name} ${version.name} 版本的资源文件`;
-  }
-  
-  document.title = title;
-  
-  // 更新 meta 标签
-  const metaDescription = document.querySelector('meta[name="description"]');
-  const metaOgTitle = document.querySelector('meta[property="og:title"]');
-  const metaOgDescription = document.querySelector('meta[property="og:description"]');
-  const metaTwitterTitle = document.querySelector('meta[property="twitter:title"]');
-  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]');
-  
-  if (metaDescription) metaDescription.setAttribute('content', description);
-  if (metaOgTitle) metaOgTitle.setAttribute('content', title);
-  if (metaOgDescription) metaOgDescription.setAttribute('content', description);
-  if (metaTwitterTitle) metaTwitterTitle.setAttribute('content', title);
-  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', description);
-};
+  const baseTitle = '文件列表 - 柠枺镜像状态'
+  let title = baseTitle
+  let description = '浏览和下载 Minecraft 启动器版本文件'
 
-// 监听路径变化，更新 meta 信息
+  if (currentPath.value.length === 1) {
+    const launcher = currentPath.value[0]
+    title = `${launcher.name} - 柠枺镜像状态`
+    description = `浏览 ${launcher.name} 的所有版本`
+  } else if (currentPath.value.length >= 2) {
+    const launcher = currentPath.value[0]
+    const version = currentPath.value[1]
+    title = `${version.name} - ${launcher.name} - 柠枺镜像状态`
+    description = `下载 ${launcher.name} ${version.name} 版本的资源文件`
+  }
+
+  document.title = title
+
+  const metaDescription = document.querySelector('meta[name="description"]')
+  const metaOgTitle = document.querySelector('meta[property="og:title"]')
+  const metaOgDescription = document.querySelector('meta[property="og:description"]')
+  const metaTwitterTitle = document.querySelector('meta[property="twitter:title"]')
+  const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]')
+
+  if (metaDescription) metaDescription.setAttribute('content', description)
+  if (metaOgTitle) metaOgTitle.setAttribute('content', title)
+  if (metaOgDescription) metaOgDescription.setAttribute('content', description)
+  if (metaTwitterTitle) metaTwitterTitle.setAttribute('content', title)
+  if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', description)
+}
+
 watch([() => props.launcherName, () => props.versionName, currentPath], () => {
-  updateMetaInfo();
-}, { deep: true });
+  updateMetaInfo()
+}, { deep: true })
 </script>
 
 <template>
-  <div class="flex flex-col h-full space-y-4 max-w-full">
-    <!-- Header & Breadcrumbs -->
-    <div class="flex flex-col space-y-4 shrink-0">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 w-full">
-             <div class="flex items-center gap-1 sm:gap-2 overflow-hidden text-sm font-medium text-muted-foreground min-w-0">
-                 <Button variant="ghost" size="icon" class="h-8 w-8 shrink-0" @click="navigateToBreadcrumb(-1)" :disabled="!currentPath.length">
-                     <Home class="h-4 w-4" />
-                 </Button>
-                 <div class="flex overflow-x-auto py-1 hide-scrollbar min-w-0">
-                     <template v-for="(crumb, index) in currentPath" :key="crumb.id">
-                         <ChevronRight class="h-4 w-4 shrink-0 opacity-50 my-auto" />
-                         <Button 
-                           variant="ghost" 
-                           size="sm" 
-                           class="h-8 px-2 truncate max-w-[100px] sm:max-w-[120px] whitespace-nowrap" 
-                           @click="navigateToBreadcrumb(index)">
-                             {{ crumb.name }}
-                         </Button>
-                     </template>
-                 </div>
-             </div>
-             <div class="relative w-full sm:w-40 md:w-64 shrink-0">
-                 <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                 <Input
-                   v-model="searchQuery"
-                   type="search"
-                   placeholder="筛选..."
-                   class="pl-8 h-9 w-full bg-background/50 backdrop-blur border-white/10"
-                 />
-             </div>
-        </div>
+  <div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div class="space-y-2">
+        <h1 class="text-3xl font-bold tracking-tight">文件浏览</h1>
+        <p class="text-muted-foreground">按启动器、版本和文件层级浏览镜像资源。</p>
+      </div>
+      <div class="relative w-full sm:w-72">
+        <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input v-model="searchQuery" type="search" placeholder="筛选当前目录..." class="pl-9" />
+      </div>
     </div>
 
-    <!-- Content Area -->
-    <div v-if="loading" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-        <Skeleton class="aspect-square rounded-xl" v-for="i in 10" :key="i" />
+    <Card>
+      <CardContent class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex min-w-0 items-center gap-1 overflow-x-auto text-sm text-muted-foreground">
+          <Button variant="ghost" size="sm" class="shrink-0" @click="navigateToBreadcrumb(-1)">
+            <Home class="mr-2 h-4 w-4" />
+            根目录
+          </Button>
+          <template v-for="(crumb, index) in currentPath" :key="crumb.id">
+            <ChevronRight class="h-4 w-4 shrink-0" />
+            <Button variant="ghost" size="sm" class="shrink-0" @click="navigateToBreadcrumb(index)">
+              {{ crumb.name }}
+            </Button>
+          </template>
+        </div>
+        <span v-if="copied" class="text-xs text-muted-foreground">链接已复制</span>
+      </CardContent>
+    </Card>
+
+    <div v-if="loading" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <Skeleton v-for="i in 12" :key="i" class="h-20 rounded-lg" />
     </div>
 
-    <div v-else-if="!currentItems.length" class="flex flex-col items-center justify-center py-20 text-muted-foreground">
-        <Folder class="h-16 w-16 mb-4 opacity-20" />
-        <p>空文件夹</p>
+    <div v-else-if="!currentItems.length" class="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
+      <Folder class="mx-auto mb-4 h-12 w-12 opacity-40" />
+      <p class="font-medium text-foreground">空文件夹</p>
+      <p class="mt-1 text-sm">没有找到匹配的项目。</p>
     </div>
 
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 pb-20">
-        <!-- Back Button (if not root) -->
-        <div 
-            v-if="currentPath.length > 0" 
-            @click="navigateUp"
-            class="group relative flex flex-row items-center p-3 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/5 hover:bg-muted/10 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] w-full max-w-[400px] mx-auto sm:max-w-none"
-        >
-             <ArrowLeft class="h-6 w-6 text-muted-foreground group-hover:text-foreground transition-colors mr-3" />
-             <span class="text-xs font-medium text-muted-foreground flex-1">返回上一级</span>
-        </div>
+    <div v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <button
+        v-if="currentPath.length > 0"
+        type="button"
+        class="flex items-center gap-3 rounded-lg border border-dashed bg-background p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+        @click="navigateUp"
+      >
+        <ArrowLeft class="h-5 w-5 text-muted-foreground" />
+        <span class="text-sm font-medium">返回上一级</span>
+      </button>
 
-        <!-- Items -->
-        <div 
-            v-for="item in currentItems" 
-            :key="item.id"
-            @click="item.type !== 'file' ? navigateTo(item, item.type) : null"
-            :class="cn(
-                'group relative flex flex-row items-center p-3 rounded-xl border border-white/5 bg-background/40 backdrop-blur-md shadow-sm transition-all duration-200',
-                'w-full max-w-[400px] mx-auto sm:max-w-none', // 在移动端居中并限制宽度
-                item.type !== 'file' ? 'cursor-pointer hover:bg-background/60 hover:border-white/20 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]' : ''
-            )"
-        >
-            <!-- Icon Area -->
-            <div class="flex-shrink-0 p-2 rounded-lg bg-gradient-to-br from-primary/10 to-primary/5 text-primary group-hover:from-primary/20 group-hover:to-primary/10 transition-colors mr-3">
-                 <Folder v-if="item.type === 'launcher'" class="h-5 w-5" />
-                 <Folder v-else-if="item.type === 'version'" class="h-5 w-5" />
-                 <component v-else :is="getFileIcon(item.name)" class="h-5 w-5" />
+      <Card
+        v-for="item in currentItems"
+        :key="item.id"
+        :class="cn('transition-colors hover:bg-accent/50', item.type !== 'file' ? 'cursor-pointer' : '')"
+        @click="item.type !== 'file' ? navigateTo(item, item.type) : null"
+      >
+        <CardContent class="flex items-center gap-3 p-4">
+          <div class="rounded-md bg-primary/10 p-2 text-primary">
+            <Folder v-if="item.type === 'launcher' || item.type === 'version'" class="h-5 w-5" />
+            <component v-else :is="getFileIcon(item.name)" class="h-5 w-5" />
+          </div>
+
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <h3 class="truncate text-sm font-medium" :title="item.name">{{ item.name }}</h3>
+              <Badge v-if="item.isLatest" variant="success">Latest</Badge>
             </div>
-            
-            <!-- Text Area -->
-            <div class="flex-1 min-w-0">
-                <div class="flex items-center justify-between">
-                    <h3 class="font-medium truncate text-sm leading-none mr-2" :title="item.name">{{ item.name }}</h3>
-                    <div v-if="item.isLatest" class="px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-600 text-[9px] font-bold uppercase tracking-wider border border-green-500/20 flex-shrink-0">
-                        Latest
-                    </div>
-                </div>
-                <div class="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
-                    <span v-if="item.type === 'launcher'">{{ item.count }} 版本</span>
-                    <span v-else-if="item.type === 'version'">{{ formatDate(item.date) }}</span>
-                    <span v-else>文件</span>
-                </div>
-            </div>
-            
-            <div v-if="item.type === 'file'" class="flex-shrink-0 flex gap-0.5 ml-2">
-                 <Button size="icon" variant="ghost" class="h-6 w-6" @click.stop="copyUrl(item.downloadUrl)">
-                     <Copy class="h-3 w-3" />
-                 </Button>
-                 <Button size="icon" variant="ghost" class="h-6 w-6" @click.stop="handleDownload(item)">
-                     <Download class="h-3 w-3" />
-                 </Button>
-            </div>
-        </div>
+            <p class="mt-1 text-xs text-muted-foreground">
+              <span v-if="item.type === 'launcher'">{{ item.count }} 个版本</span>
+              <span v-else-if="item.type === 'version'">{{ formatDate(item.date) }} · {{ item.fileCount }} 个文件</span>
+              <span v-else>文件资源</span>
+            </p>
+          </div>
+
+          <div v-if="item.type === 'file'" class="flex shrink-0 gap-1">
+            <Button size="icon" variant="ghost" class="h-8 w-8" @click.stop="copyUrl(item.downloadUrl)">
+              <Copy class="h-4 w-4" />
+              <span class="sr-only">复制链接</span>
+            </Button>
+            <Button size="icon" variant="ghost" class="h-8 w-8" @click.stop="handleDownload(item)">
+              <Download class="h-4 w-4" />
+              <span class="sr-only">下载</span>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   </div>
 </template>
-
-
-<style scoped>
-.hide-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.hide-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-</style>
