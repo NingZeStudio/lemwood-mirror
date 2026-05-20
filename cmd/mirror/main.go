@@ -65,6 +65,7 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 	timeout := time.Duration(sc.cfg.DownloadTimeoutMinutes) * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	effectiveMaxVersions := config.NormalizeMaxVersions(lcfg.MaxVersions)
 
 	repoURL, err := browser.ResolveRepoURL(lcfg.SourceURL, lcfg.RepoSelector)
 	if err != nil {
@@ -81,23 +82,15 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 	var releases []*github.RepositoryRelease
 	var resp *github.Response
 
-	if lcfg.MaxVersions > 0 {
-		releases, resp, err = sc.ghc.ListReleases(ctx, owner, repo, lcfg.MaxVersions)
-	} else {
-		var rel *github.RepositoryRelease
-		if lcfg.IncludePrerelease {
-			rel, resp, err = sc.ghc.LatestReleaseIncludingPrerelease(ctx, owner, repo)
-		} else {
-			rel, resp, err = sc.ghc.LatestRelease(ctx, owner, repo)
-		}
-		if err == nil {
-			releases = []*github.RepositoryRelease{rel}
-		}
-	}
+	releases, resp, err = sc.ghc.ListReleasesByPolicy(ctx, owner, repo, effectiveMaxVersions, lcfg.IncludePrerelease)
 
 	if err != nil {
 		log.Printf("%s: 获取 release 失败: %v", lcfg.Name, err)
 		gh.BackoffIfRateLimited(resp)
+		return
+	}
+	if len(releases) == 0 {
+		log.Printf("%s: 未找到符合条件的 release", lcfg.Name)
 		return
 	}
 
@@ -140,6 +133,10 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 			sc.mu.Unlock()
 			log.Printf("%s: 已更新至 %s", lcfg.Name, version)
 		}
+	}
+
+	if err := sc.s.TrimLauncherVersions(lcfg.Name, effectiveMaxVersions); err != nil {
+		log.Printf("%s: 清理旧版本失败: %v", lcfg.Name, err)
 	}
 }
 
@@ -233,6 +230,13 @@ func main() {
 	// 修复 index.json 中的 URL 域名不一致问题
 	if err := s.FixAssetURLs(); err != nil {
 		log.Printf("修复资产 URL 失败: %v", err)
+	}
+
+	for _, lcfg := range cfg.Launchers {
+		keep := config.NormalizeMaxVersions(lcfg.MaxVersions)
+		if err := s.TrimLauncherVersions(lcfg.Name, keep); err != nil {
+			log.Printf("%s: 启动时清理旧版本失败: %v", lcfg.Name, err)
+		}
 	}
 	
 	ghc := gh.NewClient(cfg.GitHubToken)

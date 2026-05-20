@@ -58,6 +58,13 @@ type Config struct {
 	MySQLMigration         bool             `json:"mysql_migration"`
 }
 
+func NormalizeMaxVersions(v int) int {
+	if v <= 0 {
+		return 3
+	}
+	return v
+}
+
 func LoadConfig(projectRoot string) (*Config, error) {
 	cfgPath := filepath.Join(projectRoot, "config.json")
 	f, err := os.Open(cfgPath)

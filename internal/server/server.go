@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -25,6 +26,8 @@ import (
 	"sync"
 	"time"
 )
+
+var errForbiddenPath = errors.New("forbidden")
 
 type State struct {
 	BasePath    string
@@ -102,6 +105,67 @@ func (s *State) RemoveVersion(launcher string, version string) {
 	}
 	delete(s.index[launcher], version)
 	s.latest[launcher] = s.pickLatest(s.index[launcher])
+}
+
+func (s *State) TrimLauncherVersions(launcher string, keep int) error {
+	keep = config.NormalizeMaxVersions(keep)
+
+	s.mu.RLock()
+	launcherVersions := s.index[launcher]
+	if len(launcherVersions) == 0 {
+		s.mu.RUnlock()
+		return nil
+	}
+
+	versions := make([]string, 0, len(launcherVersions))
+	infoPaths := make(map[string]string, len(launcherVersions))
+	for version, infoPath := range launcherVersions {
+		versions = append(versions, version)
+		infoPaths[version] = infoPath
+	}
+	s.mu.RUnlock()
+
+	if len(versions) <= keep {
+		return nil
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return compareVersions(versions[i], versions[j]) > 0
+	})
+
+	var deleted []string
+	for _, version := range versions[keep:] {
+		infoPath := infoPaths[version]
+		if infoPath == "" {
+			continue
+		}
+
+		versionDir := filepath.Dir(infoPath)
+		if err := removePathUnderBase(s.BasePath, versionDir); err != nil {
+			return fmt.Errorf("删除版本 %s 目录失败: %w", version, err)
+		}
+
+		s.mu.Lock()
+		if currentVersions := s.index[launcher]; currentVersions != nil {
+			delete(currentVersions, version)
+			if len(currentVersions) == 0 {
+				delete(s.index, launcher)
+				delete(s.latest, launcher)
+			} else {
+				s.latest[launcher] = s.pickLatest(currentVersions)
+			}
+		}
+		delete(s.infoCache, infoPath)
+		s.mu.Unlock()
+
+		deleted = append(deleted, version)
+	}
+
+	if len(deleted) > 0 {
+		log.Printf("%s: 已清理旧版本 %s", launcher, strings.Join(deleted, ", "))
+	}
+
+	return nil
 }
 
 // ClearLatestFlags 清除指定启动器所有版本的 is_latest 标记
@@ -453,16 +517,12 @@ func (s *State) handleAdminFiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fullPath := filepath.Join(s.BasePath, path)
-		
-		// 安全检查
-		absBase, _ := filepath.Abs(s.BasePath)
-		absPath, _ := filepath.Abs(fullPath)
-		if !strings.HasPrefix(absPath, absBase) || absPath == absBase {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
 
-		if err := os.RemoveAll(fullPath); err != nil {
+		if err := removePathUnderBase(s.BasePath, fullPath); err != nil {
+			if errors.Is(err, errForbiddenPath) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -863,6 +923,33 @@ func (s *State) Routes(mux *http.ServeMux) {
 		// Fallback to index.html for SPA-like behavior in admin
 		http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
 	})))
+}
+
+func removePathUnderBase(basePath string, targetPath string) error {
+	absBase, err := filepath.Abs(basePath)
+	if err != nil {
+		return fmt.Errorf("解析基础路径失败: %w", err)
+	}
+
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("解析目标路径失败: %w", err)
+	}
+
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return fmt.Errorf("校验目标路径失败: %w", err)
+	}
+
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return errForbiddenPath
+	}
+
+	if err := os.RemoveAll(absTarget); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // containsDotDot 检查路径是否包含 ".." 元素

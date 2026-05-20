@@ -345,7 +345,7 @@ export function ConfigPage() {
                     {...restField}
                     name={[name, 'max_versions']}
                     label="最大版本数"
-                    extra="0 表示仅检查最新版本"
+                    extra="0 表示使用默认值 3，同时最多保留最近 3 个版本"
                   >
                     <InputNumber min={0} max={50} style={{ width: '100%' }} />
                   </Form.Item>

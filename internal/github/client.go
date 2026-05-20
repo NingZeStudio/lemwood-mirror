@@ -68,6 +68,47 @@ func (c *Client) ListReleases(ctx context.Context, owner, repo string, limit int
 	return releases, resp, nil
 }
 
+func (c *Client) ListReleasesByPolicy(ctx context.Context, owner, repo string, limit int, includePrerelease bool) ([]*github.RepositoryRelease, *github.Response, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	filtered := make([]*github.RepositoryRelease, 0, limit)
+	opts := &github.ListOptions{PerPage: min(limit*3, 100)}
+	var lastResp *github.Response
+
+	for {
+		releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, opts)
+		if err != nil {
+			return nil, resp, err
+		}
+		lastResp = resp
+		if len(releases) == 0 {
+			break
+		}
+
+		for _, rel := range releases {
+			if rel == nil {
+				continue
+			}
+			if !includePrerelease && rel.GetPrerelease() {
+				continue
+			}
+			filtered = append(filtered, rel)
+			if len(filtered) >= limit {
+				return filtered[:limit], lastResp, nil
+			}
+		}
+
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return filtered, lastResp, nil
+}
+
 // BackoffIfRateLimited 检查响应是否受到速率限制，并在需要时休眠。
 func BackoffIfRateLimited(resp *github.Response) {
     if resp == nil || resp.Rate.Remaining > 0 {
