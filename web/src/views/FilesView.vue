@@ -107,13 +107,9 @@ const handleDownload = async (item) => {
   if (!captchaConfig.value.enabled) {
     try {
       const response = await prepareDownload(filePath, returnUrl, source)
-      const landingUrl = response.data.landing_url
-      if (landingUrl) {
-        if (landingUrl.startsWith('http')) {
-          window.location.href = landingUrl
-        } else {
-          router.push(landingUrl)
-        }
+      const token = response.data.download_token
+      if (token) {
+        router.push(`/download-started?token=${token}`)
       } else {
         window.open(response.data.download_url || item.downloadUrl, '_blank')
       }

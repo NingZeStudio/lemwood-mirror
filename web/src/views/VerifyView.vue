@@ -48,13 +48,9 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
     const source = route.query.source || 'verify-download'
     const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value, returnUrl, source)
     
-    const landingUrl = response.data.landing_url
-    if (landingUrl) {
-      if (landingUrl.startsWith('http')) {
-        window.location.href = landingUrl
-      } else {
-        router.push(landingUrl)
-      }
+    const token = response.data.download_token
+    if (token) {
+      router.push(`/download-started?token=${token}`)
       return
     }
 
