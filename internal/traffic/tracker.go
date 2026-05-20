@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type Tracker struct {
 	appealContact string
 	fileMutex     sync.Mutex
 	banMutex      sync.Mutex
+	pendingMutex  sync.Mutex
+	pendingBytes  map[string]int64
 	storagePath   string
 	syncChan      chan struct{} // 用于异步触发文件同步
 	ctx           context.Context
@@ -33,6 +36,7 @@ func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) 
 		limitGB:       int64(limitGB) * 1024 * 1024 * 1024,
 		banRecordFile: banRecordFile,
 		appealContact: appealContact,
+		pendingBytes:  make(map[string]int64),
 		storagePath:   storagePath,
 		syncChan:      make(chan struct{}, 1),
 		ctx:           ctx,
@@ -105,6 +109,138 @@ func (t *Tracker) RecordTraffic(ip string, bytes int64) error {
 
 func (t *Tracker) GetDailyTraffic(ip string) (int64, error) {
 	return db.GetDailyTraffic(ip)
+}
+
+// EstimateTransferBytes returns the conservative byte estimate for a request.
+func EstimateTransferBytes(fileSize int64, rangeHeader string) int64 {
+	if fileSize <= 0 {
+		return 0
+	}
+
+	rangeHeader = strings.TrimSpace(rangeHeader)
+	if rangeHeader == "" || !strings.HasPrefix(rangeHeader, "bytes=") {
+		return fileSize
+	}
+
+	spec := strings.TrimSpace(strings.TrimPrefix(rangeHeader, "bytes="))
+	if spec == "" || strings.Contains(spec, ",") {
+		return fileSize
+	}
+
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return fileSize
+	}
+
+	startStr := strings.TrimSpace(parts[0])
+	endStr := strings.TrimSpace(parts[1])
+
+	switch {
+	case startStr == "" && endStr == "":
+		return fileSize
+	case startStr == "":
+		suffixLen, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || suffixLen <= 0 {
+			return fileSize
+		}
+		if suffixLen > fileSize {
+			return fileSize
+		}
+		return suffixLen
+	default:
+		start, err := strconv.ParseInt(startStr, 10, 64)
+		if err != nil || start < 0 || start >= fileSize {
+			return fileSize
+		}
+		if endStr == "" {
+			return fileSize - start
+		}
+		end, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil || end < start {
+			return fileSize
+		}
+		if end >= fileSize {
+			end = fileSize - 1
+		}
+		return end - start + 1
+	}
+}
+
+func (t *Tracker) ReserveTraffic(ip string, estimatedBytes int64) (bool, int64, int64, string) {
+	if t == nil {
+		return true, 0, estimatedBytes, ""
+	}
+	if estimatedBytes < 0 {
+		estimatedBytes = 0
+	}
+	if t.limitGB == 0 || estimatedBytes == 0 {
+		currentBytes, err := t.GetDailyTraffic(ip)
+		if err != nil {
+			log.Printf("[防刷墙] 获取IP %s 流量失败: %v", ip, err)
+			return false, 0, 0, "获取当日流量失败"
+		}
+		return true, currentBytes, currentBytes + estimatedBytes, ""
+	}
+
+	t.pendingMutex.Lock()
+	defer t.pendingMutex.Unlock()
+
+	currentBytes, err := t.GetDailyTraffic(ip)
+	if err != nil {
+		log.Printf("[防刷墙] 获取IP %s 流量失败: %v", ip, err)
+		return false, 0, 0, "获取当日流量失败"
+	}
+
+	pendingBytes := t.pendingBytes[ip]
+	projectedBytes := currentBytes + pendingBytes + estimatedBytes
+	if projectedBytes > t.limitGB {
+		reason := fmt.Sprintf(
+			"单日下载流量超过%dGB限制（当前 %.2fGB，预计 %.2fGB）",
+			t.limitGB/(1024*1024*1024),
+			ToGB(currentBytes+pendingBytes),
+			ToGB(projectedBytes),
+		)
+		return false, currentBytes, projectedBytes, reason
+	}
+
+	t.pendingBytes[ip] = pendingBytes + estimatedBytes
+	return true, currentBytes, projectedBytes, ""
+}
+
+func (t *Tracker) releasePending(ip string, estimatedBytes int64) {
+	if t == nil || estimatedBytes <= 0 {
+		return
+	}
+
+	t.pendingMutex.Lock()
+	defer t.pendingMutex.Unlock()
+
+	remaining := t.pendingBytes[ip] - estimatedBytes
+	if remaining <= 0 {
+		delete(t.pendingBytes, ip)
+		return
+	}
+	t.pendingBytes[ip] = remaining
+}
+
+func (t *Tracker) FinalizeTraffic(ip string, estimatedBytes int64, actualBytes int64) (bool, string, float64, error) {
+	if t == nil {
+		return false, "", 0, nil
+	}
+	defer t.releasePending(ip, estimatedBytes)
+
+	if actualBytes > 0 {
+		if err := t.RecordTraffic(ip, actualBytes); err != nil {
+			return false, "", 0, err
+		}
+	}
+
+	if t.limitGB == 0 {
+		return false, "", 0, nil
+	}
+
+	banned, reason, trafficGB := t.CheckAndBan(ip)
+	return banned, reason, trafficGB, nil
 }
 
 // ToGB 将字节转换为 GB
@@ -263,6 +399,20 @@ func CheckAndBan(ip string) (bool, string, float64) {
 		return false, "", 0
 	}
 	return defaultTracker.CheckAndBan(ip)
+}
+
+func ReserveTraffic(ip string, estimatedBytes int64) (bool, int64, int64, string) {
+	if defaultTracker == nil {
+		return true, 0, estimatedBytes, ""
+	}
+	return defaultTracker.ReserveTraffic(ip, estimatedBytes)
+}
+
+func FinalizeTraffic(ip string, estimatedBytes int64, actualBytes int64) (bool, string, float64, error) {
+	if defaultTracker == nil {
+		return false, "", 0, nil
+	}
+	return defaultTracker.FinalizeTraffic(ip, estimatedBytes, actualBytes)
 }
 
 type CountingWriter struct {

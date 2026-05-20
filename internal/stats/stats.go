@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/netutil"
 	"log"
 	"net/http"
 	"sort"
@@ -215,7 +216,7 @@ func getIPInfoSync(ip string) *IPInfo {
 }
 
 func RecordVisit(r *http.Request) {
-	ip := getClientIP(r)
+	ip := netutil.ExtractClientIP(r)
 	path := r.URL.Path
 	ua := r.UserAgent()
 	referer := r.Referer()
@@ -253,7 +254,7 @@ func RecordVisit(r *http.Request) {
 }
 
 func RecordDownload(r *http.Request, fileName, launcher, version string) {
-	ip := getClientIP(r)
+	ip := netutil.ExtractClientIP(r)
 
 	if writeQueue == nil {
 		return
@@ -275,34 +276,6 @@ func RecordDownload(r *http.Request, fileName, launcher, version string) {
 			log.Printf("写入队列已满，丢弃下载记录: %s", ip)
 		}
 	})
-}
-
-func getClientIP(r *http.Request) string {
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip = r.Header.Get("X-Real-IP")
-	}
-	if ip == "" {
-		ip = r.RemoteAddr
-	}
-	if strings.Contains(ip, ",") {
-		ip = strings.Split(ip, ",")[0]
-	}
-	ip = strings.TrimSpace(ip)
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		if !strings.Contains(ip, "]") {
-			ip = ip[:idx]
-		} else if strings.HasSuffix(ip, "]") {
-		} else {
-			lastColon := strings.LastIndex(ip, ":")
-			closingBracket := strings.LastIndex(ip, "]")
-			if lastColon > closingBracket {
-				ip = ip[:lastColon]
-			}
-		}
-	}
-	ip = strings.Trim(ip, "[]")
-	return ip
 }
 
 type StatsData struct {

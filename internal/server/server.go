@@ -11,6 +11,7 @@ import (
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/download_token"
+	"lemwood_mirror/internal/netutil"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 	"log"
@@ -768,37 +769,55 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 
-		// 获取客户端IP用于流量统计
-		clientIP := getClientIPFromRequest(r)
+		clientIP := netutil.ExtractClientIP(r)
 
-		// 创建计数器来跟踪实际传输的字节数
-		counter := &traffic.CountingWriter{}
-		countingWriter := &responseWriterCounter{ResponseWriter: w, counter: counter}
-
-		// 使用自定义的 ResponseWriter 来统计实际传输的流量
-		http.ServeFile(countingWriter, r, cleanPath)
-
-		// 记录实际下载流量
-		if counter.Total > 0 {
-			if err := traffic.RecordTraffic(clientIP, counter.Total); err != nil {
-				log.Printf("[防刷墙] 记录流量失败: %v", err)
-			}
-
-			// 检查是否需要封禁
-			if banned, reason, trafficGB := traffic.CheckAndBan(clientIP); banned {
-				log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
-				// 注意：此时响应可能已经部分发送，无法再返回错误信息
-				return
-			}
+		switch r.Method {
+		case http.MethodHead:
+			http.ServeFile(w, r, cleanPath)
+			return
+		case http.MethodGet:
+		default:
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
 		}
 
-		// 记录下载
-		parts := strings.Split(filepath.ToSlash(relPath), "/")
-		if len(parts) >= 2 {
-			launcher := parts[0]
-			version := parts[1]
-			fileName := filepath.Base(relPath)
-			stats.RecordDownload(r, fileName, launcher, version)
+		estimatedBytes := traffic.EstimateTransferBytes(info.Size(), r.Header.Get("Range"))
+		allowed, _, projectedBytes, reason := traffic.ReserveTraffic(clientIP, estimatedBytes)
+		if !allowed {
+			message := reason
+			if message == "" {
+				message = "已超过当日下载流量限制"
+			}
+			if s.Config.AppealContact != "" {
+				message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
+			}
+			http.Error(w, message, http.StatusForbidden)
+			log.Printf("[防刷墙] 拒绝下载请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
+			return
+		}
+
+		counter := &traffic.CountingWriter{}
+		countingWriter := &responseWriterCounter{
+			ResponseWriter: w,
+			counter:        counter,
+		}
+
+		http.ServeFile(countingWriter, r, cleanPath)
+
+		if banned, reason, trafficGB, err := traffic.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
+			log.Printf("[防刷墙] 记录流量失败: %v", err)
+		} else if banned {
+			log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+		}
+
+		if counter.Total > 0 && isSuccessfulDownloadStatus(countingWriter.statusCode) {
+			parts := strings.Split(filepath.ToSlash(relPath), "/")
+			if len(parts) >= 2 {
+				launcher := parts[0]
+				version := parts[1]
+				fileName := filepath.Base(relPath)
+				stats.RecordDownload(r, fileName, launcher, version)
+			}
 		}
 	})
 
@@ -862,19 +881,7 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		// 记录访问
 		stats.RecordVisit(r)
 
-		// 获取真实 IP（考虑代理）
-		ip := r.RemoteAddr
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ip = strings.Split(xff, ",")[0]
-		} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			ip = xri
-		}
-		// 移除端口号
-		if strings.Contains(ip, ":") {
-			if host, _, err := net.SplitHostPort(ip); err == nil {
-				ip = host
-			}
-		}
+		ip := netutil.ExtractClientIP(r)
 
 		// 检查本地黑名单
 		if banned, createdAt, _ := db.GetIPBlacklistInfo(ip); banned {
@@ -1755,11 +1762,27 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
 // responseWriterCounter 包装 http.ResponseWriter 以统计实际写入的字节数
 type responseWriterCounter struct {
 	http.ResponseWriter
-	counter *traffic.CountingWriter
+	counter     *traffic.CountingWriter
+	statusCode  int
+	wroteHeader bool
+}
+
+func (rw *responseWriterCounter) WriteHeader(statusCode int) {
+	rw.statusCode = statusCode
+	rw.wroteHeader = true
+	rw.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (rw *responseWriterCounter) Write(p []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.statusCode = http.StatusOK
+		rw.wroteHeader = true
+	}
 	n, err := rw.ResponseWriter.Write(p)
 	rw.counter.Total += int64(n)
 	return n, err
+}
+
+func isSuccessfulDownloadStatus(statusCode int) bool {
+	return statusCode == http.StatusOK || statusCode == http.StatusPartialContent
 }
