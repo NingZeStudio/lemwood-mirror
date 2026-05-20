@@ -55,6 +55,12 @@ const router = createRouter({
       meta: { title: '关于 - 柠枺镜像状态' }
     },
     {
+      path: '/download-started',
+      name: 'download-started',
+      component: () => import('@/views/DownloadStartedView.vue'),
+      meta: { title: '下载已开始 - 柠枺镜像状态' }
+    },
+    {
        path: '/:pathMatch(.*)*',
        name: 'not-found',
        component: () => import('@/views/HomeView.vue'),

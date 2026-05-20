@@ -44,7 +44,20 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
   verifyStatus.value = 'pending'
 
   try {
-    const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value)
+    const returnUrl = route.query.return_url || window.location.href
+    const source = route.query.source || 'verify-download'
+    const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value, returnUrl, source)
+    
+    const landingUrl = response.data.landing_url
+    if (landingUrl) {
+      if (landingUrl.startsWith('http')) {
+        window.location.href = landingUrl
+      } else {
+        router.push(landingUrl)
+      }
+      return
+    }
+
     downloadUrl.value = response.data.download_url
     verifyStatus.value = 'success'
     isLoading.value = false

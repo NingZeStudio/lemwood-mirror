@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +18,7 @@ const (
 	serverTestGB = int64(1024 * 1024 * 1024)
 )
 
-func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.Handler, string) {
+func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, content string) (*State, http.Handler, string) {
 	t.Helper()
 
 	base := t.TempDir()
@@ -33,10 +35,6 @@ func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.H
 		db.DB = nil
 	}
 
-	cfg := &config.Config{
-		CaptchaEnabled: false,
-		AppealContact:  "test-contact",
-	}
 	if err := db.InitDB(base, cfg); err != nil {
 		t.Fatalf("InitDB() error = %v", err)
 	}
@@ -55,7 +53,18 @@ func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.H
 		}
 	})
 
-	return SecurityMiddleware(mux), "/download/launcher/v1/file.txt"
+	return state, SecurityMiddleware(mux), "/download/launcher/v1/file.txt"
+}
+
+func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.Handler, string) {
+	t.Helper()
+
+	cfg := &config.Config{
+		CaptchaEnabled: false,
+		AppealContact:  "test-contact",
+	}
+	_, handler, path := setupDownloadHandlerState(t, cfg, limitGB, content)
+	return handler, path
 }
 
 func TestDownloadHandlerRejectsBeforeServingWhenLimitWouldBeExceeded(t *testing.T) {
@@ -129,5 +138,140 @@ func TestDownloadHandlerCountsPartialContentBytes(t *testing.T) {
 	}
 	if trafficBytes != 2 {
 		t.Fatalf("daily traffic = %d, want 2", trafficBytes)
+	}
+}
+
+func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
+	cfg := &config.Config{
+		CaptchaEnabled: false,
+		AppealContact:  "test-contact",
+	}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if resp["download_token"] == "" {
+		t.Fatal("download_token should not be empty")
+	}
+	if resp["download_url"] == "" {
+		t.Fatal("download_url should not be empty")
+	}
+	if resp["landing_url"] == "" {
+		t.Fatal("landing_url should not be empty")
+	}
+}
+
+func TestDownloadLandingReturnsContext(t *testing.T) {
+	cfg := &config.Config{
+		CaptchaEnabled: false,
+		AppealContact:  "test-contact",
+	}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	prepareReq.Header.Set("Content-Type", "application/json")
+	prepareRec := httptest.NewRecorder()
+	handler.ServeHTTP(prepareRec, prepareReq)
+
+	var prepareResp map[string]string
+	if err := json.Unmarshal(prepareRec.Body.Bytes(), &prepareResp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	landingReq := httptest.NewRequest(http.MethodGet, prepareResp["landing_url"], nil)
+	landingRec := httptest.NewRecorder()
+	handler.ServeHTTP(landingRec, landingReq)
+
+	if landingRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", landingRec.Code, http.StatusOK)
+	}
+
+	var landingResp map[string]string
+	if err := json.Unmarshal(landingRec.Body.Bytes(), &landingResp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if landingResp["return_url"] != "https://example.com/back" {
+		t.Fatalf("return_url = %q, want %q", landingResp["return_url"], "https://example.com/back")
+	}
+	if landingResp["source"] != "homepage" {
+		t.Fatalf("source = %q, want %q", landingResp["source"], "homepage")
+	}
+	if landingResp["file_name"] != "file.txt" {
+		t.Fatalf("file_name = %q, want %q", landingResp["file_name"], "file.txt")
+	}
+}
+
+func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
+	cfg := &config.Config{
+		CaptchaEnabled: false,
+		AppealContact:  "test-contact",
+	}
+	state, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	prepareReq.Header.Set("Content-Type", "application/json")
+	prepareRec := httptest.NewRecorder()
+	handler.ServeHTTP(prepareRec, prepareReq)
+
+	var prepareResp map[string]string
+	if err := json.Unmarshal(prepareRec.Body.Bytes(), &prepareResp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if _, valid := state.downloadTokenMgr.Validate(prepareResp["download_token"]); !valid {
+		t.Fatal("Validate() should consume token successfully")
+	}
+
+	landingReq := httptest.NewRequest(http.MethodGet, prepareResp["landing_url"], nil)
+	landingRec := httptest.NewRecorder()
+	handler.ServeHTTP(landingRec, landingReq)
+
+	if landingRec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", landingRec.Code, http.StatusForbidden)
+	}
+}
+
+func TestCLIDownloadWithoutTokenStillRequiresVerificationJSON(t *testing.T) {
+	cfg := &config.Config{
+		CaptchaEnabled:   true,
+		CaptchaAppId:     "test-app",
+		CaptchaSecretKey: "test-secret",
+		AppealContact:    "test-contact",
+	}
+	_, handler, path := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", "curl/8.0")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if resp["error"] != "verification_required" {
+		t.Fatalf("error = %v, want %q", resp["error"], "verification_required")
 	}
 }

@@ -14,7 +14,7 @@ import {
   Search
 } from 'lucide-vue-next'
 import { useClipboard } from '@vueuse/core'
-import { getStatus, getLatest, getCaptchaConfig } from '@/services/api'
+import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
 import { getLauncherDisplayName } from '@/lib/launcher-info'
 import { cn } from '@/lib/utils'
 import Badge from '@/components/ui/Badge.vue'
@@ -92,12 +92,7 @@ const copyUrl = (url) => {
   copy(url)
 }
 
-const handleDownload = (item) => {
-  if (!captchaConfig.value.enabled) {
-    window.open(item.downloadUrl, '_blank')
-    return
-  }
-
+const handleDownload = async (item) => {
   const launcherName = currentPath.value[0]?.id
   const versionName = currentPath.value[1]?.id
   if (!launcherName || !versionName) {
@@ -106,7 +101,30 @@ const handleDownload = (item) => {
   }
 
   const filePath = `${launcherName}/${versionName}/${item.name}`
-  router.push(`/verify?file=${encodeURIComponent(filePath)}`)
+  const returnUrl = window.location.href
+  const source = 'files-download'
+
+  if (!captchaConfig.value.enabled) {
+    try {
+      const response = await prepareDownload(filePath, returnUrl, source)
+      const landingUrl = response.data.landing_url
+      if (landingUrl) {
+        if (landingUrl.startsWith('http')) {
+          window.location.href = landingUrl
+        } else {
+          router.push(landingUrl)
+        }
+      } else {
+        window.open(response.data.download_url || item.downloadUrl, '_blank')
+      }
+    } catch (error) {
+      console.error('Prepare download error:', error)
+      window.open(item.downloadUrl, '_blank')
+    }
+    return
+  }
+
+  router.push(`/verify?file=${encodeURIComponent(filePath)}&return_url=${encodeURIComponent(returnUrl)}&source=${encodeURIComponent(source)}`)
 }
 
 const navigateTo = (item, type) => {

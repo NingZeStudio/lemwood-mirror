@@ -705,7 +705,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 				return
 			}
 
-			tokenPath, valid := s.downloadTokenMgr.Validate(token)
+			tokenEntry, valid := s.downloadTokenMgr.Validate(token)
 			if !valid {
 				if isBrowserRequest(r) {
 					s.serveVerifyPage(w, r, relPath)
@@ -729,7 +729,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			}
 			// 否则使用 token 中存储的路径
 
-			if tokenPath != relPath {
+			if tokenEntry.FilePath != relPath {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				json.NewEncoder(w).Encode(map[string]interface{}{
@@ -830,6 +830,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/auth/2fa/status", s.handle2FAStatus)
 	mux.HandleFunc("/api/captcha/config", s.handleCaptchaConfig)
+	mux.HandleFunc("/api/download/prepare", s.handleDownloadPrepare)
+	mux.HandleFunc("/api/download/landing", s.handleDownloadLanding)
 	mux.HandleFunc("/api/download/verify", s.handleDownloadVerify)
 
 	// Admin API
@@ -1357,6 +1359,147 @@ func (s *State) handleCaptchaConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type downloadValidationError struct {
+	StatusCode int
+	Code       string
+	Message    string
+}
+
+func (e *downloadValidationError) Error() string {
+	return e.Message
+}
+
+type downloadPrepareRequest struct {
+	FilePath  string `json:"file_path"`
+	ReturnURL string `json:"return_url"`
+	Source    string `json:"source"`
+}
+
+type downloadVerifyRequest struct {
+	LotNumber     string `json:"lot_number"`
+	CaptchaOutput string `json:"captcha_output"`
+	PassToken     string `json:"pass_token"`
+	GenTime       string `json:"gen_time"`
+	FilePath      string `json:"file_path"`
+	ReturnURL     string `json:"return_url"`
+	Source        string `json:"source"`
+}
+
+type downloadTokenResponse struct {
+	DownloadToken string `json:"download_token"`
+	DownloadURL   string `json:"download_url"`
+	LandingURL    string `json:"landing_url"`
+}
+
+func writeJSONError(w http.ResponseWriter, statusCode int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":   code,
+		"message": message,
+	})
+}
+
+func (s *State) validateDownloadFile(filePath string) (string, os.FileInfo, *downloadValidationError) {
+	fullPath := filepath.Join(s.BasePath, filePath)
+	cleanPath := filepath.Clean(fullPath)
+	absBase, _ := filepath.Abs(s.BasePath)
+	absPath, _ := filepath.Abs(cleanPath)
+	if !strings.HasPrefix(absPath, absBase) {
+		return "", nil, &downloadValidationError{
+			StatusCode: http.StatusForbidden,
+			Code:       "invalid_path",
+			Message:    "Invalid file path",
+		}
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil || info.IsDir() {
+		return "", nil, &downloadValidationError{
+			StatusCode: http.StatusNotFound,
+			Code:       "file_not_found",
+			Message:    "File not found",
+		}
+	}
+
+	return cleanPath, info, nil
+}
+
+func (s *State) issueDownloadToken(filePath, returnURL, source, flow string) downloadTokenResponse {
+	entry := download_token.TokenEntry{
+		FilePath:  filePath,
+		ReturnURL: returnURL,
+		Source:    source,
+		Flow:      flow,
+	}
+	token := s.downloadTokenMgr.Generate(entry)
+	return downloadTokenResponse{
+		DownloadToken: token,
+		DownloadURL:   buildDownloadURL(token, filePath),
+		LandingURL:    fmt.Sprintf("/api/download/landing?token=%s", url.QueryEscape(token)),
+	}
+}
+
+func buildDownloadURL(token, filePath string) string {
+	return fmt.Sprintf("/download/%s/%s", token, filePath)
+}
+
+func (s *State) handleDownloadPrepare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req downloadPrepareRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	if req.FilePath == "" {
+		writeJSONError(w, http.StatusBadRequest, "missing_required_parameters", "Missing required parameters")
+		return
+	}
+
+	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
+		writeJSONError(w, validationErr.StatusCode, validationErr.Code, validationErr.Message)
+		return
+	}
+
+	resp := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "prepare")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *State) handleDownloadLanding(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeJSONError(w, http.StatusBadRequest, "missing_token", "Missing token")
+		return
+	}
+
+	entry, valid := s.downloadTokenMgr.Peek(token)
+	if !valid {
+		writeJSONError(w, http.StatusForbidden, "expired_token", "Download token is invalid or expired")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"download_url": buildDownloadURL(token, entry.FilePath),
+		"return_url":   entry.ReturnURL,
+		"source":       entry.Source,
+		"file_name":    filepath.Base(entry.FilePath),
+		"file_path":    entry.FilePath,
+		"flow":         entry.Flow,
+	})
+}
+
 func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -1368,13 +1511,7 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		LotNumber     string `json:"lot_number"`
-		CaptchaOutput string `json:"captcha_output"`
-		PassToken     string `json:"pass_token"`
-		GenTime       string `json:"gen_time"`
-		FilePath      string `json:"file_path"`
-	}
+	var req downloadVerifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
@@ -1385,17 +1522,7 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := r.RemoteAddr
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ip = strings.Split(xff, ",")[0]
-	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		ip = xri
-	}
-	if strings.Contains(ip, ":") {
-		if host, _, err := net.SplitHostPort(ip); err == nil {
-			ip = host
-		}
-	}
+	ip := netutil.ExtractClientIP(r)
 
 	result, err := s.captchaValidator.Verify(req.LotNumber, req.CaptchaOutput, req.PassToken, req.GenTime, ip)
 	if err != nil {
@@ -1420,40 +1547,14 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullPath := filepath.Join(s.BasePath, req.FilePath)
-	cleanPath := filepath.Clean(fullPath)
-	absBase, _ := filepath.Abs(s.BasePath)
-	absPath, _ := filepath.Abs(cleanPath)
-	if !strings.HasPrefix(absPath, absBase) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":   "invalid_path",
-			"message": "Invalid file path",
-		})
+	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
+		writeJSONError(w, validationErr.StatusCode, validationErr.Code, validationErr.Message)
 		return
 	}
 
-	info, err := os.Stat(cleanPath)
-	if err != nil || info.IsDir() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":   "file_not_found",
-			"message": "File not found",
-		})
-		return
-	}
-
-	downloadToken := s.downloadTokenMgr.Generate(req.FilePath)
-
-	downloadUrl := fmt.Sprintf("/download/%s/%s", downloadToken, req.FilePath)
-
+	resp := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "verify")
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"download_token": downloadToken,
-		"download_url":   downloadUrl,
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 func isBrowserRequest(r *http.Request) bool {

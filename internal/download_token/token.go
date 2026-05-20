@@ -13,6 +13,9 @@ const (
 
 type TokenEntry struct {
 	FilePath  string
+	ReturnURL string
+	Source    string
+	Flow      string
 	ExpiresAt time.Time
 }
 
@@ -29,44 +32,42 @@ func NewManager() *Manager {
 	return m
 }
 
-func (m *Manager) Generate(filePath string) string {
+func (m *Manager) Generate(entry TokenEntry) string {
 	token := generateToken()
-	m.tokens.Store(token, TokenEntry{
-		FilePath:  filePath,
-		ExpiresAt: time.Now().Add(m.ttl),
-	})
+	entry.ExpiresAt = time.Now().Add(m.ttl)
+	m.tokens.Store(token, entry)
 	return token
 }
 
-func (m *Manager) Validate(token string) (string, bool) {
+func (m *Manager) Validate(token string) (TokenEntry, bool) {
 	value, ok := m.tokens.Load(token)
 	if !ok {
-		return "", false
+		return TokenEntry{}, false
 	}
 
 	entry := value.(TokenEntry)
 	if time.Now().After(entry.ExpiresAt) {
 		m.tokens.Delete(token)
-		return "", false
+		return TokenEntry{}, false
 	}
 
 	m.tokens.Delete(token)
-	return entry.FilePath, true
+	return entry, true
 }
 
-func (m *Manager) Peek(token string) (string, bool) {
+func (m *Manager) Peek(token string) (TokenEntry, bool) {
 	value, ok := m.tokens.Load(token)
 	if !ok {
-		return "", false
+		return TokenEntry{}, false
 	}
 
 	entry := value.(TokenEntry)
 	if time.Now().After(entry.ExpiresAt) {
 		m.tokens.Delete(token)
-		return "", false
+		return TokenEntry{}, false
 	}
 
-	return entry.FilePath, true
+	return entry, true
 }
 
 func (m *Manager) cleanupExpired() {

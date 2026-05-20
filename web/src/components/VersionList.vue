@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Download, History, Loader2, Package } from 'lucide-vue-next'
-import { getStatus, getLatest, getCaptchaConfig } from '@/services/api'
+import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
 import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info'
 import { cn } from '@/lib/utils'
 import Card from '@/components/ui/Card.vue'
@@ -118,18 +118,35 @@ const getAssetPath = (launcherName, version, asset) => {
   return `${launcherName}/${version.tag_name || version.name}/${asset.name}`
 }
 
-const handleDownload = (item) => {
+const handleDownload = async (item) => {
   if (!item.hasAssets || !item.latestObj) return
 
   const asset = item.latestObj.assets[0]
   const filePath = getAssetPath(item.name, item.latestObj, asset)
+  const returnUrl = window.location.href
+  const source = 'home-latest-download'
 
   if (!captchaConfig.value.enabled) {
-    window.open(item.latestDownloadUrl, '_blank')
+    try {
+      const response = await prepareDownload(filePath, returnUrl, source)
+      const landingUrl = response.data.landing_url
+      if (landingUrl) {
+        if (landingUrl.startsWith('http')) {
+          window.location.href = landingUrl
+        } else {
+          router.push(landingUrl)
+        }
+      } else {
+        window.open(response.data.download_url || item.latestDownloadUrl, '_blank')
+      }
+    } catch (error) {
+      console.error('Prepare download error:', error)
+      window.open(item.latestDownloadUrl, '_blank')
+    }
     return
   }
 
-  router.push(`/verify?file=${encodeURIComponent(filePath)}`)
+  router.push(`/verify?file=${encodeURIComponent(filePath)}&return_url=${encodeURIComponent(returnUrl)}&source=${encodeURIComponent(source)}`)
 }
 
 onMounted(() => {
