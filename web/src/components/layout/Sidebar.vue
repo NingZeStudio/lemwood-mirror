@@ -1,52 +1,58 @@
 <script setup>
 import { useRoute } from 'vue-router'
-import { cn } from '@/lib/utils'
-import { Home, Folder, BarChart2, FileText, Github, Info } from 'lucide-vue-next'
+import { Github } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
+import { cn } from '@/lib/utils'
+import { isNavigationActive, navigationLinks } from '@/lib/navigation'
 
 const route = useRoute()
-
-const links = [
-  { name: '首页', path: '/', icon: Home },
-  { name: '文件浏览', path: '/files', icon: Folder },
-  { name: '数据统计', path: '/stats', icon: BarChart2 },
-  { name: 'API 文档', path: '/api', icon: FileText },
-  { name: '关于', path: '/about', icon: Info },
-]
 </script>
 
 <template>
-  <div class="hidden border-r bg-muted/40 md:block md:w-64 lg:w-72 h-full flex flex-col">
-    <div class="flex h-14 items-center border-b px-4 lg:h-[60px] lg:px-6">
-      <a href="/" class="flex items-center gap-2 font-semibold">
-        <img src="/favicon.jpg" alt="Logo" class="h-6 w-6 rounded-full object-cover">
-        <span>柠枺镜像</span>
-      </a>
-      <Button variant="outline" size="icon" class="ml-auto h-8 w-8">
-        <Github class="h-4 w-4" />
-        <a href="https://github.com/leemwood/lemwood_mirror/" class="sr-only">GitHub</a>
-      </Button>
-    </div>
-    <div class="flex-1">
-      <nav class="grid items-start px-2 text-sm font-medium lg:px-4 mt-4">
+  <aside class="hidden min-h-screen border-r bg-sidebar text-sidebar-foreground md:flex md:w-64 lg:w-72">
+    <div class="flex w-full flex-col">
+      <div class="flex h-14 items-center gap-3 border-b border-sidebar-border px-4 lg:h-[60px] lg:px-6">
+        <router-link to="/" class="flex min-w-0 items-center gap-2 font-semibold">
+          <img src="/favicon.jpg" alt="Logo" class="h-8 w-8 rounded-md border object-cover" />
+          <div class="min-w-0">
+            <div class="truncate leading-none">柠枺镜像</div>
+            <div class="mt-1 text-xs font-normal text-muted-foreground">Lemwood Mirror</div>
+          </div>
+        </router-link>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="ml-auto h-8 w-8"
+          as="a"
+          href="https://github.com/leemwood/lemwood_mirror/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Github class="h-4 w-4" />
+          <span class="sr-only">GitHub</span>
+        </Button>
+      </div>
+
+      <nav class="grid gap-1 p-3 text-sm font-medium lg:p-4">
         <router-link
-          v-for="link in links"
+          v-for="link in navigationLinks"
           :key="link.path"
           :to="link.path"
           :class="cn(
-            'flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary',
-            route.path === link.path ? 'bg-muted text-primary' : 'text-muted-foreground'
+            'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            isNavigationActive(route.path, link)
+              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+              : 'text-muted-foreground'
           )"
         >
           <component :is="link.icon" class="h-4 w-4" />
           {{ link.name }}
         </router-link>
       </nav>
+
+      <div class="mt-auto border-t border-sidebar-border p-4 text-center text-xs text-muted-foreground">
+        v3.15.0
+      </div>
     </div>
-    <div class="mt-auto p-4">
-        <div class="text-xs text-muted-foreground text-center">
-            v3.15.0
-        </div>
-    </div>
-  </div>
+  </aside>
 </template>

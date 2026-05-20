@@ -1,6 +1,7 @@
 <script setup>
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
 import CookiesConsent from '@/components/CookiesConsent.vue'
+import AnnouncementDialog from '@/components/AnnouncementDialog.vue'
 </script>
 
 <template>
@@ -8,4 +9,5 @@ import CookiesConsent from '@/components/CookiesConsent.vue'
     <router-view />
   </DefaultLayout>
   <CookiesConsent />
+  <AnnouncementDialog />
 </template>

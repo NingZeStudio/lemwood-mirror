@@ -1,18 +1,20 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { getStatus, getLatest, getCaptchaConfig } from '@/services/api';
-import { Download, History, Loader2, Package } from 'lucide-vue-next';
-import Card from '@/components/ui/Card.vue';
-import CardHeader from '@/components/ui/CardHeader.vue';
-import CardTitle from '@/components/ui/CardTitle.vue';
-import CardDescription from '@/components/ui/CardDescription.vue';
-import CardContent from '@/components/ui/CardContent.vue';
-import CardFooter from '@/components/ui/CardFooter.vue';
-import Button from '@/components/ui/Button.vue';
-import Badge from '@/components/ui/Badge.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
-import { cn } from '@/lib/utils';
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { Download, History, Loader2, Package } from 'lucide-vue-next'
+import { getStatus, getLatest, getCaptchaConfig } from '@/services/api'
+import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info'
+import { cn } from '@/lib/utils'
+import Card from '@/components/ui/Card.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import CardDescription from '@/components/ui/CardDescription.vue'
+import CardContent from '@/components/ui/CardContent.vue'
+import CardFooter from '@/components/ui/CardFooter.vue'
+import Button from '@/components/ui/Button.vue'
+import Badge from '@/components/ui/Badge.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
+
 import zlLogo from '@/assets/images/34c1ec9e07f826df.webp'
 import zl2Logo from '@/assets/images/ee0028bd82493eb3.webp'
 import hmclLogo from '@/assets/images/3835841e4b9b7abf.jpeg'
@@ -25,45 +27,42 @@ import leafLogo from '@/assets/images/leaf.png'
 import leavesLogo from '@/assets/images/Leaves.png'
 import authlibinjectorLogo from '@/assets/images/authlib-injector.png'
 import amethystLogo from '@/assets/images/amethyst.png'
-import { LAUNCHER_INFO_MAP } from '@/lib/launcher-info';
 
-const router = useRouter();
+const router = useRouter()
 
 const EXTENDED_LAUNCHER_INFO_MAP = {
   ...LAUNCHER_INFO_MAP,
-  'zl': { ...LAUNCHER_INFO_MAP['zl'], logoUrl: zlLogo },
-  'zl2': { ...LAUNCHER_INFO_MAP['zl2'], logoUrl: zl2Logo },
-  'hmcl': { ...LAUNCHER_INFO_MAP['hmcl'], logoUrl: hmclLogo },
-  'MG': { ...LAUNCHER_INFO_MAP['MG'], logoUrl: mgLogo },
-  'fcl': { ...LAUNCHER_INFO_MAP['fcl'], logoUrl: fclLogo },
-  'FCL_Turnip': { ...LAUNCHER_INFO_MAP['FCL_Turnip'], logoUrl: fclTurnipLogo },
-  'shizuku': { ...LAUNCHER_INFO_MAP['shizuku'], logoUrl: shizukuLogo },
-  'leaves': { ...LAUNCHER_INFO_MAP['leaves'], logoUrl: leavesLogo },
-  'leaf': { ...LAUNCHER_INFO_MAP['leaf'], logoUrl: leafLogo },
-  'luminol': { ...LAUNCHER_INFO_MAP['luminol'], logoUrl: luminolLogo },
-  'fcl_dl': { ...LAUNCHER_INFO_MAP['fcl_dl'], logoUrl: fclLogo },
-  'fcl_di': { ...LAUNCHER_INFO_MAP['fcl_di'], logoUrl: fclLogo },
+  zl: { ...LAUNCHER_INFO_MAP.zl, logoUrl: zlLogo },
+  zl2: { ...LAUNCHER_INFO_MAP.zl2, logoUrl: zl2Logo },
+  hmcl: { ...LAUNCHER_INFO_MAP.hmcl, logoUrl: hmclLogo },
+  MG: { ...LAUNCHER_INFO_MAP.MG, logoUrl: mgLogo },
+  fcl: { ...LAUNCHER_INFO_MAP.fcl, logoUrl: fclLogo },
+  FCL_Turnip: { ...LAUNCHER_INFO_MAP.FCL_Turnip, logoUrl: fclTurnipLogo },
+  shizuku: { ...LAUNCHER_INFO_MAP.shizuku, logoUrl: shizukuLogo },
+  leaves: { ...LAUNCHER_INFO_MAP.leaves, logoUrl: leavesLogo },
+  leaf: { ...LAUNCHER_INFO_MAP.leaf, logoUrl: leafLogo },
+  luminol: { ...LAUNCHER_INFO_MAP.luminol, logoUrl: luminolLogo },
+  fcl_dl: { ...LAUNCHER_INFO_MAP.fcl_dl, logoUrl: fclLogo },
+  fcl_di: { ...LAUNCHER_INFO_MAP.fcl_di, logoUrl: fclLogo },
   'authlib-injector': { ...LAUNCHER_INFO_MAP['authlib-injector'], logoUrl: authlibinjectorLogo },
-  'aamc': { ...LAUNCHER_INFO_MAP['aamc'], logoUrl: amethystLogo }
-};
+  aamc: { ...LAUNCHER_INFO_MAP.aamc, logoUrl: amethystLogo }
+}
 
-
-const rawLaunchers = ref({});
-const latestMap = ref({});
-const loading = ref(true);
-
-const captchaConfig = ref({ enabled: false, app_id: '' });
+const rawLaunchers = ref({})
+const latestMap = ref({})
+const loading = ref(true)
+const captchaConfig = ref({ enabled: false, app_id: '' })
 
 const launcherList = computed(() => {
-  return Object.keys(rawLaunchers.value).map(name => {
-    const versions = rawLaunchers.value[name];
-    const latestVersion = latestMap.value[name];
-    const latestObj = versions.find(v => (v.tag_name || v.name) === latestVersion) || versions[0];
-    const info = EXTENDED_LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: fclTurnipLogo };
+  return Object.keys(rawLaunchers.value).map((name) => {
+    const versions = rawLaunchers.value[name]
+    const latestVersion = latestMap.value[name]
+    const latestObj = versions.find((v) => (v.tag_name || v.name) === latestVersion) || versions[0]
+    const info = EXTENDED_LAUNCHER_INFO_MAP[name] || { displayName: name, logoUrl: fclTurnipLogo }
 
-    const latestDownloadUrl = latestObj && latestObj.assets && latestObj.assets.length > 0
+    const latestDownloadUrl = latestObj?.assets?.length
       ? getAssetUrl(name, latestObj, latestObj.assets[0])
-      : '#';
+      : '#'
 
     return {
       name,
@@ -72,173 +71,158 @@ const launcherList = computed(() => {
       versions,
       latest: latestVersion,
       lastUpdated: versions.length ? versions[0].published_at : null,
-      hasAssets: latestObj && latestObj.assets && latestObj.assets.length > 0,
+      hasAssets: Boolean(latestObj?.assets?.length),
       latestObj,
       latestDownloadUrl
-    };
-  });
-});
+    }
+  })
+})
 
 const loadData = async () => {
-  loading.value = true;
+  loading.value = true
   try {
     const [statusRes, latestRes, captchaRes] = await Promise.all([
       getStatus(),
       getLatest(),
       getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
-    ]);
-    
-    const data = statusRes.data;
-    for (const key in data) {
-        data[key].sort((a, b) => String(b.tag_name || b.name).localeCompare(String(a.tag_name || a.name)));
-    }
-    rawLaunchers.value = data;
-    latestMap.value = latestRes.data;
-    captchaConfig.value = captchaRes.data;
-  } catch (e) {
-    console.error(e);
-  } finally {
-    loading.value = false;
-  }
-};
+    ])
 
+    const data = statusRes.data
+    for (const key in data) {
+      data[key].sort((a, b) => String(b.tag_name || b.name).localeCompare(String(a.tag_name || a.name)))
+    }
+
+    rawLaunchers.value = data
+    latestMap.value = latestRes.data
+    captchaConfig.value = captchaRes.data
+  } catch (error) {
+    console.error(error)
+  } finally {
+    loading.value = false
+  }
+}
 
 const formatDate = (dateStr) => {
-    if (!dateStr) return '未知时间';
-    return new Date(dateStr).toLocaleDateString();
-};
+  if (!dateStr) return '未知时间'
+  return new Date(dateStr).toLocaleDateString()
+}
 
 const getAssetUrl = (launcherName, version, asset) => {
-     if (asset.url && (asset.url.startsWith('http://') || asset.url.startsWith('https://'))) {
-        return asset.url;
-    }
-    return `/download/${launcherName}/${version.tag_name || version.name}/${asset.name}`;
-};
+  if (asset.url && (asset.url.startsWith('http://') || asset.url.startsWith('https://'))) {
+    return asset.url
+  }
+  return `/download/${launcherName}/${version.tag_name || version.name}/${asset.name}`
+}
 
 const getAssetPath = (launcherName, version, asset) => {
-    return `${launcherName}/${version.tag_name || version.name}/${asset.name}`;
-};
+  return `${launcherName}/${version.tag_name || version.name}/${asset.name}`
+}
 
 const handleDownload = (item) => {
-  if (!item.hasAssets || !item.latestObj) return;
-  
-  const asset = item.latestObj.assets[0];
-  const filePath = getAssetPath(item.name, item.latestObj, asset);
-  
+  if (!item.hasAssets || !item.latestObj) return
+
+  const asset = item.latestObj.assets[0]
+  const filePath = getAssetPath(item.name, item.latestObj, asset)
+
   if (!captchaConfig.value.enabled) {
-    const url = getAssetUrl(item.name, item.latestObj, asset);
-    window.open(url, '_blank');
-    return;
+    window.open(item.latestDownloadUrl, '_blank')
+    return
   }
-  
-  router.push(`/verify?file=${encodeURIComponent(filePath)}`);
-};
+
+  router.push(`/verify?file=${encodeURIComponent(filePath)}`)
+}
 
 onMounted(() => {
-    loadData();
-});
+  loadData()
+})
 
-defineExpose({ refresh: loadData });
+defineExpose({ refresh: loadData })
 </script>
 
 <template>
-  <div>
-    <div class="flex items-center justify-between mb-6">
-       <div>
-         <h2 class="text-3xl font-bold tracking-tight">版本探索</h2>
-         <p class="text-muted-foreground mt-1">发现并下载最新的启动器组件</p>
-       </div>
-       <Button variant="ghost" size="icon" @click="loadData" :disabled="loading">
-         <Loader2 v-if="loading" class="h-5 w-5 animate-spin" />
-         <template v-else>
-            <span class="sr-only">Refresh</span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-         </template>
-       </Button>
+  <div class="space-y-6">
+    <div class="flex flex-col gap-2">
+      <h2 class="text-3xl font-bold tracking-tight">版本探索</h2>
+      <p class="text-muted-foreground">浏览最新启动器版本，快速下载或查看历史构建。</p>
     </div>
-    
-    <div v-if="loading && !launcherList.length" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      <Card v-for="i in 4" :key="i" class="flex flex-col overflow-hidden">
-        <div class="h-40 bg-muted animate-pulse" />
-        <CardHeader class="pb-2 text-center">
-          <Skeleton class="h-6 w-3/4 mx-auto mb-2" />
-          <Skeleton class="h-4 w-1/2 mx-auto" />
+
+    <div v-if="loading && !launcherList.length" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <Card v-for="i in 4" :key="i" class="overflow-hidden">
+        <Skeleton class="aspect-[16/10] w-full rounded-none" />
+        <CardHeader>
+          <Skeleton class="h-6 w-3/4" />
+          <Skeleton class="h-4 w-1/2" />
         </CardHeader>
-        <CardContent class="flex-1" />
-        <CardFooter class="flex flex-col gap-2 pt-0">
+        <CardContent>
+          <Skeleton class="h-4 w-full" />
+        </CardContent>
+        <CardFooter class="grid gap-2 sm:grid-cols-2">
           <Skeleton class="h-10 w-full" />
-          <div class="flex gap-2 w-full">
-            <Skeleton class="h-10 flex-1" />
-            <Skeleton class="h-10 flex-1" />
-          </div>
+          <Skeleton class="h-10 w-full" />
         </CardFooter>
       </Card>
     </div>
 
-    <div v-else-if="!launcherList.length" class="text-center text-muted-foreground p-12">
-      <Package class="mx-auto h-12 w-12 mb-4 opacity-50" />
-      <div>暂无数据</div>
+    <div v-else-if="!launcherList.length" class="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
+      <Package class="mx-auto mb-4 h-12 w-12 opacity-40" />
+      <p class="font-medium text-foreground">暂无数据</p>
+      <p class="mt-1 text-sm">稍后再试，或检查接口连接。</p>
     </div>
 
-    <div v-else class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      <Card 
-        v-for="item in launcherList" 
-        :key="item.name" 
-        class="flex flex-col overflow-hidden hover:shadow-md transition-shadow group"
+    <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <Card
+        v-for="item in launcherList"
+        :key="item.name"
+        class="group overflow-hidden transition-shadow hover:shadow-md"
       >
-        <div class="relative h-40 overflow-hidden bg-muted/20">
-            <img 
-            :src="item.logoUrl" 
-            class="absolute inset-0 h-full w-full object-cover blur-xl opacity-50 scale-110 group-hover:scale-105 transition-transform duration-500"
+        <div class="relative aspect-[16/10] overflow-hidden border-b bg-muted/30">
+          <div class="absolute inset-0 bg-gradient-to-br from-background via-transparent to-primary/5"></div>
+          <img
+            :src="item.logoUrl"
+            class="absolute inset-0 h-full w-full object-cover opacity-20 blur-2xl transition-transform duration-500 group-hover:scale-105"
             alt=""
           />
-          <div class="absolute inset-0 flex items-center justify-center">
-             <img 
-                :src="item.logoUrl" 
-                class="h-20 w-20 object-contain drop-shadow-lg rounded-xl"
-                :alt="item.displayName"
-              />
+          <div class="absolute inset-0 flex items-center justify-center p-6">
+            <img
+              :src="item.logoUrl"
+              class="h-20 w-20 rounded-xl border bg-background object-contain p-2 shadow-sm"
+              :alt="item.displayName"
+            />
           </div>
-          <Badge 
-            v-if="item.latest" 
-            class="absolute top-4 right-4 font-bold bg-green-500 hover:bg-green-600 border-none text-white shadow-sm"
-          >
-            {{ item.latest }}
-          </Badge>
+          <Badge v-if="item.latest" variant="success" class="absolute right-4 top-4">Latest {{ item.latest }}</Badge>
         </div>
 
-        <CardHeader class="pb-2 text-center">
-          <CardTitle>{{ item.displayName }}</CardTitle>
-          <CardDescription>最近更新: {{ formatDate(item.lastUpdated) }}</CardDescription>
+        <CardHeader>
+          <CardTitle class="text-xl">{{ item.displayName }}</CardTitle>
+          <CardDescription>最近更新：{{ formatDate(item.lastUpdated) }}</CardDescription>
         </CardHeader>
 
-        <CardContent class="flex-1"></CardContent>
-        
-        <CardFooter class="flex flex-col gap-2 pt-0">
-             <Button
-                v-if="item.hasAssets"
-                class="w-full"
-                @click="handleDownload(item)"
-              >
-                <Download class="mr-2 h-4 w-4" />
-                下载最新版
-              </Button>
-              <div class="flex gap-2 w-full">
-                <Button
-                  variant="outline"
-                  class="flex-1"
-                  @click="$router.push(`/files/${item.name}`)"
-                >
-                  <History class="mr-2 h-4 w-4" />
-                  历史版本
-                </Button>
-              </div>
+        <CardContent class="space-y-3">
+          <div class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+            <span class="text-muted-foreground">版本数量</span>
+            <span class="font-medium text-foreground">{{ item.versions.length }}</span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+            <span class="text-muted-foreground">最新资源</span>
+            <span class="font-medium text-foreground">{{ item.hasAssets ? '可下载' : '无资源' }}</span>
+          </div>
+        </CardContent>
+
+        <CardFooter class="grid gap-2 sm:grid-cols-2">
+          <Button v-if="item.hasAssets" class="w-full" @click="handleDownload(item)">
+            <Download class="mr-2 h-4 w-4" />
+            下载最新版
+          </Button>
+          <Button v-else class="w-full" disabled>
+            <Download class="mr-2 h-4 w-4" />
+            暂无资源
+          </Button>
+          <Button variant="outline" class="w-full" @click="$router.push(`/files/${item.name}`)">
+            <History class="mr-2 h-4 w-4" />
+            历史版本
+          </Button>
         </CardFooter>
       </Card>
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 无特殊样式 */
-</style>

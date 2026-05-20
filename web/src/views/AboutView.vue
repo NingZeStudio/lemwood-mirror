@@ -1,11 +1,44 @@
 <script setup>
-import { onMounted } from 'vue'
-import { ExternalLink, Github, Mail, Server, Code, Layers, Heart, Coffee, MessageCircle } from 'lucide-vue-next'
+import { computed, onMounted } from 'vue'
+import {
+  Code,
+  DollarSign,
+  ExternalLink,
+  Github,
+  Heart,
+  Layers,
+  Mail,
+  MessageCircle,
+  Pin,
+  QrCode,
+  Server,
+  Zap
+} from 'lucide-vue-next'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
 import CardContent from '@/components/ui/CardContent.vue'
 import Button from '@/components/ui/Button.vue'
+import FriendLinks from '@/components/FriendLinks.vue'
+import {
+  sponsors,
+  sponsorConfig,
+  getTotalAmount,
+  getSponsorCount,
+  getPlatformIcon,
+  getPlatformColor
+} from '@/lib/sponsorConfig'
+
+const totalAmount = computed(() => getTotalAmount())
+const sponsorCount = computed(() => getSponsorCount())
+
+const sortedSponsors = computed(() => {
+  return [...sponsors].sort((a, b) => {
+    if (a.pinned && !b.pinned) return -1
+    if (!a.pinned && b.pinned) return 1
+    return new Date(b.date).getTime() - new Date(a.date).getTime()
+  })
+})
 
 onMounted(() => {
   document.title = '关于 - 柠枺镜像状态'
@@ -16,7 +49,7 @@ const updateMetaDescription = (desc) => {
   const metaDescription = document.querySelector('meta[name="description"]')
   const metaOgDescription = document.querySelector('meta[property="og:description"]')
   const metaTwitterDescription = document.querySelector('meta[property="twitter:description"]')
-  
+
   if (metaDescription) metaDescription.setAttribute('content', desc)
   if (metaOgDescription) metaOgDescription.setAttribute('content', '关于 - ' + desc)
   if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', '关于 - ' + desc)
@@ -32,145 +65,228 @@ const updateMetaDescription = (desc) => {
       </p>
     </div>
 
-    <!-- Angel Investor / Sponsor Section -->
-    <Card class="bg-gradient-to-r from-amber-500/10 via-background to-amber-500/5 backdrop-blur-md border-amber-500/20 relative overflow-hidden group">
-      <div class="absolute -right-8 -top-8 opacity-10 group-hover:opacity-20 transition-opacity">
-          <Heart class="h-40 w-40 text-amber-500 rotate-12" />
+    <section class="space-y-5">
+      <Card class="overflow-hidden border-amber-500/20 bg-gradient-to-br from-amber-500/10 via-background to-primary/5 ">
+        <CardContent class="relative p-5 md:p-6">
+          <div class="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-amber-500/10 blur-2xl"></div>
+          <div class="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div class="space-y-2">
+              <div class="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-sm font-medium text-amber-700 dark:text-amber-300">
+                <Heart class="h-4 w-4" />
+                Sponsor
+              </div>
+              <div>
+                <h2 class="text-2xl font-bold tracking-tight md:text-3xl">
+                  {{ sponsorConfig.title }}
+                </h2>
+                <p class="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground md:text-base">
+                  {{ sponsorConfig.description }}
+                </p>
+              </div>
+            </div>
+            <div class="rounded-2xl border border-amber-500/20 bg-background/70 p-4 text-center shadow-sm backdrop-blur">
+              <p class="text-xs text-muted-foreground">累计赞助</p>
+              <p class="text-3xl font-bold text-amber-600 dark:text-amber-400">¥{{ totalAmount }}</p>
+              <p class="text-xs text-muted-foreground">{{ sponsorCount }} 位朋友支持</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card class="bg-card">
+          <CardContent class="flex items-center gap-3 p-4">
+            <div class="rounded-md bg-red-500/10 p-2">
+              <Heart class="h-4 w-4 text-red-500" />
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">赞助者</p>
+              <p class="text-xl font-bold">{{ sponsorCount }}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card class="bg-card">
+          <CardContent class="flex items-center gap-3 p-4">
+            <div class="rounded-md bg-green-500/10 p-2">
+              <DollarSign class="h-4 w-4 text-green-500" />
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">总金额</p>
+              <p class="text-xl font-bold">¥{{ totalAmount }}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card class="bg-card">
+          <CardContent class="flex items-center gap-3 p-4">
+            <div class="rounded-md bg-blue-500/10 p-2">
+              <QrCode class="h-4 w-4 text-blue-500" />
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">赞助方式</p>
+              <p class="text-xl font-bold">2</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card class="bg-card">
+          <CardContent class="flex items-center gap-3 p-4">
+            <div class="rounded-md bg-purple-500/10 p-2">
+              <Heart class="h-4 w-4 text-purple-500" />
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">感谢</p>
+              <p class="text-xl font-bold">❤️</p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
-      <CardHeader>
-        <CardTitle class="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-            <Coffee class="h-5 w-5" />
-            天使投资人 & 赞助商
-        </CardTitle>
-      </CardHeader>
-      <CardContent class="relative z-10 space-y-4">
-          <div class="flex items-center gap-3 p-4 rounded-lg bg-gradient-to-r from-amber-500/15 to-amber-500/5 border border-amber-500/30 ring-1 ring-amber-500/20">
-              <div class="flex-shrink-0">
-                  <div class="h-12 w-12 rounded-full bg-amber-500/25 flex items-center justify-center">
-                      <Heart class="h-6 w-6 text-amber-600 dark:text-amber-500" />
-                  </div>
-              </div>
-              <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 mb-1">
-                      <span class="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 uppercase tracking-wide">置顶</span>
-                  </div>
-                  <h3 class="text-lg font-bold text-foreground truncate">Swung 0x48 <span class="text-sm font-normal text-muted-foreground ml-1">[MobileGlues开发者]</span></h3>
-                  <p class="text-sm text-muted-foreground">
-                      赞助 <span class="font-bold text-amber-600 dark:text-amber-500">1000 元</span> 用于服务器续费
-                  </p>
-              </div>
+
+      <div class="grid gap-4 md:grid-cols-2">
+        <Card class="group bg-card transition-all hover:border-primary/40 ">
+          <CardHeader class="p-4 md:p-5">
+            <CardTitle class="flex items-center gap-2 text-base">
+              <span class="rounded-md bg-blue-500/10 p-2">
+                <QrCode class="h-4 w-4 text-blue-500" />
+              </span>
+              支付宝
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="px-4 pb-4 md:px-5 md:pb-5">
+            <div class="flex min-h-[260px] items-center justify-center overflow-hidden rounded-xl border bg-muted/40 p-4">
+              <img
+                :src="sponsorConfig.alipayQrCode"
+                alt="支付宝赞助二维码"
+                class="max-h-64 w-auto rounded-lg object-contain shadow-sm"
+              />
+            </div>
+            <p class="mt-3 text-center text-sm text-muted-foreground">扫码赞助</p>
+          </CardContent>
+        </Card>
+
+        <Card class="group bg-card transition-all hover:border-primary/40 ">
+          <CardHeader class="p-4 md:p-5">
+            <CardTitle class="flex items-center gap-2 text-base">
+              <span class="rounded-md bg-green-500/10 p-2">
+                <QrCode class="h-4 w-4 text-green-500" />
+              </span>
+              微信
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="px-4 pb-4 md:px-5 md:pb-5">
+            <div class="flex min-h-[260px] items-center justify-center overflow-hidden rounded-xl border bg-muted/40 p-4">
+              <img
+                :src="sponsorConfig.wechatQrCode"
+                alt="微信赞助二维码"
+                class="max-h-64 w-auto rounded-lg object-contain shadow-sm"
+              />
+            </div>
+            <p class="mt-3 text-center text-sm text-muted-foreground">扫码赞助</p>
+          </CardContent>
+        </Card>
+
+        <Card
+          v-if="sponsorConfig.afdianLink"
+          class="bg-card md:col-span-2"
+        >
+          <CardContent class="p-4 md:p-5">
+            <a
+              :href="sponsorConfig.afdianLink"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="afdian-rainbow-ring relative flex w-full overflow-hidden rounded-xl p-[2px] font-semibold text-white transition-transform hover:scale-[1.01]"
+            >
+              <span class="flex w-full items-center justify-center gap-3 rounded-[calc(var(--radius)+6px)] bg-black py-3 transition-colors hover:bg-gray-900">
+                <Zap class="h-5 w-5" />
+                <span>爱发电</span>
+              </span>
+            </a>
+            <p class="mt-3 text-center text-sm text-muted-foreground">支持月付和一次性赞助</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card class="overflow-hidden bg-card">
+        <CardHeader class="border-b p-4 md:p-5">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle class="flex items-center gap-2 text-base">
+              <span class="rounded-md bg-amber-500/10 p-2">
+                <Heart class="h-4 w-4 text-amber-500" />
+              </span>
+              赞助者列表
+            </CardTitle>
+            <div class="text-sm text-muted-foreground">
+              <span class="font-medium text-foreground">{{ sponsorCount }}</span> 位赞助者
+              <span class="mx-2">·</span>
+              <span class="font-medium text-foreground">¥{{ totalAmount }}</span>
+            </div>
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">菜花</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
-                      </p>
-                  </div>
+        </CardHeader>
+
+        <CardContent class="p-0">
+          <div v-if="sortedSponsors.length" class="divide-y">
+            <div
+              v-for="sponsor in sortedSponsors"
+              :key="sponsor.id"
+              class="flex items-center gap-3 p-4 transition-colors hover:bg-muted/50 md:gap-4"
+            >
+              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-gradient-to-br from-primary/25 to-primary/10">
+                <span class="text-sm font-bold text-primary">
+                  {{ sponsor.name.charAt(0).toUpperCase() }}
+                </span>
               </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">懵逼的兔子</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">5 元</span> 用于服务器续费
-                      </p>
-                  </div>
+
+              <div class="min-w-0 flex-1">
+                <div class="mb-1 flex flex-wrap items-center gap-2">
+                  <span class="font-medium text-foreground">{{ sponsor.name }}</span>
+                  <span
+                    :class="[
+                      'rounded-full px-2 py-0.5 text-xs font-medium',
+                      getPlatformColor(sponsor.platform)
+                    ]"
+                  >
+                    {{ getPlatformIcon(sponsor.platform) }}
+                  </span>
+                  <span
+                    v-if="sponsor.pinned"
+                    class="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500"
+                  >
+                    <Pin class="h-3 w-3" />
+                    置顶
+                  </span>
+                </div>
+                <p class="truncate text-sm text-muted-foreground">
+                  {{ sponsor.message || sponsor.date }}
+                </p>
               </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">我的世界良心君 <span class="text-sm font-normal text-muted-foreground ml-1">[Baidu博主]</span></h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">5 元</span> 用于服务器续费
-                      </p>
-                  </div>
+
+              <div class="shrink-0 text-right">
+                <span class="text-lg font-bold text-red-500">¥{{ sponsor.amount }}</span>
+                <p class="mt-0.5 text-xs text-muted-foreground">{{ sponsor.date }}</p>
               </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">Ksgf452 <span class="text-sm font-normal text-muted-foreground ml-1">(大好人)</span></h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">40 元</span> 用于服务器续费
-                      </p>
-                  </div>
-              </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">@习习中</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">34 元</span> 用于服务器续费
-                      </p>
-                  </div>
-              </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">马铃薯_potato</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">1 元</span> 用于服务器续费
-                      </p>
-                  </div>
-              </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">苦瓜</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
-                      </p>
-                  </div>
-              </div>
-              <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/10">
-                  <div class="flex-shrink-0">
-                      <div class="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <Heart class="h-5 w-5 text-amber-600 dark:text-amber-500" />
-                      </div>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                      <h3 class="text-lg font-bold text-foreground truncate">Janson</h3>
-                      <p class="text-sm text-muted-foreground">
-                          赞助 <span class="font-bold text-amber-600 dark:text-amber-500">10 元</span> 用于服务器续费
-                      </p>
-                  </div>
-              </div>
+            </div>
           </div>
-      </CardContent>
-    </Card>
+
+          <div v-else class="py-8 text-center">
+            <Heart class="mx-auto mb-3 h-10 w-10 text-muted-foreground opacity-50" />
+            <p class="text-sm text-muted-foreground">暂无赞助者，成为第一位！</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div class="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-center text-sm text-foreground">
+        <p class="font-medium">项目捐助全部用于服务器运营，我们绝无私吞捐助的情况出现。</p>
+      </div>
+
+      <div class="rounded-xl border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+        <div class="mb-1 flex items-center justify-center gap-2">
+          <Heart class="h-4 w-4 text-red-500" />
+          <span class="font-medium">感谢您的支持！</span>
+        </div>
+        <p>所有赞助将用于项目运营和发展</p>
+      </div>
+    </section>
 
     <div class="grid gap-4 md:gap-6 md:grid-cols-2">
-        <Card class="bg-background/50 backdrop-blur-sm border-white/10 md:col-span-2">
+        <Card class="bg-card border-border md:col-span-2">
           <CardHeader class="p-4 md:p-6">
             <CardTitle class="flex items-center gap-2">
                 <Layers class="h-5 w-5 text-primary" />
@@ -185,7 +301,7 @@ const updateMetaDescription = (desc) => {
           </CardContent>
         </Card>
 
-        <Card class="bg-background/50 backdrop-blur-sm border-white/10">
+        <Card class="bg-card border-border">
             <CardHeader class="p-4 md:p-6">
                 <CardTitle class="flex items-center gap-2">
                     <Server class="h-5 w-5 text-blue-500" />
@@ -209,7 +325,7 @@ const updateMetaDescription = (desc) => {
                          </div>
                      </div>
                  </div>
-                 <div class="space-y-1 pt-2 border-t border-dashed border-white/10">
+                 <div class="space-y-1 pt-2 border-t border-dashed border-border">
                      <h4 class="font-semibold text-foreground">技术栈</h4>
                      <div class="flex flex-wrap gap-2 text-xs">
                          <span class="px-2 py-1 rounded-md bg-blue-500/10 text-blue-500 font-medium">Golang</span>
@@ -219,7 +335,7 @@ const updateMetaDescription = (desc) => {
             </CardContent>
         </Card>
 
-        <Card class="bg-background/50 backdrop-blur-sm border-white/10">
+        <Card class="bg-card border-border">
             <CardHeader class="p-4 md:p-6">
                 <CardTitle class="flex items-center gap-2">
                     <Code class="h-5 w-5 text-green-500" />
@@ -238,7 +354,7 @@ const updateMetaDescription = (desc) => {
                           </div>
                      </div>
                  </div>
-                 <div class="space-y-1 pt-2 border-t border-dashed border-white/10">
+                 <div class="space-y-1 pt-2 border-t border-dashed border-border">
                      <h4 class="font-semibold text-foreground">技术栈</h4>
                      <div class="flex flex-wrap gap-2 text-xs">
                          <span class="px-2 py-1 rounded-md bg-green-500/10 text-green-500 font-medium">Vue 3</span>
@@ -250,8 +366,10 @@ const updateMetaDescription = (desc) => {
         </Card>
     </div>
 
+    <FriendLinks />
+
     <div class="grid gap-4 md:gap-6 md:grid-cols-2">
-         <Card class="bg-gradient-to-br from-background/50 to-primary/5 backdrop-blur-sm border-primary/20 hover:border-primary/40 transition-colors">
+         <Card class="bg-gradient-to-br from-background/50 to-primary/5  border-primary/20 hover:border-primary/40 transition-colors">
             <CardHeader class="p-4 md:p-6">
                 <CardTitle>同根项目：LogShare.CN</CardTitle>
             </CardHeader>
@@ -267,7 +385,7 @@ const updateMetaDescription = (desc) => {
             </CardContent>
         </Card>
 
-        <Card class="bg-background/50 backdrop-blur-sm border-white/10 flex flex-col justify-center items-center text-center p-4 md:p-6">
+        <Card class="bg-card border-border flex flex-col justify-center items-center text-center p-4 md:p-6">
              <Github class="h-8 md:h-10 w-8 md:w-10 mb-2 md:mb-4 text-foreground/80" />
              <h3 class="font-semibold mb-1 md:mb-2 text-sm md:text-base">开源贡献</h3>
              <p class="text-xs md:text-sm text-muted-foreground mb-3 md:mb-4">
@@ -280,3 +398,27 @@ const updateMetaDescription = (desc) => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.afdian-rainbow-ring {
+  background: linear-gradient(90deg, #ec4899, #a855f7, #06b6d4, #22c55e, #f59e0b, #ec4899);
+  background-size: 300% 100%;
+  animation: afdian-rainbow-flow 4s linear infinite;
+}
+
+@keyframes afdian-rainbow-flow {
+  from {
+    background-position: 0% 50%;
+  }
+
+  to {
+    background-position: 300% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .afdian-rainbow-ring {
+    animation: none;
+  }
+}
+</style>
