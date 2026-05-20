@@ -14,6 +14,12 @@ export const friendLinksConfig = {
       url: 'https://cc.miawa.cn/',
       description: '支持启动器控件配置互转的在线工具。',
       tag: '在线工具'
+    },
+    {
+      name: 'NexusMC | Minecraft 中文社区',
+      url: 'https://www.nexusmc.cn',
+      description: 'Minecraft 中文论坛与资源社区首页 - NexusMC | Minecraft 我的世界中文社区',
+      tag: '在线论坛'
     }
   ]
 }
