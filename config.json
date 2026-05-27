@@ -4,18 +4,18 @@
   "check_cron": "*/10 * * * *",
   "storage_path": "download",
   "github_token": "",
-  "admin_user": "ningmo",
-  "admin_password": "$2a$14$RbIcnqGpbmYAKdLvO1XyH.hxxcdbITqTf4/bIJc8gWoPK3BRRe5Fi",
-  "admin_enabled": true,
-  "admin_max_retries": 10,
-  "admin_lock_duration": 120,
+  "download_url_base": "https://miawa.cn",
+  "download_timeout_minutes": 40,
+  "concurrent_downloads": 3,
   "proxy_url": "",
   "asset_proxy_url": "",
   "xget_domain": "https://xget.xi-xu.me",
   "xget_enabled": true,
-  "download_timeout_minutes": 40,
-  "concurrent_downloads": 3,
-  "download_url_base": "https://miawa.cn",
+  "admin_enabled": true,
+  "admin_user": "ningmo",
+  "admin_password": "$2a$14$RbIcnqGpbmYAKdLvO1XyH.hxxcdbITqTf4/bIJc8gWoPK3BRRe5Fi",
+  "admin_max_retries": 10,
+  "admin_lock_duration": 120,
   "two_factor_enabled": false,
   "two_factor_secret": "",
   "captcha_enabled": true,
@@ -36,17 +36,22 @@
       "name": "fcl",
       "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
       "repo_selector": "",
+      "include_prerelease": false,
       "max_versions": 2
     },
     {
       "name": "zl",
       "source_url": "https://github.com/ZalithLauncher/ZalithLauncher",
-      "repo_selector": ""
+      "repo_selector": "",
+      "include_prerelease": false,
+      "max_versions": 0
     },
     {
       "name": "zl2",
       "source_url": "https://github.com/ZalithLauncher/ZalithLauncher2",
-      "repo_selector": ""
+      "repo_selector": "",
+      "include_prerelease": false,
+      "max_versions": 0
     }
   ]
 }

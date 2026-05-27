@@ -82,8 +82,7 @@ go run ./cmd/mirror
 
 ## 配置说明
 
-运行前需要编辑根目录的 `config.json`。
-下面的示例保留了最常用字段，并使用当前代码中的实际配置结构。
+运行前需要编辑根目录的 `config.json`。以下为完整配置示例（敏感值已用占位符替换）：
 
 ```json
 {
@@ -92,23 +91,23 @@ go run ./cmd/mirror
   "check_cron": "*/10 * * * *",
   "storage_path": "download",
   "github_token": "",
-  "admin_user": "admin",
-  "admin_password": "bcrypt-hash",
-  "admin_enabled": true,
-  "admin_max_retries": 10,
-  "admin_lock_duration": 120,
+  "download_url_base": "https://mirror.example.com",
+  "download_timeout_minutes": 40,
+  "concurrent_downloads": 3,
   "proxy_url": "",
   "asset_proxy_url": "",
   "xget_domain": "https://xget.xi-xu.me",
   "xget_enabled": true,
-  "download_timeout_minutes": 40,
-  "concurrent_downloads": 3,
-  "download_url_base": "https://mirror.example.com",
+  "admin_enabled": true,
+  "admin_user": "admin",
+  "admin_password": "<bcrypt-hash>",
+  "admin_max_retries": 10,
+  "admin_lock_duration": 120,
   "two_factor_enabled": false,
   "two_factor_secret": "",
-  "captcha_enabled": true,
-  "captcha_app_id": "your_captcha_id",
-  "captcha_secret_key": "your_captcha_secret",
+  "captcha_enabled": false,
+  "captcha_app_id": "",
+  "captcha_secret_key": "",
   "traffic_limit_gb": 0,
   "ban_record_file": "banned_ips.txt",
   "external_blacklist_url": "",
@@ -131,33 +130,85 @@ go run ./cmd/mirror
 }
 ```
 
-### 关键字段
+### 服务与网络
 
-- `download_url_base`：对外下载链接的基准地址，通常填你的反代域名或 CDN 域名。
-- `github_token`：建议填写，用于降低 GitHub API 限流风险。
-- `captcha_enabled`：开启后，浏览器下载会先走验证码验证流程。
-- `traffic_limit_gb`：单 IP 每日下载流量上限，`0` 表示关闭该限制。
-- `external_blacklist_url`：外部黑名单同步地址。
-- `mysql_*`：填写后可切换到 MySQL；留空时默认使用 SQLite。
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `server_address` | string | `""` | 服务绑定地址，留空表示监听所有网卡（`0.0.0.0`）。**同时用于构造对外下载链接**（当 `download_url_base` 为空时作为 fallback） |
+| `server_port` | int | — | 服务端口 |
+| `download_url_base` | string | `""` | **对外下载链接的基准地址**。填入你的反代域名或 CDN 域名（含协议头），如 `"https://dl.mysite.com"`。为空时自动回退使用 `server_address`，再为空则通过 `ifconfig.me/ip` 获取公网 IP |
+| `proxy_url` | string | `""` | HTTP 代理地址，用于扫描阶段下载 GitHub Release 资源 |
+| `asset_proxy_url` | string | `""` | 资源下载地址前缀代理，会拼接在 GitHub 原始 URL 之前 |
+| `xget_enabled` | bool | — | 是否启用 xget 代理加速下载 GitHub 资源 |
+| `xget_domain` | string | — | xget 服务域名，替换 GitHub 下载 URL 中的 `github.com` 部分 |
+
+### GitHub 与扫描
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `github_token` | string | `""` | GitHub Personal Access Token，**强烈建议填写**以降低 API 限流风险（未认证每小时仅 60 次）。也支持通过环境变量 `GITHUB_TOKEN` 覆盖 |
+| `check_cron` | string | `"*/10 * * * *"` | 定时扫描 Cron 表达式（每分钟粒度），为空时自动使用默认值 |
+| `download_timeout_minutes` | int | — | 单个资源文件下载超时（分钟） |
+| `concurrent_downloads` | int | `3` | 并发下载数，≤0 时自动修正为 3 |
+
+### 管理员
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `admin_enabled` | bool | — | 是否启用后台管理 |
+| `admin_user` | string | — | 管理员用户名。若 `admin_enabled` 为 `true` 但此项为空，管理后台会被**自动禁用** |
+| `admin_password` | string | — | bcrypt 哈希后的管理员密码。使用 `htpasswd -bnBC 14 "" <password> | tr -d ':\n'` 生成。若为空则自动禁用管理后台 |
+| `admin_max_retries` | int | `10` | 登录失败次数上限，超出后 IP 被临时锁定。≤0 时自动修正为 10 |
+| `admin_lock_duration` | int | `120` | IP 锁定持续时间（**分钟**）。≤0 时自动修正为 120（2 小时） |
+| `two_factor_enabled` | bool | — | 是否为管理后台启用 TOTP 两步验证 |
+| `two_factor_secret` | string | — | TOTP 共享密钥 |
+
+### 验证码
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `captcha_enabled` | bool | 是否启用下载验证码（极验 GeeTest）。开启后浏览器下载必须先完成人机验证 |
+| `captcha_app_id` | string | 极验 App ID |
+| `captcha_secret_key` | string | 极验 Secret Key（**敏感信息，请勿泄露**） |
+
+### 流量控制与封禁
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `traffic_limit_gb` | int | — | 单 IP 每日下载流量上限（GB）。`0` 表示**完全禁用**流量限制。**负值自动修正为 `5`** |
+| `ban_record_file` | string | `"banned_ips.txt"` | 封禁记录输出文件，存储在 `storage_path` 下 |
+| `external_blacklist_url` | string | `""` | 外部 IP 黑名单同步地址（按行解析，跳注释行），定时同步 |
+| `appeal_contact` | string | `"QQ群 https://qm.qq.com/q/FOGt99aayY"` | 被封禁用户看到的申诉联系方式 |
+
+### 数据库（可选 MySQL）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `mysql_host` | string | `""` | MySQL 主机地址。**留空则使用 SQLite** |
+| `mysql_port` | int | `3306` | MySQL 端口 |
+| `mysql_user` | string | `""` | MySQL 用户名 |
+| `mysql_password` | string | `""` | MySQL 密码 |
+| `mysql_database` | string | `""` | MySQL 数据库名 |
+| `mysql_migration` | bool | `false` | 是否启用 MySQL 迁移模式 |
 
 ### 启动器字段
 
-- `name`：启动器唯一标识，也会出现在 API 路径和文件目录中。
-- `source_url`：GitHub 仓库地址，或可解析到仓库地址的来源页面。
-- `repo_selector`：从 `source_url` 提取仓库地址时使用的选择器或规则。
-- `include_prerelease`：是否把预发布版本也纳入扫描结果。
-- `max_versions`：该启动器要拉取并保留的最近版本数量。
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | string | — | 启动器唯一标识，同时用于 API 路径（`/api/status/{name}`）和文件目录名 |
+| `source_url` | string | — | GitHub 仓库地址（如 `https://github.com/owner/repo`）或可从中提取仓库地址的任意网页 URL |
+| `repo_selector` | string | `""` | 从 `source_url` 页面提取 GitHub 仓库地址的规则：<br>• 留空：匹配页面中第一个 `github.com` 链接<br>• 以 `"regex:"` 开头：用后续正则表达式匹配 `<a href>`<br>• 其他：视为 CSS 选择器匹配元素<br>若 `source_url` 本身已是 GitHub 仓库地址，则忽略此字段 |
+| `include_prerelease` | bool | `false` | 是否将预发布版本（Pre-release）纳入扫描和保留范围 |
+| `max_versions` | int | `0` (=`3`) | 保留的最大版本数。`> 0` 时按配置值保留；`≤ 0` 时自动修正为 **3** |
 
-### `max_versions` 规则
+### `max_versions` 示例
 
-- `max_versions > 0`：按配置值拉取并保留最近 N 个版本。
-- `max_versions = 0`：使用默认值 `3`。
-
-例如：
-
-- `max_versions: 1` 表示只保留最近 1 个版本
-- `max_versions: 2` 表示保留最近 2 个版本
-- `max_versions: 0` 表示按默认值保留最近 3 个版本
+| 配置值 | 实际保留版本数 |
+|--------|---------------|
+| `1` | 只保留最近 1 个版本 |
+| `2` | 保留最近 2 个版本 |
+| `0` | 使用默认值，保留最近 3 个版本 |
+| `-1` | 同上，被 `NormalizeMaxVersions` 修正为 3 |
 
 ## 下载流程
 
@@ -180,25 +231,29 @@ go run ./cmd/mirror
 
 ### 额外说明
 
-- `download_token` 默认有效期为 5 分钟
-- token 设计为短时一次性下载令牌
-- `landing_url` 用于单独页面接力下载和回跳来源站点
-- 非浏览器请求在验证码开启时访问 `/download/...`，会收到 JSON 错误而不是 HTML 页面
+- `download_token` 默认为 64 字符十六进制随机串，有效期 5 分钟。
+- `landing` 接口通过 `Peek` 模式**只读取不消费**令牌，可多次调用；实际下载接口通过 `Validate` 模式**一次性消费**令牌。
+- `landing_url` 用于下载引导页接力，支持读取 `return_url` 以实现下载后回跳来源站点。
+- 非浏览器请求在验证码开启时访问 `/download/...`，会收到 JSON 错误而不是 HTML 验证页面。
 
 ## 统计与风控
 
 ### 数据统计
 
-- 访问记录：IP、路径、User-Agent、Referer、地区信息
-- 下载记录：启动器、版本、文件名、来源 IP
-- 聚合接口：总访问量、总下载量、最近 30 天数据、热门下载、地区分布、每日趋势
+- **访问记录**：IP、路径、User-Agent、Referer、地区（通过 IP 地理位置库解析）
+- **下载记录**：启动器、版本、文件名、来源 IP（仅 `200`/`206` 响应计入）
+- **聚合接口**：总访问量、总下载量、最近 30 天数据、Top 10 热门下载、Top 50 地区分布、最近 30 天每日趋势
+- **缓存策略**：统计接口 `Cache-Control: public, max-age=300`（5 分钟）
+- 访问和下载记录通过异步 worker 池写入（4 worker + 1000 缓冲队列），不阻塞请求
 
 ### 流量限制
 
-- 支持单 IP 每日下载流量上限
-- 超限后可自动封禁
-- 可同步外部黑名单
-- 封禁记录可写入公开文件，例如 `banned_ips.txt`
+- 支持单 IP 每日下载流量上限（GB 级粒度）
+- **预估机制**：下载前解析 `Range` 头预估传输量做预检，超限直接拒绝
+- **精确记录**：下载完成后按实际传输字节数写入数据库
+- 超限后**自动封禁** IP，写入本地黑名单和封禁记录文件
+- 封禁记录格式：`IP | 封禁时间 | 封禁理由 | 当日流量(GB)`
+- 可同步**外部黑名单**（按行解析，跳过 `#` 注释行），定时更新
 
 ## 部署建议
 
