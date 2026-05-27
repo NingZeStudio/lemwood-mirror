@@ -4,6 +4,7 @@ import { Github } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import { cn } from '@/lib/utils'
 import { isNavigationActive, navigationLinks } from '@/lib/navigation'
+import { globalConfig } from '@/lib/globalConfig'
 
 const route = useRoute()
 </script>
@@ -15,8 +16,8 @@ const route = useRoute()
         <router-link to="/" class="flex min-w-0 items-center gap-2 font-semibold">
           <img src="/favicon.jpg" alt="Logo" class="h-8 w-8 rounded-md border object-cover" />
           <div class="min-w-0">
-            <div class="truncate leading-none">柠枺镜像</div>
-            <div class="mt-1 text-xs font-normal text-muted-foreground">Lemwood Mirror</div>
+            <div class="truncate leading-none">{{ globalConfig.site.name }}</div>
+            <div class="mt-1 text-xs font-normal text-muted-foreground">{{ globalConfig.site.nameEn }}</div>
           </div>
         </router-link>
         <Button
@@ -24,7 +25,7 @@ const route = useRoute()
           size="icon"
           class="ml-auto h-8 w-8"
           as="a"
-          href="https://github.com/leemwood/lemwood_mirror/"
+          :href="globalConfig.links.githubRepo"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -51,7 +52,7 @@ const route = useRoute()
       </nav>
 
       <div class="mt-auto border-t border-sidebar-border p-4 text-center text-xs text-muted-foreground">
-        v3.15.0
+        v{{ globalConfig.site.version }}
       </div>
     </div>
   </aside>

@@ -2,18 +2,21 @@
 import { onMounted, ref } from 'vue'
 import { Cookie } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
+import { globalConfig } from '@/lib/globalConfig'
 
 const isOpen = ref(false)
 
+const { cookiesConsented } = globalConfig.storage.keys
+
 onMounted(() => {
-  const consented = localStorage.getItem('cookies-consented')
+  const consented = localStorage.getItem(cookiesConsented)
   if (!consented) {
     isOpen.value = true
   }
 })
 
 const accept = () => {
-  localStorage.setItem('cookies-consented', 'true')
+  localStorage.setItem(cookiesConsented, 'true')
   isOpen.value = false
 }
 </script>
@@ -27,7 +30,7 @@ const accept = () => {
         </div>
         <div class="space-y-1 text-sm">
           <p class="font-medium text-foreground">Cookie 使用提示</p>
-          <p class="text-muted-foreground">本网站使用 Cookies 以优化您的体验。继续浏览即表示您同意我们使用 Cookies。</p>
+          <p class="text-muted-foreground">{{ globalConfig.legal.cookieConsent }}</p>
         </div>
       </div>
       <Button size="sm" class="shrink-0" @click="accept">我知道了</Button>

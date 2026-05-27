@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CheckCircle, Copy, Download, Home, Loader2, ShieldCheck, XCircle } from 'lucide-vue-next'
 import { getCaptchaConfig, verifyDownload } from '@/services/api'
+import { globalConfig } from '@/lib/globalConfig'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import CardContent from '@/components/ui/CardContent.vue'
@@ -26,7 +27,7 @@ const downloadStarted = ref(false)
 
 const fullDownloadUrl = computed(() => {
   if (!downloadUrl.value) return ''
-  return 'https://miawa.cn' + downloadUrl.value
+  return globalConfig.download.baseUrl + downloadUrl.value
 })
 
 let captchaObj = null
@@ -45,7 +46,7 @@ const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
 
   try {
     const returnUrl = route.query.return_url || window.location.href
-    const source = route.query.source || 'verify-download'
+    const source = route.query.source || globalConfig.download.sourceLabels.verify
     const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value, returnUrl, source)
     
     const token = response.data.download_token

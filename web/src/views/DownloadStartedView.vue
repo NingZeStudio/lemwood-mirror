@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getDownloadLanding } from '@/services/api'
+import { globalConfig } from '@/lib/globalConfig'
 import { Download, Home, ArrowLeft, Loader2, XCircle } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -62,6 +63,7 @@ const goToWebsite = () => {
 }
 
 onMounted(() => {
+  document.title = `下载已开始 - ${globalConfig.site.nameFull}`
   loadLandingInfo()
 })
 </script>

@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
+import { globalConfig } from '@/lib/globalConfig'
+
+const T = (name) => `${name} - ${globalConfig.site.nameFull}`
 
 const router = createRouter({
   history: createWebHistory(),
@@ -8,69 +11,69 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: HomeView,
-      meta: { title: '首页 - 柠枺镜像状态' }
+      meta: { title: T('首页') }
     },
     {
       path: '/verify',
       name: 'verify',
       component: () => import('@/views/VerifyView.vue'),
-      meta: { title: '安全验证 - 柠枺镜像状态' }
+      meta: { title: T('安全验证') }
     },
     {
       path: '/files',
       name: 'files',
       component: () => import('@/views/FilesView.vue'),
-      meta: { title: '文件列表 - 柠枺镜像状态' }
+      meta: { title: T('文件列表') }
     },
     {
       path: '/files/:launcherName',
       name: 'files-launcher',
       component: () => import('@/views/FilesView.vue'),
       props: true,
-      meta: { title: '文件列表 - 柠枺镜像状态' }
+      meta: { title: T('文件列表') }
     },
     {
       path: '/files/:launcherName/:versionName',
       name: 'files-version',
       component: () => import('@/views/FilesView.vue'),
       props: true,
-      meta: { title: '文件列表 - 柠枺镜像状态' }
+      meta: { title: T('文件列表') }
     },
     {
       path: '/stats',
       name: 'stats',
       component: () => import('@/views/StatsView.vue'),
-      meta: { title: '统计信息 - 柠枺镜像状态' }
+      meta: { title: T('统计信息') }
     },
     {
       path: '/api',
       name: 'api',
       component: () => import('@/views/ApiDocsView.vue'),
-      meta: { title: 'API 文档 - 柠枺镜像状态' }
+      meta: { title: T('API 文档') }
     },
     {
       path: '/about',
       name: 'about',
       component: () => import('@/views/AboutView.vue'),
-      meta: { title: '关于 - 柠枺镜像状态' }
+      meta: { title: T('关于') }
     },
     {
       path: '/download-started',
       name: 'download-started',
       component: () => import('@/views/DownloadStartedView.vue'),
-      meta: { title: '下载已开始 - 柠枺镜像状态' }
+      meta: { title: T('下载已开始') }
     },
     {
        path: '/:pathMatch(.*)*',
        name: 'not-found',
        component: () => import('@/views/HomeView.vue'),
-       meta: { title: '页面未找到 - 柠枺镜像状态' }
+       meta: { title: T('页面未找到') }
     }
   ]
 })
 
 router.beforeEach((to, from, next) => {
-  document.title = to.meta.title || '柠枺镜像状态'
+  document.title = to.meta.title || globalConfig.site.nameFull
   next()
 })
 
