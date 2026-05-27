@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
+  ArrowUpToLine,
   ChevronRight,
   Copy,
   Download,
@@ -17,10 +18,9 @@ import { useClipboard } from '@vueuse/core'
 import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
 import { getLauncherDisplayName } from '@/lib/launcher-info'
 import { cn } from '@/lib/utils'
+import { globalConfig } from '@/lib/globalConfig'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
-import Card from '@/components/ui/Card.vue'
-import CardContent from '@/components/ui/CardContent.vue'
 import Input from '@/components/ui/Input.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
@@ -76,7 +76,7 @@ const getFileIcon = (filename) => {
 }
 
 const formatDate = (dateString) => {
-  if (!dateString) return '未知'
+  if (!dateString) return ''
   try {
     return new Date(dateString).toLocaleDateString('zh-CN', {
       year: 'numeric',
@@ -88,9 +88,19 @@ const formatDate = (dateString) => {
   }
 }
 
-const copyUrl = (url) => {
-  copy(url)
+const formatSize = (bytes) => {
+  if (bytes == null) return ''
+  const units = ['B', 'KB', 'MB', 'GB']
+  let i = 0
+  let size = bytes
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024
+    i++
+  }
+  return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
+
+const copyUrl = (url) => copy(url)
 
 const handleDownload = async (item) => {
   const launcherName = currentPath.value[0]?.id
@@ -102,7 +112,7 @@ const handleDownload = async (item) => {
 
   const filePath = `${launcherName}/${versionName}/${item.name}`
   const returnUrl = window.location.href
-  const source = 'files-download'
+  const source = globalConfig.download.sourceLabels.files
 
   if (!captchaConfig.value.enabled) {
     try {
@@ -213,7 +223,7 @@ const currentItems = computed(() => {
         downloadUrl:
           asset.url && asset.url.startsWith('http')
             ? asset.url
-            : `https://miawa.cn/download/${launcherName}/${versionName}/${asset.name}`
+            : `${globalConfig.download.baseUrl}/download/${launcherName}/${versionName}/${asset.name}`
       }))
       .filter((f) => !query || f.name.toLowerCase().includes(query))
   }
@@ -250,19 +260,24 @@ onMounted(async () => {
   }
 })
 
+watch([() => props.launcherName, () => props.versionName, currentPath], () => {
+  updateMetaInfo()
+}, { deep: true })
+
 const updateMetaInfo = () => {
-  const baseTitle = '文件列表 - 柠枺镜像状态'
+  const nameFull = globalConfig.site.nameFull
+  const baseTitle = `文件列表 - ${nameFull}`
   let title = baseTitle
   let description = '浏览和下载 Minecraft 启动器版本文件'
 
   if (currentPath.value.length === 1) {
     const launcher = currentPath.value[0]
-    title = `${launcher.name} - 柠枺镜像状态`
+    title = `${launcher.name} - ${nameFull}`
     description = `浏览 ${launcher.name} 的所有版本`
   } else if (currentPath.value.length >= 2) {
     const launcher = currentPath.value[0]
     const version = currentPath.value[1]
-    title = `${version.name} - ${launcher.name} - 柠枺镜像状态`
+    title = `${version.name} - ${launcher.name} - ${nameFull}`
     description = `下载 ${launcher.name} ${version.name} 版本的资源文件`
   }
 
@@ -280,100 +295,103 @@ const updateMetaInfo = () => {
   if (metaTwitterTitle) metaTwitterTitle.setAttribute('content', title)
   if (metaTwitterDescription) metaTwitterDescription.setAttribute('content', description)
 }
-
-watch([() => props.launcherName, () => props.versionName, currentPath], () => {
-  updateMetaInfo()
-}, { deep: true })
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-4">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div class="space-y-2">
+      <div class="space-y-1">
         <h1 class="text-3xl font-bold tracking-tight">文件浏览</h1>
-        <p class="text-muted-foreground">按启动器、版本和文件层级浏览镜像资源。</p>
+        <p class="text-sm text-muted-foreground">按启动器、版本和文件层级浏览镜像资源。</p>
       </div>
-      <div class="relative w-full sm:w-72">
+      <div class="relative w-full sm:w-64">
         <Search class="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input v-model="searchQuery" type="search" placeholder="筛选当前目录..." class="pl-9" />
+        <Input v-model="searchQuery" type="search" placeholder="筛选..." class="pl-9" />
       </div>
     </div>
 
-    <Card>
-      <CardContent class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex min-w-0 items-center gap-1 overflow-x-auto text-sm text-muted-foreground">
-          <Button variant="ghost" size="sm" class="shrink-0" @click="navigateToBreadcrumb(-1)">
-            <Home class="mr-2 h-4 w-4" />
-            根目录
+    <div class="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
+      <div class="flex items-center gap-1 border-b px-3 py-2 text-sm text-muted-foreground">
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="navigateToBreadcrumb(-1)">
+          <Home class="mr-1 h-3.5 w-3.5" />
+          根目录
+        </Button>
+        <template v-for="(crumb, index) in currentPath" :key="crumb.id">
+          <ChevronRight class="h-3.5 w-3.5 shrink-0" />
+          <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="navigateToBreadcrumb(index)">
+            {{ crumb.name }}
           </Button>
-          <template v-for="(crumb, index) in currentPath" :key="crumb.id">
-            <ChevronRight class="h-4 w-4 shrink-0" />
-            <Button variant="ghost" size="sm" class="shrink-0" @click="navigateToBreadcrumb(index)">
-              {{ crumb.name }}
-            </Button>
-          </template>
+        </template>
+        <span v-if="copied" class="ml-auto text-xs text-muted-foreground">链接已复制</span>
+      </div>
+
+      <div v-if="loading" class="divide-y">
+        <div v-for="i in 8" :key="i" class="flex items-center gap-3 px-4 py-3">
+          <Skeleton class="h-8 w-8 shrink-0 rounded" />
+          <div class="min-w-0 flex-1 space-y-1.5">
+            <Skeleton class="h-4 w-3/5" />
+            <Skeleton class="h-3 w-2/5" />
+          </div>
+          <Skeleton class="h-3 w-16 shrink-0" />
         </div>
-        <span v-if="copied" class="text-xs text-muted-foreground">链接已复制</span>
-      </CardContent>
-    </Card>
+      </div>
 
-    <div v-if="loading" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      <Skeleton v-for="i in 12" :key="i" class="h-20 rounded-lg" />
-    </div>
+      <div v-else-if="!currentItems.length" class="flex flex-col items-center gap-3 px-4 py-16 text-muted-foreground">
+        <Folder class="h-10 w-10 opacity-40" />
+        <p class="text-sm font-medium text-foreground">空文件夹</p>
+        <p class="text-xs">没有找到匹配的项目。</p>
+      </div>
 
-    <div v-else-if="!currentItems.length" class="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-      <Folder class="mx-auto mb-4 h-12 w-12 opacity-40" />
-      <p class="font-medium text-foreground">空文件夹</p>
-      <p class="mt-1 text-sm">没有找到匹配的项目。</p>
-    </div>
+      <div v-else class="divide-y">
+        <button
+          v-if="currentPath.length > 0"
+          type="button"
+          class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent"
+          @click="navigateUp"
+        >
+          <ArrowUpToLine class="h-4 w-4" />
+          <span>返回上一级</span>
+        </button>
 
-    <div v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      <button
-        v-if="currentPath.length > 0"
-        type="button"
-        class="flex items-center gap-3 rounded-lg border border-dashed bg-background p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-        @click="navigateUp"
-      >
-        <ArrowLeft class="h-5 w-5 text-muted-foreground" />
-        <span class="text-sm font-medium">返回上一级</span>
-      </button>
-
-      <Card
-        v-for="item in currentItems"
-        :key="item.id"
-        :class="cn('transition-colors hover:bg-accent/50', item.type !== 'file' ? 'cursor-pointer' : '')"
-        @click="item.type !== 'file' ? navigateTo(item, item.type) : null"
-      >
-        <CardContent class="flex items-center gap-3 p-4">
-          <div class="rounded-md bg-primary/10 p-2 text-primary">
-            <Folder v-if="item.type === 'launcher' || item.type === 'version'" class="h-5 w-5" />
-            <component v-else :is="getFileIcon(item.name)" class="h-5 w-5" />
+        <div
+          v-for="item in currentItems"
+          :key="item.id"
+          :class="cn(
+            'flex items-center gap-3 px-4 py-2.5 transition-colors',
+            item.type !== 'file' ? 'cursor-pointer hover:bg-accent/50' : 'hover:bg-muted/30'
+          )"
+          @click="item.type !== 'file' ? navigateTo(item, item.type) : null"
+        >
+          <div class="flex shrink-0 items-center justify-center rounded-md bg-primary/10 p-1.5 text-primary">
+            <Folder v-if="item.type === 'launcher' || item.type === 'version'" class="h-4 w-4" />
+            <component v-else :is="getFileIcon(item.name)" class="h-4 w-4" />
           </div>
 
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
-              <h3 class="truncate text-sm font-medium" :title="item.name">{{ item.name }}</h3>
-              <Badge v-if="item.isLatest" variant="success">Latest</Badge>
+              <span class="truncate text-sm font-medium" :title="item.name">{{ item.name }}</span>
+              <Badge v-if="item.isLatest" variant="success" class="text-[10px] leading-none">Latest</Badge>
             </div>
-            <p class="mt-1 text-xs text-muted-foreground">
-              <span v-if="item.type === 'launcher'">{{ item.count }} 个版本</span>
-              <span v-else-if="item.type === 'version'">{{ formatDate(item.date) }} · {{ item.fileCount }} 个文件</span>
-              <span v-else>文件资源</span>
-            </p>
+            <p v-if="item.type === 'launcher'" class="mt-0.5 text-xs text-muted-foreground">{{ item.count }} 个版本</p>
+            <p v-else-if="item.type === 'version'" class="mt-0.5 text-xs text-muted-foreground">{{ formatDate(item.date) }} · {{ item.fileCount }} 个文件</p>
           </div>
 
-          <div v-if="item.type === 'file'" class="flex shrink-0 gap-1">
-            <Button size="icon" variant="ghost" class="h-8 w-8" @click.stop="copyUrl(item.downloadUrl)">
-              <Copy class="h-4 w-4" />
+          <span v-if="item.type === 'file' && item.size != null" class="shrink-0 text-xs text-muted-foreground">
+            {{ formatSize(item.size) }}
+          </span>
+
+          <div v-if="item.type === 'file'" class="flex shrink-0 gap-0.5">
+            <Button size="icon" variant="ghost" class="h-7 w-7" @click.stop="copyUrl(item.downloadUrl)">
+              <Copy class="h-3.5 w-3.5" />
               <span class="sr-only">复制链接</span>
             </Button>
-            <Button size="icon" variant="ghost" class="h-8 w-8" @click.stop="handleDownload(item)">
-              <Download class="h-4 w-4" />
+            <Button size="icon" variant="ghost" class="h-7 w-7" @click.stop="handleDownload(item)">
+              <Download class="h-3.5 w-3.5" />
               <span class="sr-only">下载</span>
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   </div>
 </template>

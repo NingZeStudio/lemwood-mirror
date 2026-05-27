@@ -1,186 +1,117 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { useDark, useToggle } from '@vueuse/core'
-import { Menu, Moon, Palette, Sun, Upload, X } from 'lucide-vue-next'
-import Sidebar from '@/components/layout/Sidebar.vue'
+import { Moon, Palette, Sun, X } from 'lucide-vue-next'
 import Footer from '@/components/layout/Footer.vue'
+import MobileNav from '@/components/layout/MobileNav.vue'
 import Button from '@/components/ui/Button.vue'
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
-  SheetTitle,
-  SheetTrigger
+  SheetTitle
 } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { isNavigationActive, navigationLinks } from '@/lib/navigation'
+import { globalConfig } from '@/lib/globalConfig'
 
 const route = useRoute()
-const isDark = useDark()
-const toggleDark = useToggle(isDark)
-const isMobileMenuOpen = ref(false)
+
+const { themeColor, darkMode } = globalConfig.storage.keys
+
+const isDark = computed({
+  get: () => document.documentElement.classList.contains('dark'),
+  set: (v) => document.documentElement.classList.toggle('dark', v)
+})
+
+const toggleDark = () => { isDark.value = !isDark.value }
 const isThemePanelOpen = ref(false)
 
-const colorOptions = [
-  { name: '水墨', value: 'monochrome', color: 'bg-zinc-500' },
-  { name: '海洋', value: 'blue', color: 'bg-blue-500' },
-  { name: '薰衣草', value: 'purple', color: 'bg-purple-500' },
-  { name: '森林', value: 'green', color: 'bg-green-500' },
-  { name: '日落', value: 'orange', color: 'bg-orange-500' },
-  { name: '樱花', value: 'pink', color: 'bg-pink-500' }
-]
+const colorOptions = globalConfig.theme.colors.map(c => ({
+  name: c.name,
+  value: c.value,
+  color: ({
+    monochrome: 'bg-zinc-500',
+    blue: 'bg-blue-500',
+    purple: 'bg-purple-500',
+    green: 'bg-green-500',
+    orange: 'bg-orange-500',
+    pink: 'bg-pink-500'
+  })[c.value] || 'bg-zinc-500'
+}))
 
-const selectedColor = ref(localStorage.getItem('theme-color') || 'monochrome')
-const backdropBlur = ref(parseFloat(localStorage.getItem('backdrop-blur') || '0'))
-const backdropOpacity = ref(parseFloat(localStorage.getItem('backdrop-opacity') || '1'))
-const backgroundImage = ref(localStorage.getItem('background-image') || '')
-const showBackgroundImage = ref(localStorage.getItem('show-background-image') === 'true')
-
-const applyBackgroundSettings = () => {
-  localStorage.setItem('backdrop-blur', String(backdropBlur.value))
-  localStorage.setItem('backdrop-opacity', String(backdropOpacity.value))
-  localStorage.setItem('background-image', backgroundImage.value)
-  localStorage.setItem('show-background-image', String(showBackgroundImage.value))
-  document.documentElement.style.setProperty('--backdrop-blur', `${backdropBlur.value}px`)
-  document.documentElement.style.setProperty('--backdrop-opacity', String(backdropOpacity.value))
-
-  if (showBackgroundImage.value && backgroundImage.value) {
-    document.documentElement.style.setProperty('--background-image', `url(${backgroundImage.value})`)
-  } else {
-    document.documentElement.style.removeProperty('--background-image')
-  }
-}
-
-const handleImageUpload = (event) => {
-  const file = event.target.files?.[0]
-  if (!file) return
-
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    backgroundImage.value = e.target?.result || ''
-    showBackgroundImage.value = Boolean(backgroundImage.value)
-    applyBackgroundSettings()
-  }
-  reader.readAsDataURL(file)
-}
+const selectedColor = ref(localStorage.getItem(themeColor) || globalConfig.theme.defaultColor)
 
 const applyThemeColor = (color) => {
   selectedColor.value = color
-  localStorage.setItem('theme-color', color)
+  localStorage.setItem(themeColor, color)
   document.documentElement.setAttribute('data-theme-color', color)
 }
 
 const resetThemeSettings = () => {
-  localStorage.removeItem('theme-color')
-  localStorage.removeItem('backdrop-blur')
-  localStorage.removeItem('backdrop-opacity')
-  localStorage.removeItem('background-image')
-  localStorage.removeItem('show-background-image')
+  localStorage.removeItem(themeColor)
   document.documentElement.removeAttribute('data-theme-color')
-  document.documentElement.style.removeProperty('--backdrop-blur')
-  document.documentElement.style.removeProperty('--backdrop-opacity')
-  document.documentElement.style.removeProperty('--background-image')
-  selectedColor.value = 'monochrome'
-  backdropBlur.value = 0
-  backdropOpacity.value = 1
-  backgroundImage.value = ''
-  showBackgroundImage.value = false
-  applyBackgroundSettings()
+  selectedColor.value = globalConfig.theme.defaultColor
 }
 
-const hideBackgroundImage = () => {
-  showBackgroundImage.value = false
-  applyBackgroundSettings()
-}
-
-const clearBackgroundImage = () => {
-  backgroundImage.value = ''
-  showBackgroundImage.value = false
-  applyBackgroundSettings()
-}
+onMounted(() => {
+  const stored = localStorage.getItem(darkMode)
+  if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
+})
 
 applyThemeColor(selectedColor.value)
-applyBackgroundSettings()
 </script>
 
 <template>
-  <div
-    class="min-h-screen bg-background"
-    :style="{
-      backgroundImage: showBackgroundImage && backgroundImage ? `url(${backgroundImage})` : 'none',
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-      backgroundAttachment: 'fixed'
-    }"
-  >
-    <div
-      class="grid min-h-screen w-full md:grid-cols-[220px_1fr] lg:grid-cols-[280px_1fr]"
-      :style="{ backgroundColor: `hsl(var(--background) / ${backdropOpacity})` }"
-    >
-      <Sidebar />
+  <div class="min-h-screen bg-background">
+    <div class="flex min-h-screen flex-col">
+      <header class="sticky top-3 z-30 mx-auto w-[calc(100%-2rem)] max-w-6xl rounded-xl border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div class="flex h-14 items-center gap-2 px-3 lg:h-[60px] lg:gap-3 lg:px-5">
+          <router-link to="/" class="flex shrink-0 items-center gap-2 font-semibold">
+            <img src="/favicon.jpg" alt="Logo" class="h-7 w-7 rounded border object-cover" />
+            <span class="inline">{{ globalConfig.site.name }}</span>
+          </router-link>
 
-      <div class="flex min-h-screen flex-col">
-        <header class="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background px-4 lg:h-[60px] lg:px-6">
-          <Sheet v-model:open="isMobileMenuOpen">
-            <SheetTrigger as-child>
-              <Button variant="outline" size="icon" class="shrink-0 md:hidden">
-                <Menu class="h-5 w-5" />
-                <span class="sr-only">打开导航菜单</span>
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left" class="flex flex-col">
-              <SheetHeader class="text-left">
-                <SheetTitle class="flex items-center gap-2">
-                  <img src="/favicon.jpg" alt="Logo" class="h-8 w-8 rounded-md border object-cover" />
-                  柠枺镜像
-                </SheetTitle>
-                <SheetDescription>Lemwood Mirror 站点导航</SheetDescription>
-              </SheetHeader>
+          <nav class="ml-4 hidden items-center gap-0.5 md:flex">
+            <router-link
+              v-for="link in navigationLinks"
+              :key="link.path"
+              :to="link.path"
+              :class="cn(
+                'rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground',
+                isNavigationActive(route.path, link)
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground'
+              )"
+            >
+              {{ link.name }}
+            </router-link>
+          </nav>
 
-              <nav class="mt-6 grid gap-1 text-sm font-medium">
-                <router-link
-                  v-for="link in navigationLinks"
-                  :key="link.path"
-                  :to="link.path"
-                  :class="cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-accent hover:text-accent-foreground',
-                    isNavigationActive(route.path, link)
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground'
-                  )"
-                  @click="isMobileMenuOpen = false"
-                >
-                  <component :is="link.icon" class="h-4 w-4" />
-                  {{ link.name }}
-                </router-link>
-              </nav>
+          <div class="flex-1" />
 
-              <div class="mt-auto border-t pt-4 text-center text-xs text-muted-foreground">v3.15.0</div>
-            </SheetContent>
-          </Sheet>
-
-          <div class="min-w-0 flex-1">
-            <span class="font-semibold md:hidden">柠枺镜像</span>
-          </div>
-
-          <Button variant="ghost" size="icon" @click="toggleDark()">
-            <Sun v-if="!isDark" class="h-5 w-5" />
-            <Moon v-else class="h-5 w-5" />
+          <Button variant="ghost" size="icon" class="h-8 w-8" @click="toggleDark()">
+            <Sun v-if="!isDark" class="h-4 w-4" />
+            <Moon v-else class="h-4 w-4" />
             <span class="sr-only">切换深浅色</span>
           </Button>
-          <Button variant="ghost" size="icon" @click="isThemePanelOpen = true">
-            <Palette class="h-5 w-5" />
+          <Button variant="ghost" size="icon" class="h-8 w-8" @click="isThemePanelOpen = true">
+            <Palette class="h-4 w-4" />
             <span class="sr-only">主题设置</span>
           </Button>
-        </header>
+          <MobileNav />
+        </div>
+      </header>
 
-        <main class="flex flex-1 flex-col gap-6 p-4 lg:p-6">
-          <slot />
-        </main>
-        <Footer />
-      </div>
+      <main class="mx-auto flex w-[calc(100%-2rem)] max-w-6xl flex-1 flex-col gap-6 pt-6 lg:pt-8">
+        <slot />
+      </main>
+      <Footer />
     </div>
   </div>
 
@@ -191,7 +122,7 @@ applyBackgroundSettings()
           <Palette class="h-5 w-5" />
           主题设置
         </SheetTitle>
-        <SheetDescription>调整主题色、深浅色模式和可选背景图片。</SheetDescription>
+        <SheetDescription>调整主题色和深浅色模式。</SheetDescription>
       </SheetHeader>
 
       <div class="mt-6 space-y-6">
@@ -217,72 +148,14 @@ applyBackgroundSettings()
         <section class="space-y-3">
           <h4 class="text-sm font-medium">显示模式</h4>
           <div class="grid grid-cols-2 gap-2">
-            <Button variant="outline" :class="!isDark ? 'bg-accent' : ''" @click="!isDark || toggleDark()">
+            <Button variant="outline" :class="!isDark ? 'bg-accent' : ''" @click="isDark.value = false">
               <Sun class="mr-2 h-4 w-4" />
               浅色
             </Button>
-            <Button variant="outline" :class="isDark ? 'bg-accent' : ''" @click="isDark || toggleDark()">
+            <Button variant="outline" :class="isDark ? 'bg-accent' : ''" @click="isDark.value = true">
               <Moon class="mr-2 h-4 w-4" />
               深色
             </Button>
-          </div>
-        </section>
-
-        <section class="space-y-4">
-          <h4 class="text-sm font-medium">背景图片</h4>
-          <div class="grid gap-2">
-            <label class="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
-              <Upload class="mr-2 h-4 w-4" />
-              上传图片
-              <input type="file" accept="image/*" class="hidden" @change="handleImageUpload" />
-            </label>
-            <div class="grid grid-cols-2 gap-2" v-if="backgroundImage">
-              <Button variant="outline" @click="hideBackgroundImage">
-                <X class="mr-2 h-4 w-4" />
-                隐藏
-              </Button>
-              <Button variant="outline" @click="clearBackgroundImage">
-                <X class="mr-2 h-4 w-4" />
-                清除
-              </Button>
-            </div>
-          </div>
-          <div v-if="backgroundImage" class="overflow-hidden rounded-md border">
-            <img :src="backgroundImage" alt="背景预览" class="h-28 w-full object-cover" />
-          </div>
-        </section>
-
-        <section class="space-y-4">
-          <h4 class="text-sm font-medium">背景效果</h4>
-          <div class="space-y-2">
-            <div class="flex justify-between text-xs text-muted-foreground">
-              <span>模糊强度</span>
-              <span>{{ backdropBlur }}px</span>
-            </div>
-            <input
-              v-model.number="backdropBlur"
-              type="range"
-              min="0"
-              max="20"
-              step="1"
-              class="w-full accent-primary"
-              @input="applyBackgroundSettings"
-            />
-          </div>
-          <div class="space-y-2">
-            <div class="flex justify-between text-xs text-muted-foreground">
-              <span>背景遮罩</span>
-              <span>{{ Math.round(backdropOpacity * 100) }}%</span>
-            </div>
-            <input
-              v-model.number="backdropOpacity"
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.1"
-              class="w-full accent-primary"
-              @input="applyBackgroundSettings"
-            />
           </div>
         </section>
 

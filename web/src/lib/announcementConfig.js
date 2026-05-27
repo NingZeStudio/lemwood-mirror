@@ -1,11 +1,16 @@
+import { globalConfig } from '@/lib/globalConfig'
+
 export const announcementConfig = {
-  enabled: true,
-  id: '20260519_lemwood_announcement',
-  title: '站点公告',
+  id: '20260527_mirror_strategy',
+  title: '镜像策略调整通知',
   content:
-    '欢迎使用 Lemwood Mirror。我们会在这里同步站点维护、下载说明和重要更新。\n\n当公告内容更新时，只需要修改本配置中的 id，所有用户都会重新看到最新公告。',
-  importantText: '请留意公告中的重要变更，避免错过下载与维护信息。',
+    '由于服务器硬盘资源紧张，本站镜像策略由「全版本镜像」调整为「仅保留每个启动器最新三个版本」。更早的历史版本将逐步清理释放空间，如需特定旧版本请提前备份或联系我们。\n\n感谢您的理解与支持。',
+  importantText: 'NingZeStudio 官方 QQ 群现已开放，群内急需可以为萌新分析日志、用户答疑解惑的好心人，欢迎加入交流。',
   links: [
+    {
+      label: '加入 QQ 群',
+      url: 'https://qm.qq.com/q/WMXCSUhU4O'
+    },
     {
       label: '查看文件',
       url: '/files'
@@ -17,43 +22,24 @@ export const announcementConfig = {
   ]
 }
 
-export const localStorageKeys = {
-  announcementShown: 'lemwood_announcement_shown',
-  lastAnnouncementId: 'lemwood_last_announcement_id'
-}
-
-function getStorage() {
-  if (typeof window === 'undefined') return null
-
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
+const KEYS = {
+  shown: globalConfig.storage.keys.announcementShown,
+  lastId: globalConfig.storage.keys.lastAnnouncementId
 }
 
 export function hasSeenAnnouncement() {
-  const storage = getStorage()
-  if (!storage) return false
-
-  const lastSeen = storage.getItem(localStorageKeys.lastAnnouncementId)
-  const hasClosed = storage.getItem(localStorageKeys.announcementShown) === 'true'
-
-  return lastSeen === announcementConfig.id && hasClosed
+  return (
+    localStorage.getItem(KEYS.lastId) === announcementConfig.id &&
+    localStorage.getItem(KEYS.shown) === 'true'
+  )
 }
 
 export function markAnnouncementAsSeen() {
-  const storage = getStorage()
-  if (!storage) return
-
-  storage.setItem(localStorageKeys.announcementShown, 'true')
-  storage.setItem(localStorageKeys.lastAnnouncementId, announcementConfig.id)
+  localStorage.setItem(KEYS.shown, 'true')
+  localStorage.setItem(KEYS.lastId, announcementConfig.id)
 }
 
 export function resetAnnouncement() {
-  const storage = getStorage()
-  if (!storage) return
-
-  storage.removeItem(localStorageKeys.announcementShown)
-  storage.removeItem(localStorageKeys.lastAnnouncementId)
+  localStorage.removeItem(KEYS.shown)
+  localStorage.removeItem(KEYS.lastId)
 }

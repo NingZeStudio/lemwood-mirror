@@ -1,31 +1,9 @@
-// 定义启动器信息类型
-interface LauncherInfo {
-  displayName: string;
-  logoUrl?: string;
+import { globalConfig } from '@/lib/globalConfig'
+
+export const LAUNCHER_INFO_MAP: Record<string, { displayName: string; logoUrl?: string }> =
+  globalConfig.launchers as Record<string, { displayName: string; logoUrl?: string }>
+
+export function getLauncherDisplayName(name: string): string {
+  const launchers = globalConfig.launchers as Record<string, { displayName: string; logoUrl?: string }>
+  return launchers[name]?.displayName || name
 }
-
-// 启动器信息映射表
-export const LAUNCHER_INFO_MAP: Record<string, LauncherInfo> = {
-  'zl': { displayName: 'ZalithLauncher' },
-  'zl2': { displayName: 'ZalithLauncher2' },
-  'hmcl': { displayName: 'Hello Minecraft! Launcher' },
-  'MG': { displayName: 'MobileGlues' },
-  'fcl': { displayName: 'FoldCraftLauncher' },
-  'FCL_Turnip': { displayName: 'FCL_Turnip Plugin' },
-  'shizuku': { displayName: 'Shizuku' },
-  'leaves': { displayName: 'Leaves 服务端' },
-  'leaf': { displayName: 'Leaf 服务端' },
-  'luminol': { displayName: 'Luminol 服务端' },
-  'authlib-injector': { displayName: '【开发者】authlib-injector 库' },
-  'fcl_di': { displayName: '【直装版】FoldCraftLauncher' },
-  'aamc': { displayName: 'Angel Aura Amethyst', logoUrl: new URL('../assets/images/amethyst.png', import.meta.url).href }
-};
-
-/**
- * 获取启动器显示名称
- * @param name - 启动器名称
- * @returns 显示名称
- */
-export const getLauncherDisplayName = (name: string): string => {
-  return LAUNCHER_INFO_MAP[name]?.displayName || name;
-};
