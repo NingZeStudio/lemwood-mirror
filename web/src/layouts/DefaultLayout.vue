@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Moon, Palette, Sun, X } from 'lucide-vue-next'
 import Footer from '@/components/layout/Footer.vue'
@@ -20,13 +20,16 @@ const route = useRoute()
 
 const { themeColor, darkMode } = globalConfig.storage.keys
 
-const isDark = computed({
-  get: () => document.documentElement.classList.contains('dark'),
-  set: (v) => document.documentElement.classList.toggle('dark', v)
-})
-
-const toggleDark = () => { isDark.value = !isDark.value }
+const isDark = ref(false)
 const isThemePanelOpen = ref(false)
+
+const setDark = (val) => {
+  isDark.value = val
+  document.documentElement.classList.toggle('dark', val)
+  localStorage.setItem(darkMode, val ? 'dark' : 'light')
+}
+
+const toggleDark = () => setDark(!isDark.value)
 
 const colorOptions = globalConfig.theme.colors.map(c => ({
   name: c.name,
@@ -51,17 +54,17 @@ const applyThemeColor = (color) => {
 
 const resetThemeSettings = () => {
   localStorage.removeItem(themeColor)
+  localStorage.removeItem(darkMode)
   document.documentElement.removeAttribute('data-theme-color')
   selectedColor.value = globalConfig.theme.defaultColor
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  setDark(prefersDark)
 }
 
 onMounted(() => {
   const stored = localStorage.getItem(darkMode)
-  if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    document.documentElement.classList.add('dark')
-  } else {
-    document.documentElement.classList.remove('dark')
-  }
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  setDark(stored === 'dark' || (!stored && prefersDark))
 })
 
 applyThemeColor(selectedColor.value)
@@ -148,11 +151,11 @@ applyThemeColor(selectedColor.value)
         <section class="space-y-3">
           <h4 class="text-sm font-medium">显示模式</h4>
           <div class="grid grid-cols-2 gap-2">
-            <Button variant="outline" :class="!isDark ? 'bg-accent' : ''" @click="isDark.value = false">
+            <Button variant="outline" :class="!isDark ? 'bg-accent' : ''" @click="setDark(false)">
               <Sun class="mr-2 h-4 w-4" />
               浅色
             </Button>
-            <Button variant="outline" :class="isDark ? 'bg-accent' : ''" @click="isDark.value = true">
+            <Button variant="outline" :class="isDark ? 'bg-accent' : ''" @click="setDark(true)">
               <Moon class="mr-2 h-4 w-4" />
               深色
             </Button>
