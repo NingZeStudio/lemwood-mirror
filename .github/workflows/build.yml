@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*'
+      - '*'
   pull_request:
     branches:
       - main
@@ -67,19 +67,22 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
       run: |
         BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
-        go build -o "$BINARY_NAME" ./cmd/mirror
+        VERSION="${{ github.ref_name }}"
+        go build -ldflags "-X main.Version=${VERSION}" -o "$BINARY_NAME" ./cmd/mirror
 
     - name: Package Artifact (Windows)
       if: matrix.archive == 'zip'
       run: |
+        BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.zip"
-        zip -r "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.yaml
+        zip -r "$PKG_NAME" "$BINARY_NAME" config.yaml
 
     - name: Package Artifact (Linux)
       if: matrix.archive == 'tar.gz'
       run: |
+        BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.tar.gz"
-        tar -czvf "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.yaml
+        tar -czvf "$PKG_NAME" "$BINARY_NAME" config.yaml
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -91,6 +94,8 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
+        files: |
+          mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}
+          mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

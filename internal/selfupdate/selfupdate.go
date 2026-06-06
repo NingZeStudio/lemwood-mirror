@@ -1,7 +1,10 @@
 package selfupdate
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -222,14 +225,14 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 		return status, err
 	}
 
-	asset := findPlatformAsset(release)
+	asset, isArchive := findPlatformAsset(release)
 	if asset == nil {
 		err := fmt.Errorf("未找到匹配当前平台 (%s/%s) 的资产", runtime.GOOS, runtime.GOARCH)
 		status := m.SetApplyError(err)
 		return status, err
 	}
 
-	if err := downloadAndReplace(ctx, asset, m.binaryPath); err != nil {
+	if err := downloadAndReplace(ctx, asset, m.binaryPath, isArchive); err != nil {
 		status := m.SetApplyError(err)
 		return status, err
 	}
@@ -370,31 +373,41 @@ func ReplaceTargetPath(binaryPath string) string {
 	return filepath.Clean(binaryPath)
 }
 
-func findPlatformAsset(release *gh.RepositoryRelease) *gh.ReleaseAsset {
+func findPlatformAsset(release *gh.RepositoryRelease) (*gh.ReleaseAsset, bool) {
 	patterns := platformPatterns()
+
+	var archiveFallback *gh.ReleaseAsset
 	for _, asset := range release.Assets {
 		name := strings.ToLower(asset.GetName())
 		for _, pat := range patterns {
-			if strings.Contains(name, pat) {
-				return asset
+			if !strings.Contains(name, pat) {
+				continue
 			}
+			if isArchiveAsset(name) {
+				if archiveFallback == nil {
+					archiveFallback = asset
+				}
+				continue
+			}
+			return asset, false
 		}
 	}
-	return nil
+
+	if archiveFallback != nil {
+		return archiveFallback, true
+	}
+	return nil, false
+}
+
+func isArchiveAsset(name string) bool {
+	return strings.HasSuffix(name, ".tar.gz") ||
+		strings.HasSuffix(name, ".tgz") ||
+		strings.HasSuffix(name, ".zip")
 }
 
 func platformPatterns() []string {
 	goos := strings.ToLower(runtime.GOOS)
 	goarch := strings.ToLower(runtime.GOARCH)
-
-	switch goarch {
-	case "amd64":
-		goarch = "amd64"
-	case "arm64":
-		goarch = "arm64"
-	case "arm":
-		goarch = "arm"
-	}
 
 	base := []string{
 		goos + "-" + goarch,
@@ -412,7 +425,7 @@ func platformPatterns() []string {
 	return base
 }
 
-func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath string) error {
+func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath string, isArchive bool) error {
 	downloadURL := asset.GetBrowserDownloadURL()
 	if downloadURL == "" {
 		return fmt.Errorf("资产 %s 没有下载链接", asset.GetName())
@@ -436,12 +449,12 @@ func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath 
 		return fmt.Errorf("下载返回状态码 %d", resp.StatusCode)
 	}
 
-	tmpPath := targetPath + ".new"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	tmpFile := targetPath + ".download"
+	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %w", err)
 	}
-	defer os.Remove(tmpPath)
+	defer os.Remove(tmpFile)
 
 	bufWriter := bufio.NewWriterSize(f, 64*1024)
 	written, err := io.Copy(bufWriter, io.TeeReader(resp.Body, &progressTracker{
@@ -464,12 +477,136 @@ func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath 
 		return fmt.Errorf("下载字节数不匹配: 期望 %d, 实际 %d", resp.ContentLength, written)
 	}
 
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	binaryPath := tmpFile
+	if isArchive {
+		extracted, err := extractBinaryFromArchive(tmpFile)
+		if err != nil {
+			return fmt.Errorf("解压失败: %w", err)
+		}
+		binaryPath = extracted
+		defer os.Remove(extracted)
+	}
+
+	tmpBin := targetPath + ".new"
+	if err := copyFile(binaryPath, tmpBin); err != nil {
+		return err
+	}
+	defer os.Remove(tmpBin)
+
+	if err := os.Chmod(tmpBin, 0o755); err != nil {
+		return fmt.Errorf("设置执行权限失败: %w", err)
+	}
+
+	if err := os.Rename(tmpBin, targetPath); err != nil {
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
 	log.Printf("自更新: 已替换二进制 %s", targetPath)
 	return nil
+}
+
+func extractBinaryFromArchive(archivePath string) (string, error) {
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractFromZip(archivePath)
+	}
+	return extractFromTarGz(archivePath)
+}
+
+func extractFromTarGz(tgzPath string) (string, error) {
+	f, err := os.Open(tgzPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	gzReader, err := gzip.NewReader(f)
+	if err != nil {
+		return "", err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if header.Typeflag == tar.TypeReg {
+			name := filepath.Base(header.Name)
+			if name == "." || strings.Contains(name, "config") {
+				continue
+			}
+			outPath := tgzPath + ".extracted"
+			out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			if err != nil {
+				return "", err
+			}
+			defer out.Close()
+			if _, err := io.Copy(out, tarReader); err != nil {
+				out.Close()
+				os.Remove(outPath)
+				return "", err
+			}
+			out.Close()
+			return outPath, nil
+		}
+	}
+	return "", fmt.Errorf("在压缩包中未找到可执行文件")
+}
+
+func extractFromZip(zipPath string) (string, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		name := filepath.Base(f.Name)
+		if strings.Contains(name, "config") {
+			continue
+		}
+		outPath := zipPath + ".extracted"
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		defer rc.Close()
+		out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return "", err
+		}
+		defer out.Close()
+		if _, err := io.Copy(out, rc); err != nil {
+			out.Close()
+			os.Remove(outPath)
+			return "", err
+		}
+		out.Close()
+		return outPath, nil
+	}
+	return "", fmt.Errorf("在压缩包中未找到可执行文件")
+}
+
+func copyFile(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	d, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	_, err = io.Copy(d, s)
+	return err
 }
 
 type progressTracker struct {
