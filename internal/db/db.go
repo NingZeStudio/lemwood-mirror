@@ -120,7 +120,7 @@ func migrateFromSQLite(sqlitePath string) error {
 	}
 
 	// 2. 迁移数据
-	tables := []string{"visits", "downloads", "ip_blacklist", "ip_daily_traffic", "system_info"}
+	tables := []string{"visits", "downloads", "repo_downloads", "ip_blacklist", "ip_daily_traffic", "repo_ip_daily_traffic", "system_info"}
 	for _, table := range tables {
 		if err := migrateTable(sqliteDB, DB, table); err != nil {
 			return fmt.Errorf("迁移表 %s 失败: %w", table, err)
@@ -133,6 +133,9 @@ func migrateFromSQLite(sqlitePath string) error {
 func migrateTable(src, dst *sql.DB, tableName string) error {
 	rows, err := src.Query(fmt.Sprintf("SELECT * FROM %s", tableName))
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") || strings.Contains(strings.ToLower(err.Error()), "doesn't exist") {
+			return nil
+		}
 		return err
 	}
 	defer rows.Close()
@@ -247,6 +250,14 @@ func createTables() error {
                 country VARCHAR(255),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			`CREATE TABLE IF NOT EXISTS repo_downloads (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                repo_name VARCHAR(255),
+                repo_path TEXT,
+                ip VARCHAR(255),
+                country VARCHAR(255),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE TABLE IF NOT EXISTS ip_blacklist (
                 ip VARCHAR(255) PRIMARY KEY,
                 reason TEXT,
@@ -260,7 +271,14 @@ func createTables() error {
                 bytes_downloaded BIGINT DEFAULT 0,
                 PRIMARY KEY (ip, date)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			`CREATE TABLE IF NOT EXISTS repo_ip_daily_traffic (
+                ip VARCHAR(255),
+                date VARCHAR(20),
+                bytes_downloaded BIGINT DEFAULT 0,
+                PRIMARY KEY (ip, date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE INDEX idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
+			`CREATE INDEX idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 ` + "`key`" + ` VARCHAR(255) PRIMARY KEY,
                 value TEXT,
@@ -271,6 +289,8 @@ func createTables() error {
 			`CREATE INDEX idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX idx_downloads_launcher_version ON downloads(launcher, version)`,
+			`CREATE INDEX idx_repo_downloads_created_at ON repo_downloads(created_at)`,
+			`CREATE INDEX idx_repo_downloads_repo_name ON repo_downloads(repo_name)`,
 		}
 	} else {
 		queries = []string{
@@ -294,6 +314,14 @@ func createTables() error {
                 country TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
+			`CREATE TABLE IF NOT EXISTS repo_downloads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT,
+                repo_path TEXT,
+                ip TEXT,
+                country TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`,
 			`CREATE TABLE IF NOT EXISTS ip_blacklist (
                 ip TEXT PRIMARY KEY,
                 reason TEXT,
@@ -307,7 +335,14 @@ func createTables() error {
                 bytes_downloaded INTEGER DEFAULT 0,
                 PRIMARY KEY (ip, date)
             )`,
+			`CREATE TABLE IF NOT EXISTS repo_ip_daily_traffic (
+                ip TEXT,
+                date TEXT,
+                bytes_downloaded INTEGER DEFAULT 0,
+                PRIMARY KEY (ip, date)
+            )`,
 			`CREATE INDEX IF NOT EXISTS idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
+			`CREATE INDEX IF NOT EXISTS idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 key TEXT PRIMARY KEY,
                 value TEXT,
@@ -318,6 +353,8 @@ func createTables() error {
 			`CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_launcher_version ON downloads(launcher, version)`,
+			`CREATE INDEX IF NOT EXISTS idx_repo_downloads_created_at ON repo_downloads(created_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_repo_downloads_repo_name ON repo_downloads(repo_name)`,
 		}
 	}
 
@@ -542,7 +579,29 @@ func RecordTraffic(ip string, bytes int64) error {
 			INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
 			ON CONFLICT(ip, date) DO UPDATE SET bytes_downloaded = bytes_downloaded + ?`
 	}
-	
+
+	var err error
+	if isMySQL {
+		_, err = DB.Exec(query, ip, date, bytes)
+	} else {
+		_, err = DB.Exec(query, ip, date, bytes, bytes)
+	}
+	return err
+}
+
+func RecordRepoTraffic(ip string, bytes int64) error {
+	date := time.Now().Format("2006-01-02")
+	var query string
+	if isMySQL {
+		query = `
+			INSERT INTO repo_ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE bytes_downloaded = bytes_downloaded + VALUES(bytes_downloaded)`
+	} else {
+		query = `
+			INSERT INTO repo_ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
+			ON CONFLICT(ip, date) DO UPDATE SET bytes_downloaded = bytes_downloaded + ?`
+	}
+
 	var err error
 	if isMySQL {
 		_, err = DB.Exec(query, ip, date, bytes)
@@ -557,6 +616,11 @@ func GetDailyTraffic(ip string) (int64, error) {
 	return GetTrafficOnDate(ip, date)
 }
 
+func GetRepoDailyTraffic(ip string) (int64, error) {
+	date := time.Now().Format("2006-01-02")
+	return GetRepoTrafficOnDate(ip, date)
+}
+
 func GetTrafficOnDate(ip string, date string) (int64, error) {
 	var bytes int64
 	err := DB.QueryRow("SELECT bytes_downloaded FROM ip_daily_traffic WHERE ip = ? AND date = ?", ip, date).Scan(&bytes)
@@ -566,6 +630,14 @@ func GetTrafficOnDate(ip string, date string) (int64, error) {
 	return bytes, err
 }
 
+func GetRepoTrafficOnDate(ip string, date string) (int64, error) {
+	var bytes int64
+	err := DB.QueryRow("SELECT bytes_downloaded FROM repo_ip_daily_traffic WHERE ip = ? AND date = ?", ip, date).Scan(&bytes)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return bytes, err
+}
 func AddExternalBlacklist(ips []string) error {
 	tx, err := DB.Begin()
 	if err != nil {

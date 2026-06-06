@@ -26,13 +26,25 @@ type Tracker struct {
 	syncChan      chan struct{} // 用于异步触发文件同步
 	ctx           context.Context
 	cancel        context.CancelFunc
+	recordTrafficFunc   func(string, int64) error
+	getDailyTrafficFunc func(string) (int64, error)
+	getTrafficOnDateFunc func(string, string) (int64, error)
 }
 
 var defaultTracker *Tracker
+var defaultRepoTracker *Tracker
 
 func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
+	defaultTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath, db.RecordTraffic, db.GetDailyTraffic, db.GetTrafficOnDate)
+}
+
+func InitRepoTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
+	defaultRepoTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath, db.RecordRepoTraffic, db.GetRepoDailyTraffic, db.GetRepoTrafficOnDate)
+}
+
+func newTracker(limitGB int, banRecordFile, appealContact, storagePath string, recordTrafficFunc func(string, int64) error, getDailyTrafficFunc func(string) (int64, error), getTrafficOnDateFunc func(string, string) (int64, error)) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
-	defaultTracker = &Tracker{
+	tracker := &Tracker{
 		limitGB:       int64(limitGB) * 1024 * 1024 * 1024,
 		banRecordFile: banRecordFile,
 		appealContact: appealContact,
@@ -41,12 +53,15 @@ func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) 
 		syncChan:      make(chan struct{}, 1),
 		ctx:           ctx,
 		cancel:        cancel,
+		recordTrafficFunc: recordTrafficFunc,
+		getDailyTrafficFunc: getDailyTrafficFunc,
+		getTrafficOnDateFunc: getTrafficOnDateFunc,
 	}
-	// limitGB 为 0 时禁用防刷墙
-	if limitGB > 0 && defaultTracker.banRecordFile != "" {
-		defaultTracker.initBanRecordFile()
-		go defaultTracker.syncWorker()
+	if limitGB > 0 && tracker.banRecordFile != "" {
+		tracker.initBanRecordFile()
+		go tracker.syncWorker()
 	}
+	return tracker
 }
 
 func (t *Tracker) syncWorker() {
@@ -77,10 +92,17 @@ func CloseTracker() {
 	if defaultTracker != nil && defaultTracker.cancel != nil {
 		defaultTracker.cancel()
 	}
+	if defaultRepoTracker != nil && defaultRepoTracker.cancel != nil {
+		defaultRepoTracker.cancel()
+	}
 }
 
 func GetTracker() *Tracker {
 	return defaultTracker
+}
+
+func GetRepoTracker() *Tracker {
+	return defaultRepoTracker
 }
 
 func (t *Tracker) initBanRecordFile() {
@@ -104,11 +126,17 @@ func (t *Tracker) initBanRecordFile() {
 }
 
 func (t *Tracker) RecordTraffic(ip string, bytes int64) error {
-	return db.RecordTraffic(ip, bytes)
+	if t == nil || t.recordTrafficFunc == nil {
+		return nil
+	}
+	return t.recordTrafficFunc(ip, bytes)
 }
 
 func (t *Tracker) GetDailyTraffic(ip string) (int64, error) {
-	return db.GetDailyTraffic(ip)
+	if t == nil || t.getDailyTrafficFunc == nil {
+		return 0, nil
+	}
+	return t.getDailyTrafficFunc(ip)
 }
 
 // EstimateTransferBytes returns the conservative byte estimate for a request.
@@ -335,7 +363,10 @@ func (t *Tracker) SyncBanRecordFile() error {
 			date = createdAt.Format("2006-01-02")
 		}
 
-		traffic, _ := db.GetTrafficOnDate(ip, date)
+		traffic := int64(0)
+		if t.getTrafficOnDateFunc != nil {
+			traffic, _ = t.getTrafficOnDateFunc(ip, date)
+		}
 		trafficGB := ToGB(traffic)
 
 		line := fmt.Sprintf("%s | %s | %s | %.2f\n", ip, timestamp, reason, trafficGB)

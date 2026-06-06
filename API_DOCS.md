@@ -61,8 +61,11 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - 配置项 `traffic_limit_gb` 控制单 IP 每日下载流量上限。
 - `0` 表示**完全关闭**流量限制。
 - 负值自动修正为 `5` GB。
-- 下载接口（`/download/...`）在处理前会**预估**传输字节数（通过 `Range` 头计算），若预估已超限则直接返回 `403 Forbidden`。
-- 实际传输完成后，精确字节数会被写入数据库；若当日累计超限，IP 会被自动加入本地黑名单。
+- 下载接口（`/download/...`）与 Git 镜像接口（`/repo/...`）都会在处理前**预估**传输字节数（通过 `Range` 头计算），若预估已超限则直接返回 `403 Forbidden`。
+- 两类流量**分开计算**：
+  - `/download/...` 写入 `ip_daily_traffic`
+  - `/repo/...` 写入 `repo_ip_daily_traffic`
+- 实际传输完成后，精确字节数会被写入数据库；若对应类型的当日累计超限，IP 会被自动加入本地黑名单。
 - 触发流量封禁后，所有该 IP 的后续请求均返回 `403 Forbidden`。
 
 ### 1.7 Git 仓库镜像
@@ -70,7 +73,8 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - 当 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会同步 Git 镜像到项目根目录 `repo/{launcher}.git`。
 - 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://mirror.example.com/repo/fcl.git`。
 - `/repo/...` 仅支持只读访问，供 `git clone` / `git fetch` 使用。
-- `/repo/...` 不走下载验证码、下载令牌和流量限制。
+- `/repo/...` 走**独立的 repo 流量计量与 repo 下载统计**，不与普通 `/download/...` 混算。
+- `/repo/...` 不走下载验证码与下载令牌。
 
 ### 1.8 内嵌前端资源
 
@@ -101,6 +105,7 @@ GET /api/status
       "name": "1.3.0.7",
       "published_at": "2025-01-01T00:00:00Z",
       "is_latest": true,
+      "clone_url": "https://mirror.example.com/repo/fcl.git",
       "assets": [
         {
           "name": "FCL-release-1.3.0.7-all.apk",
@@ -124,6 +129,7 @@ GET /api/status
 | `name` | string | GitHub Release 的标题名称 |
 | `published_at` | string | 发布时间（ISO 8601 / RFC 3339） |
 | `is_latest` | bool | 是否为该启动器的当前最新版本 |
+| `clone_url` | string | 当对应 launcher 的 `mode` 为 `clone` / `all` 且当前有 release 数据时返回的 Git 克隆地址 |
 | `assets[].name` | string | 资源文件名 |
 | `assets[].url` | string | 构造的下载地址（受 `download_url_base` / `server_address` 配置影响） |
 | `assets[].size` | int | 资源文件大小（字节） |
@@ -226,7 +232,7 @@ GET /api/latest/{launcher}
 GET /api/stats
 ```
 
-返回访问量、下载量、磁盘占用、热门资源和趋势数据。
+返回访问量、下载量、Repo 拉取量、磁盘占用、热门资源和趋势数据。
 
 **缓存：** 响应头 `Cache-Control: public, max-age=300`（5 分钟），服务端内部有同 TTL 的内存缓存。
 
@@ -236,9 +242,11 @@ GET /api/stats
 {
   "total_visits": 1500,
   "total_downloads": 450,
+  "total_repo_downloads": 120,
   "total_days": 15,
   "last_30_visits": 300,
   "last_30_downloads": 80,
+  "last_30_repo_downloads": 26,
   "disk": {
     "total": 53687091200,
     "free": 10737418240,
@@ -251,6 +259,12 @@ GET /api/stats
       "count": 120
     }
   ],
+  "top_repo_downloads": [
+    {
+      "repo_name": "fcl.git",
+      "count": 66
+    }
+  ],
   "geo_distribution": [
     {
       "country": "China",
@@ -261,7 +275,8 @@ GET /api/stats
     {
       "date": "2026-05-20",
       "visit_count": 80,
-      "download_count": 22
+      "download_count": 22,
+      "repo_download_count": 7
     }
   ]
 }
@@ -272,24 +287,30 @@ GET /api/stats
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `total_visits` | int | 累计访问量（所有非下载请求） |
-| `total_downloads` | int | 累计下载次数（仅 `200/206` 响应的下载请求） |
+| `total_downloads` | int | 累计下载次数（仅 `200/206` 响应的普通下载请求） |
+| `total_repo_downloads` | int | 累计 Repo 拉取次数（仅 `200/206` 响应的 `/repo/...` 请求） |
 | `total_days` | int | 站点自首次启动至今的天数 |
 | `last_30_visits` | int | 最近 30 天访问量 |
-| `last_30_downloads` | int | 最近 30 天下载量 |
+| `last_30_downloads` | int | 最近 30 天普通下载量 |
+| `last_30_repo_downloads` | int | 最近 30 天 Repo 拉取量 |
 | `disk.total` | int | 存储路径所在磁盘总容量（字节） |
 | `disk.free` | int | 剩余可用空间（字节） |
 | `disk.used` | int | 已用空间（字节） |
-| `top_downloads` | array | 下载排行 Top 10，按下载次数降序 |
+| `top_downloads` | array | 普通下载排行 Top 10，按下载次数降序 |
 | `top_downloads[].launcher` | string | 启动器标识 |
 | `top_downloads[].version` | string | 版本号 |
 | `top_downloads[].count` | int | 下载次数 |
+| `top_repo_downloads` | array | Repo 拉取排行 Top 10，按拉取次数降序 |
+| `top_repo_downloads[].repo_name` | string | 仓库名（如 `fcl.git`） |
+| `top_repo_downloads[].count` | int | 拉取次数 |
 | `geo_distribution` | array | 地区分布 Top 50，按访问量降序，排除本地和空白记录 |
 | `geo_distribution[].country` | string | 国家/地区名 |
 | `geo_distribution[].count` | int | 访问次数 |
 | `daily_stats` | array | 最近 30 天每日统计 |
 | `daily_stats[].date` | string | 日期（`YYYY-MM-DD`） |
 | `daily_stats[].visit_count` | int | 当日访问量 |
-| `daily_stats[].download_count` | int | 当日下载量 |
+| `daily_stats[].download_count` | int | 当日普通下载量 |
+| `daily_stats[].repo_download_count` | int | 当日 Repo 拉取量 |
 
 ### 2.6 获取验证码配置
 
