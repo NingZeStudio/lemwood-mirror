@@ -44,7 +44,7 @@ go build -o mirror ./cmd/mirror
 - **版本保留** — 每个启动器可独立配置保留版本数，自动清理旧版本
 - **下载加速** — 支持 xget 代理、HTTP 代理、自定义 CDN 前缀，加速国内下载
 - **验证码保护** — 可选极验 GeeTest 人机验证，防止滥用
-- **统计面板** — 访问量、下载量、热门资源、地区分布、每日趋势
+- **统计面板** — 访问量、下载量、Repo 拉取量、热门资源、地区分布、每日趋势
 - **流量控制** — 单 IP 每日流量上限，超限自动封禁
 - **黑名单** — 本地 + 外部黑名单同步，公开封禁记录
 - **后台管理** — Web 管理面板，支持配置、黑名单、文件管理、TOTP 两步验证
@@ -203,7 +203,9 @@ git clone https://mirror.example.com/repo/fcl.git
 
 - Git 镜像不占用 `storage_path`，固定存放在项目根目录 `repo/`。
 - `clone` 模式不依赖 Release 存在；只要 `source_url` 能解析到 GitHub 仓库即可。
-- `/repo/...` 路径不走下载验证码、下载令牌和流量限制，适用于标准 `git clone` / `git fetch`。
+- `/repo/...` 使用与 `/download/...` 类似的受控只读入口，但采用**独立的 repo 流量计量与 repo 拉取统计**。
+- repo 流量写入 `repo_ip_daily_traffic`，repo 拉取记录写入 `repo_downloads`，不会与普通下载统计混算。
+- `/repo/...` 不走下载验证码与下载令牌，适用于标准 `git clone` / `git fetch`。
 
 ## 下载流程
 

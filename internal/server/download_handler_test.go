@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 )
 
@@ -48,12 +50,15 @@ func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, co
 	}
 
 	traffic.InitTracker(limitGB, "banned_ips.txt", "test-contact", base)
+	traffic.InitRepoTracker(limitGB, "banned_ips.txt", "test-contact", base)
+	stats.InitWritePool(1, 20)
 
 	state := NewState(base, base, cfg)
 	mux := http.NewServeMux()
 	state.Routes(mux)
 
 	t.Cleanup(func() {
+		stats.CloseWritePool()
 		traffic.CloseTracker()
 		if db.DB != nil {
 			_ = db.DB.Close()
@@ -342,5 +347,76 @@ func TestRepoHandlerRejectsNonReadMethod(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestRepoHandlerCountsPartialContentBytesSeparately(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+	ip := "127.0.0.1"
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/refs", nil)
+	req.RemoteAddr = ip + ":1234"
+	req.Header.Set("Range", "bytes=0-1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
+	}
+
+	repoTrafficBytes, err := db.GetRepoDailyTraffic(ip)
+	if err != nil {
+		t.Fatalf("GetRepoDailyTraffic() error = %v", err)
+	}
+	if repoTrafficBytes != 2 {
+		t.Fatalf("repo daily traffic = %d, want %d", repoTrafficBytes, 2)
+	}
+
+	downloadTrafficBytes, err := db.GetDailyTraffic(ip)
+	if err != nil {
+		t.Fatalf("GetDailyTraffic() error = %v", err)
+	}
+	if downloadTrafficBytes != 0 {
+		t.Fatalf("download daily traffic = %d, want %d", downloadTrafficBytes, 0)
+	}
+}
+
+func TestRepoHandlerRecordsRepoDownloadSeparately(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/refs", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var repoCount int
+		if err := db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads WHERE repo_name = ?", "mirror.git").Scan(&repoCount); err != nil {
+			t.Fatalf("query repo_downloads error = %v", err)
+		}
+		if repoCount > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("repo_downloads should contain at least one record")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var downloadCount int
+	if err := db.DB.QueryRow("SELECT COUNT(*) FROM downloads WHERE launcher = ?", "mirror.git").Scan(&downloadCount); err != nil {
+		t.Fatalf("query downloads error = %v", err)
+	}
+	if downloadCount != 0 {
+		t.Fatalf("downloads count = %d, want 0", downloadCount)
 	}
 }

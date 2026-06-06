@@ -49,6 +49,28 @@ type State struct {
 	downloadTokenMgr *download_token.Manager
 }
 
+func (s *State) cloneRepoURL(r *http.Request, launcher string) string {
+	baseURL := ""
+	if s.Config != nil {
+		if s.Config.DownloadUrlBase != "" {
+			baseURL = s.Config.DownloadUrlBase
+		} else if s.Config.ServerAddress != "" {
+			baseURL = s.Config.ServerAddress
+		}
+	}
+	if baseURL == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		baseURL = fmt.Sprintf("%s://%s", scheme, r.Host)
+	} else if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	return fmt.Sprintf("%s/repo/%s.git", baseURL, launcher)
+}
+
 func NewState(base string, projectRoot string, cfg *config.Config) *State {
 	s := &State{
 		BasePath:    base,
@@ -668,13 +690,85 @@ func (s *State) Routes(mux *http.ServeMux) {
 		serveStatic(w, r, filepath.Join(staticDir, "assets"), "/assets/")
 	})
 
-	// Git 仓库镜像静态处理器
+	// Git 仓库镜像处理器（独立统计/流量）
 	mux.HandleFunc("/repo/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		path := r.URL.Path
+		if containsDotDot(path) {
+			http.NotFound(w, r)
+			return
+		}
+
+		relPath := strings.TrimPrefix(path, "/repo/")
+		if relPath == "" || strings.HasSuffix(relPath, "/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		fullPath := filepath.Join(repoDir, relPath)
+		cleanPath := filepath.Clean(fullPath)
+		absBase, _ := filepath.Abs(repoDir)
+		absPath, _ := filepath.Abs(cleanPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			log.Printf("安全警告：拦截到来自 %s 的 repo 路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			http.NotFound(w, r)
+			return
+		}
+
+		info, err := os.Stat(cleanPath)
+		if err != nil || info.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+
+		clientIP := netutil.ExtractClientIP(r)
+		switch r.Method {
+		case http.MethodHead:
+			http.ServeFile(w, r, cleanPath)
+			return
+		case http.MethodGet:
+		default:
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		serveStatic(w, r, repoDir, "/repo/")
+
+		estimatedBytes := traffic.EstimateTransferBytes(info.Size(), r.Header.Get("Range"))
+		repoTracker := traffic.GetRepoTracker()
+		allowed, _, projectedBytes, reason := true, int64(0), estimatedBytes, ""
+		if repoTracker != nil {
+			allowed, _, projectedBytes, reason = repoTracker.ReserveTraffic(clientIP, estimatedBytes)
+		}
+		if !allowed {
+			message := reason
+			if message == "" {
+				message = "已超过当日 repo 流量限制"
+			}
+			if s.Config.AppealContact != "" {
+				message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
+			}
+			http.Error(w, message, http.StatusForbidden)
+			log.Printf("[Repo防刷墙] 拒绝请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
+			return
+		}
+
+		counter := &traffic.CountingWriter{}
+		countingWriter := &responseWriterCounter{ResponseWriter: w, counter: counter}
+		http.ServeFile(countingWriter, r, cleanPath)
+
+		if repoTracker != nil {
+			if banned, reason, trafficGB, err := repoTracker.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
+				log.Printf("[Repo防刷墙] 记录流量失败: %v", err)
+			} else if banned {
+				log.Printf("[Repo防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+			}
+		}
+
+		if counter.Total > 0 && isSuccessfulDownloadStatus(countingWriter.statusCode) {
+			repoName := relPath
+			if idx := strings.Index(repoName, ".git/"); idx >= 0 {
+				repoName = repoName[:idx+4]
+			}
+			stats.RecordRepoDownload(r, repoName, relPath)
+		}
 	})
 
 	// 根路径处理器 - 处理静态文件和 SPA fallback
@@ -1352,6 +1446,21 @@ func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 		result[launcher] = list
 	}
 
+	// 为 clone/all 模式启动器注入 clone_url
+	if s.Config != nil {
+		for _, lc := range s.Config.Launchers {
+			if !config.ShouldSyncClone(lc.Mode) {
+				continue
+			}
+			if list, ok := result[lc.Name]; ok {
+				cloneURL := s.cloneRepoURL(r, lc.Name)
+				for i := range list {
+					list[i]["clone_url"] = cloneURL
+				}
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -1359,20 +1468,22 @@ func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
 	launcher := strings.TrimPrefix(r.URL.Path, "/api/status/")
 	s.mu.RLock()
 	versions, ok := s.index[launcher]
-	if !ok {
-		s.mu.RUnlock()
-		http.NotFound(w, r)
-		return
-	}
 	versionsCopy := make(map[string]string)
-	for k, v := range versions {
-		versionsCopy[k] = v
+	if ok {
+		for k, v := range versions {
+			versionsCopy[k] = v
+		}
 	}
 	infoCacheCopy := make(map[string]map[string]interface{})
 	for k, v := range s.infoCache {
 		infoCacheCopy[k] = v
 	}
 	s.mu.RUnlock()
+
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 
 	var list []map[string]any
 	for v, p := range versionsCopy {
@@ -1408,6 +1519,20 @@ func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
 		v2, _ := list[j]["tag_name"].(string)
 		return compareVersions(v1, v2) > 0
 	})
+
+	// 注入 clone_url
+	if s.Config != nil {
+		for _, lc := range s.Config.Launchers {
+			if lc.Name == launcher && config.ShouldSyncClone(lc.Mode) {
+				cloneURL := s.cloneRepoURL(r, lc.Name)
+				for i := range list {
+					list[i]["clone_url"] = cloneURL
+				}
+				break
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(list)
 }
 
