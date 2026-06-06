@@ -4,7 +4,7 @@
   "check_cron": "*/10 * * * *",
   "storage_path": "download",
   "github_token": "",
-  "download_url_base": "https://miawa.cn",
+  "download_url_base": "https://beta.miawa.cn",
   "download_timeout_minutes": 40,
   "concurrent_downloads": 3,
   "proxy_url": "",

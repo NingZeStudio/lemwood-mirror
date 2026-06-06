@@ -14,7 +14,7 @@ storage_path: "download"
 github_token: ""
 
 # 对外下载地址基准（为空时回退到 server_address）
-download_url_base: "https://miawa.cn"
+download_url_base: "https://beta.miawa.cn"
 
 # 单文件下载超时（分钟），Git 镜像同步也复用此超时
 download_timeout_minutes: 40
