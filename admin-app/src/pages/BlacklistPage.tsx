@@ -16,7 +16,7 @@ export function BlacklistPage() {
     loadBlacklist()
   }, [])
 
-  const loadBlacklist = async () => {
+  async function loadBlacklist() {
     setLoading(true)
     try {
       const list = await getBlacklist()

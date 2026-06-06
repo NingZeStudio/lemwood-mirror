@@ -36,6 +36,7 @@
       "name": "fcl",
       "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
       "repo_selector": "",
+      "mode": "release",
       "include_prerelease": false,
       "max_versions": 2
     },
@@ -43,6 +44,7 @@
       "name": "zl",
       "source_url": "https://github.com/ZalithLauncher/ZalithLauncher",
       "repo_selector": "",
+      "mode": "release",
       "include_prerelease": false,
       "max_versions": 0
     },
@@ -50,6 +52,7 @@
       "name": "zl2",
       "source_url": "https://github.com/ZalithLauncher/ZalithLauncher2",
       "repo_selector": "",
+      "mode": "release",
       "include_prerelease": false,
       "max_versions": 0
     }

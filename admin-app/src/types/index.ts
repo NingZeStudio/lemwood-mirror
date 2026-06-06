@@ -16,6 +16,7 @@ export interface LauncherConfig {
   name: string
   source_url: string
   repo_selector: string
+  mode?: 'release' | 'clone' | 'all'
   include_prerelease?: boolean
   max_versions?: number
 }

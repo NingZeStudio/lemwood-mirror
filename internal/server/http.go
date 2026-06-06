@@ -54,7 +54,7 @@ func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc 
 		})
 	})
 
-	staticDir := filepath.Join("web", "dist")
+	staticDir := filepath.Join(s.ProjectRoot, "web", "dist")
 	handler := SPAFallbackMiddleware(mux, staticDir)
 
 	handler = SecurityMiddleware(handler)

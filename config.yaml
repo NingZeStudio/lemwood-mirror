@@ -1,0 +1,64 @@
+# 柠枺镜像配置文件
+# YAML 支持注释，后台保存时会保留本模板结构并回填最新配置值。
+
+server_address: ""
+server_port: 8080
+
+# 定时扫描 cron 表达式（分钟粒度）
+check_cron: "*/10 * * * *"
+
+# Release 资源存储目录（相对项目根目录）
+storage_path: "download"
+
+# GitHub Token，可留空并使用环境变量 GITHUB_TOKEN 覆盖
+github_token: ""
+
+# 对外下载地址基准（为空时回退到 server_address）
+download_url_base: "https://miawa.cn"
+
+# 单文件下载超时（分钟），Git 镜像同步也复用此超时
+download_timeout_minutes: 40
+concurrent_downloads: 3
+
+proxy_url: ""
+asset_proxy_url: ""
+xget_domain: "https://xget.xi-xu.me"
+xget_enabled: true
+
+admin_enabled: true
+admin_user: "ningmo"
+admin_password: "$2a$14$RbIcnqGpbmYAKdLvO1XyH.hxxcdbITqTf4/bIJc8gWoPK3BRRe5Fi"
+admin_max_retries: 10
+admin_lock_duration: 120
+
+two_factor_enabled: false
+two_factor_secret: ""
+
+captcha_enabled: false
+captcha_app_id: "9fab8370f958912499555f6ce0cd5c56"
+captcha_secret_key: "b74e2bb93f86d697a7930705ba8bf49b"
+
+traffic_limit_gb: 0
+ban_record_file: "banned_ips.txt"
+external_blacklist_url: "https://bcr.pbh-btn.ghorg.ghostchu-services.top/combine/all.txt"
+appeal_contact: "QQ群 https://qm.qq.com/q/FOGt99aayY"
+
+mysql_host: ""
+mysql_port: 3306
+mysql_user: ""
+mysql_password: ""
+mysql_database: ""
+mysql_migration: false
+
+# 启动器列表
+# mode:
+#   - release: 仅同步 Release 资源
+#   - clone: 仅同步 Git 镜像到 repo/{name}.git
+#   - all: 同时同步 Release 和 Git 镜像
+launchers:
+  - name: "mirror"
+    source_url: "https://github.com/ningzestudio/lemwood-mirror"
+    repo_selector: ""
+    mode: "all"
+    include_prerelease: true
+    max_versions: 0

@@ -34,7 +34,7 @@ export function FilesPage() {
     loadFiles('')
   }, [])
 
-  const loadFiles = async (path: string) => {
+  async function loadFiles(path: string) {
     setLoading(true)
     try {
       const data = await getFiles(path)

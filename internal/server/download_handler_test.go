@@ -30,6 +30,14 @@ func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, co
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
+	repoFilePath := filepath.Join(base, "repo", "mirror.git", "info", "refs")
+	if err := os.MkdirAll(filepath.Dir(repoFilePath), 0755); err != nil {
+		t.Fatalf("MkdirAll() repo error = %v", err)
+	}
+	if err := os.WriteFile(repoFilePath, []byte("ref: refs/heads/main\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() repo error = %v", err)
+	}
+
 	if db.DB != nil {
 		_ = db.DB.Close()
 		db.DB = nil
@@ -273,5 +281,66 @@ func TestCLIDownloadWithoutTokenStillRequiresVerificationJSON(t *testing.T) {
 	}
 	if resp["error"] != "verification_required" {
 		t.Fatalf("error = %v, want %q", resp["error"], "verification_required")
+	}
+}
+
+func TestRepoHandlerAllowsHeadWithoutCaptcha(t *testing.T) {
+	cfg := &config.Config{
+		CaptchaEnabled:   true,
+		CaptchaAppId:     "test-app",
+		CaptchaSecretKey: "test-secret",
+		AppealContact:    "test-contact",
+	}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodHead, "/repo/mirror.git/info/refs", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestRepoHandlerRejectsDirectoryListing(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestRepoHandlerRejectsPathTraversal(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/../config.json", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestRepoHandlerRejectsNonReadMethod(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodPost, "/repo/mirror.git/info/refs", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
