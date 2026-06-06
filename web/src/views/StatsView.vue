@@ -23,6 +23,7 @@ import CardTitle from '@/components/ui/CardTitle.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 import { use, registerMap } from 'echarts/core'
+import worldMap from '@/assets/world.json'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, MapChart, LineChart } from 'echarts/charts'
 import {
@@ -235,11 +236,10 @@ const trendOption = computed(() => {
 
 onMounted(async () => {
   try {
-    const [mapRes, statsRes] = await Promise.all([
-      fetch('https://fastly.jsdelivr.net/npm/echarts@4.9.0/map/json/world.json').then(r => r.json()),
+    const [statsRes] = await Promise.all([
       getStats()
     ])
-    registerMap('world', mapRes)
+    registerMap('world', worldMap)
     mapLoaded.value = true
     stats.value = statsRes.data
 
