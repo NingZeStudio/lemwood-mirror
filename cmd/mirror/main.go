@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/go-github/v50/github"
 	"github.com/robfig/cron/v3"
+	"lemwood_mirror/internal/assets"
 	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/blacklist"
 	"lemwood_mirror/internal/browser"
@@ -20,6 +21,7 @@ import (
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
+	"lemwood_mirror/internal/gitmirror"
 	"lemwood_mirror/internal/server"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
@@ -73,6 +75,25 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 		return
 	}
 	log.Printf("%s: 使用仓库 %s", lcfg.Name, repoURL)
+
+	mode, err := config.NormalizeLauncherMode(lcfg.Mode)
+	if err != nil {
+		log.Printf("%s: 模式配置无效: %v", lcfg.Name, err)
+		return
+	}
+
+	if config.ShouldSyncClone(string(mode)) {
+		if err := gitmirror.Sync(ctx, sc.s.ProjectRoot, lcfg.Name, repoURL); err != nil {
+			log.Printf("%s: 同步 Git 镜像失败: %v", lcfg.Name, err)
+		} else {
+			log.Printf("%s: Git 镜像同步完成", lcfg.Name)
+		}
+	}
+
+	if !config.ShouldSyncRelease(string(mode)) {
+		return
+	}
+
 	owner, repo, err := gh.ParseOwnerRepo(repoURL)
 	if err != nil {
 		log.Printf("%s: 解析 owner/repo 失败: %v", lcfg.Name, err)
@@ -123,7 +144,7 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 		}
 
 		sc.s.UpdateIndex(lcfg.Name, version, infoPath)
-		
+
 		if isLatest {
 			sc.mu.Lock()
 			ls := sc.launchers[lcfg.Name]
@@ -139,7 +160,6 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 		log.Printf("%s: 清理旧版本失败: %v", lcfg.Name, err)
 	}
 }
-
 func (sc *Scanner) ScanAll() {
 	if !sc.scanMu.TryLock() {
 		log.Printf("扫描已在进行中，跳过此次执行")
@@ -196,6 +216,9 @@ func (sc *Scanner) ScanLauncher(launcherName string) {
 
 func main() {
 	projectRoot, _ := os.Getwd()
+	if err := assets.SyncEmbedded(projectRoot); err != nil {
+		log.Fatalf("释放前端资源失败: %v", err)
+	}
 	cfg, err := config.LoadConfig(projectRoot)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)

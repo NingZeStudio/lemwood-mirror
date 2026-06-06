@@ -4,7 +4,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24-blue)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-面向 Minecraft 启动器分发场景的 GitHub Release 镜像服务 — 自动同步、版本管理、下载加速、统计风控，开箱即用。
+面向 Minecraft 启动器分发场景的 GitHub Release / Git 仓库镜像服务 — 自动同步、版本管理、下载加速、统计风控，开箱即用。
 
 ![站点截图](screenshot.jpg)
 
@@ -26,8 +26,8 @@
 
 ```bash
 # 1. 构建前端
-cd web && npm install && npm run build
-cd ../admin-app && npm install && npm run build
+cd web && pnpm install && pnpm build
+cd ../admin-app && pnpm install && pnpm build
 
 # 2. 构建并运行
 go build -o mirror ./cmd/mirror
@@ -36,11 +36,11 @@ go build -o mirror ./cmd/mirror
 
 打开 `http://localhost:8080`，看到启动器版本列表即运行成功。
 
-> **前置依赖：** Go 1.21+、Node.js 18+
+> **前置依赖：** Go 1.21+、Node.js 18+、Git 2.x（启用 `clone` / `all` 模式时必需）
 
 ## 功能
 
-- **定时同步** — 按 Cron 表达式定时扫描上游 GitHub 仓库，自动下载 Release 资产
+- **定时同步** — 按 Cron 表达式定时扫描上游 GitHub 仓库，按模式自动同步 Release 资产和/或 Git 仓库镜像
 - **版本保留** — 每个启动器可独立配置保留版本数，自动清理旧版本
 - **下载加速** — 支持 xget 代理、HTTP 代理、自定义 CDN 前缀，加速国内下载
 - **验证码保护** — 可选极验 GeeTest 人机验证，防止滥用
@@ -55,8 +55,8 @@ go build -o mirror ./cmd/mirror
 ### 前端
 
 ```bash
-cd web && npm install && npm run build
-cd ../admin-app && npm install && npm run build
+cd web && pnpm install && pnpm build
+cd ../admin-app && pnpm install && pnpm build
 ```
 
 ### 后端
@@ -73,54 +73,52 @@ Windows 下生成 `mirror.exe`。CI 自动构建 Windows/Linux 的 amd64/arm64/x
 go run ./cmd/mirror
 ```
 
+启动时二进制会自动检查并释放内嵌的用户前端（`web/dist`）和后台前端（`web/admin`）。当二进制内嵌资源版本变化时，会自动覆盖更新本地静态资源。
+
 ## 配置说明
 
-运行前编辑根目录 `config.json`，以下为完整配置项：
+运行前编辑根目录 `config.yaml`，以下为示例配置项：
 
-```json
-{
-  "server_address": "",
-  "server_port": 8080,
-  "check_cron": "*/10 * * * *",
-  "storage_path": "download",
-  "github_token": "",
-  "download_url_base": "https://mirror.example.com",
-  "download_timeout_minutes": 40,
-  "concurrent_downloads": 3,
-  "proxy_url": "",
-  "asset_proxy_url": "",
-  "xget_domain": "https://xget.xi-xu.me",
-  "xget_enabled": true,
-  "admin_enabled": true,
-  "admin_user": "admin",
-  "admin_password": "<bcrypt-hash>",
-  "admin_max_retries": 10,
-  "admin_lock_duration": 120,
-  "two_factor_enabled": false,
-  "two_factor_secret": "",
-  "captcha_enabled": false,
-  "captcha_app_id": "",
-  "captcha_secret_key": "",
-  "traffic_limit_gb": 0,
-  "ban_record_file": "banned_ips.txt",
-  "external_blacklist_url": "",
-  "appeal_contact": "QQ群 https://qm.qq.com/q/FOGt99aayY",
-  "mysql_host": "",
-  "mysql_port": 3306,
-  "mysql_user": "",
-  "mysql_password": "",
-  "mysql_database": "",
-  "mysql_migration": false,
-  "launchers": [
-    {
-      "name": "fcl",
-      "source_url": "https://github.com/FCL-Team/FoldCraftLauncher",
-      "repo_selector": "",
-      "include_prerelease": false,
-      "max_versions": 2
-    }
-  ]
-}
+```yaml
+server_address: ""
+server_port: 8080
+check_cron: "*/10 * * * *"
+storage_path: "download"
+github_token: ""
+download_url_base: "https://mirror.example.com"
+download_timeout_minutes: 40
+concurrent_downloads: 3
+proxy_url: ""
+asset_proxy_url: ""
+xget_domain: "https://xget.xi-xu.me"
+xget_enabled: true
+admin_enabled: true
+admin_user: "admin"
+admin_password: "<bcrypt-hash>"
+admin_max_retries: 10
+admin_lock_duration: 120
+two_factor_enabled: false
+two_factor_secret: ""
+captcha_enabled: false
+captcha_app_id: ""
+captcha_secret_key: ""
+traffic_limit_gb: 0
+ban_record_file: "banned_ips.txt"
+external_blacklist_url: ""
+appeal_contact: "QQ群 https://qm.qq.com/q/FOGt99aayY"
+mysql_host: ""
+mysql_port: 3306
+mysql_user: ""
+mysql_password: ""
+mysql_database: ""
+mysql_migration: false
+launchers:
+  - name: "fcl"
+    source_url: "https://github.com/FCL-Team/FoldCraftLauncher"
+    repo_selector: ""
+    mode: "all"
+    include_prerelease: false
+    max_versions: 2
 ```
 
 ### 服务与网络
@@ -141,7 +139,7 @@ go run ./cmd/mirror
 |------|------|--------|------|
 | `github_token` | string | `""` | GitHub Token（**强烈建议填写**，否则每小时仅 60 次 API 调用）。支持 `GITHUB_TOKEN` 环境变量覆盖 |
 | `check_cron` | string | `"*/10 * * * *"` | 扫描 Cron 表达式（分钟粒度） |
-| `download_timeout_minutes` | int | — | 单文件下载超时（分钟） |
+| `download_timeout_minutes` | int | — | 单文件下载超时（分钟），也作为 Git 镜像同步超时 |
 | `concurrent_downloads` | int | `3` | 并发下载数 |
 
 ### 管理员
@@ -188,11 +186,24 @@ go run ./cmd/mirror
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `name` | string | — | 启动器唯一标识，用于 API 路径和目录名 |
+| `name` | string | — | 启动器唯一标识，用于 API 路径、目录名和 Git 镜像名 |
 | `source_url` | string | — | GitHub 仓库地址或包含仓库链接的网页 |
 | `repo_selector` | string | `""` | 页面仓库链接提取规则：留空匹配第一个 GitHub 链接；`"regex:..."` 正则匹配；其他作 CSS 选择器 |
+| `mode` | string | `"release"` | 同步模式：`release` 仅同步 Release，`clone` 仅同步 Git 仓库，`all` 同步两者 |
 | `include_prerelease` | bool | `false` | 包含预发布版本 |
-| `max_versions` | int | `0` (=3) | 保留最大版本数，≤0 时自动修正为 3 |
+| `max_versions` | int | `0` (=3) | 保留最大版本数，≤0 时自动修正为 3；仅对 `release` / `all` 模式生效 |
+
+### Git 仓库克隆
+
+当某个 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会在项目根目录生成 `repo/{launcher}.git` 镜像仓库，并暴露只读 HTTP 克隆地址：
+
+```bash
+git clone https://mirror.example.com/repo/fcl.git
+```
+
+- Git 镜像不占用 `storage_path`，固定存放在项目根目录 `repo/`。
+- `clone` 模式不依赖 Release 存在；只要 `source_url` 能解析到 GitHub 仓库即可。
+- `/repo/...` 路径不走下载验证码、下载令牌和流量限制，适用于标准 `git clone` / `git fetch`。
 
 ## 下载流程
 
@@ -294,10 +305,10 @@ lemwood-mirror/
 │   ├── server/          # HTTP 路由、SPA 托管
 │   ├── stats/           # 访问与下载统计
 │   └── traffic/         # 流量限制
-├── web/                 # 用户站点前端
-├── admin-app/           # 后台管理前端
-├── download/            # 镜像文件存储（默认）
-├── config.json          # 配置文件
+├── web/                 # 用户站点前端（运行时可由二进制自动释放）
+├── admin-app/           # 后台管理前端源码
+├── download/            # Release 镜像文件存储（默认）
+├── config.yaml          # 配置文件（YAML，带注释）
 └── API_DOCS.md          # 公共 API 文档
 ```
 

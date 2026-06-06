@@ -620,6 +620,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 	// 静态 UI
 	staticDir := filepath.Join("web", "dist")
 	adminStaticDir := filepath.Join("web", "admin")
+	repoDir := filepath.Join(s.ProjectRoot, "repo")
 
 	// 统一静态资源服务函数
 	serveStatic := func(w http.ResponseWriter, r *http.Request, baseDir string, prefix string) {
@@ -665,6 +666,15 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
 		// assets 通常在 dist/assets 下
 		serveStatic(w, r, filepath.Join(staticDir, "assets"), "/assets/")
+	})
+
+	// Git 仓库镜像静态处理器
+	mux.HandleFunc("/repo/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		serveStatic(w, r, repoDir, "/repo/")
 	})
 
 	// 根路径处理器 - 处理静态文件和 SPA fallback

@@ -17,6 +17,7 @@
 | `GET /api/status`、`/api/stats` 等查询接口 | `application/json` |
 | `GET /api/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本） |
 | `GET /download/{token}/{file_path}` | `application/octet-stream`（文件流） |
+| `GET /repo/{launcher}.git/...` | Git 仓库静态文件（供 `git clone` / `git fetch` 使用） |
 | `POST /api/scan`、`/api/scan/launcher` | `text/plain` 或 `application/json` |
 
 ### 1.3 CORS
@@ -63,6 +64,19 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - 下载接口（`/download/...`）在处理前会**预估**传输字节数（通过 `Range` 头计算），若预估已超限则直接返回 `403 Forbidden`。
 - 实际传输完成后，精确字节数会被写入数据库；若当日累计超限，IP 会被自动加入本地黑名单。
 - 触发流量封禁后，所有该 IP 的后续请求均返回 `403 Forbidden`。
+
+### 1.7 Git 仓库镜像
+
+- 当 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会同步 Git 镜像到项目根目录 `repo/{launcher}.git`。
+- 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://mirror.example.com/repo/fcl.git`。
+- `/repo/...` 仅支持只读访问，供 `git clone` / `git fetch` 使用。
+- `/repo/...` 不走下载验证码、下载令牌和流量限制。
+
+### 1.8 内嵌前端资源
+
+- 用户前端和后台前端会被构建进二进制。
+- 服务启动时会自动释放 `web/dist` 和 `web/admin` 到项目目录。
+- 当二进制内嵌资源版本变化时，启动时会自动覆盖更新本地前端文件。
 
 ---
 
@@ -717,17 +731,21 @@ GET /download/{token}/{file_path}
 
 由 `check_cron` 表达式控制（默认每 10 分钟），自动对所有已配置启动器执行：
 1. 从 `source_url` 解析 GitHub 仓库地址
-2. 按 `include_prerelease` 和 `max_versions` 策略拉取 release 列表
-3. 下载资源文件到 `storage_path/{launcher}/{version}/`
-4. 写入 `index.json` 版本元数据
-5. 清理超出 `max_versions` 的旧版本目录
+2. 根据 `mode` 决定同步内容：
+   - `release`：仅同步 Release 版本与资源文件
+   - `clone`：仅同步 Git 镜像到 `repo/{launcher}.git`
+   - `all`：同时执行 Release 同步与 Git 镜像同步
+3. `release` / `all` 模式下，按 `include_prerelease` 和 `max_versions` 策略拉取 release 列表
+4. `release` / `all` 模式下，下载资源文件到 `storage_path/{launcher}/{version}/`
+5. `release` / `all` 模式下，写入 `index.json` 版本元数据并清理旧版本目录
+6. `clone` / `all` 模式下，执行 `git update-server-info`，供 HTTP clone/fetch 使用
 
 ### 6.2 手动扫描
 
 - `POST /api/scan`：全量扫描所有启动器
 - `POST /api/scan/launcher`：扫描指定启动器
 
-两者均为异步执行，立即返回 `202 Accepted`。同一时间只允许一个全量扫描运行（互斥锁保护）。
+两者均为异步执行，立即返回 `202 Accepted`。同一时间只允许一个全量扫描运行（互斥锁保护）。手动扫描同样遵循 launcher 的 `mode` 配置。
 
 ### 6.3 版本保留规则
 

@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   Divider,
+  Select,
   message,
   Spin,
   Space,
@@ -26,11 +27,7 @@ export function ConfigPage() {
   const [scanningLauncher, setScanningLauncher] = useState<string | null>(null)
   const { isMobile } = useBreakpoint()
 
-  useEffect(() => {
-    loadConfig()
-  }, [])
-
-  const loadConfig = async () => {
+  async function loadConfig() {
     setLoading(true)
     try {
       const config = await getConfig()
@@ -47,6 +44,10 @@ export function ConfigPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    loadConfig()
+  }, [])
 
   const handleSave = async (values: Config & { admin_password?: string; github_token?: string; captcha_secret_key?: string }) => {
     setSaving(true)
@@ -264,7 +265,7 @@ export function ConfigPage() {
               icon={<PlusOutlined />}
               onClick={() => {
                 const launchers = form.getFieldValue('launchers') || []
-                form.setFieldValue('launchers', [...launchers, { name: '', source_url: '', repo_selector: '' }])
+                form.setFieldValue('launchers', [...launchers, { name: '', source_url: '', repo_selector: '', mode: 'release' }])
               }}
             >
               添加启动器
@@ -340,6 +341,35 @@ export function ConfigPage() {
                     label="版本选择器 (可选)"
                   >
                     <Input />
+                  </Form.Item>
+                  <Form.Item
+                    {...restField}
+                    name={[name, 'mode']}
+                    label="同步模式"
+                    initialValue="release"
+                    extra="release: 仅同步 Release；clone: 仅同步 Git 仓库；all: 两者都同步"
+                  >
+                    <Select
+                      options={[
+                        { label: 'release', value: 'release' },
+                        { label: 'clone', value: 'clone' },
+                        { label: 'all', value: 'all' },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate>
+                    {({ getFieldValue }) => {
+                      const launcherName = getFieldValue(['launchers', name, 'name'])
+                      const mode = getFieldValue(['launchers', name, 'mode']) || 'release'
+                      if (mode !== 'clone' && mode !== 'all') {
+                        return null
+                      }
+                      return (
+                        <div style={{ marginBottom: 16, color: '#666' }}>
+                          Git 克隆地址：<code>/repo/{launcherName || '{launcher}'}.git</code>
+                        </div>
+                      )
+                    }}
                   </Form.Item>
                   <Form.Item
                     {...restField}

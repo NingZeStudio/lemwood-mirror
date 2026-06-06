@@ -40,13 +40,26 @@ jobs:
       with:
         node-version: '20'
 
-    - name: Install frontend dependencies
-      run: npm install
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 11.3.0
+
+    - name: Install web dependencies
+      run: pnpm install --frozen-lockfile=false
       working-directory: ./web
 
-    - name: Build frontend
-      run: npm run build
+    - name: Build web frontend
+      run: pnpm build
       working-directory: ./web
+
+    - name: Install admin dependencies
+      run: pnpm install --frozen-lockfile=false
+      working-directory: ./admin-app
+
+    - name: Build admin frontend
+      run: pnpm build
+      working-directory: ./admin-app
 
     - name: Build binary
       env:
@@ -60,13 +73,13 @@ jobs:
       if: matrix.archive == 'zip'
       run: |
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.zip"
-        zip -r "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.json web/dist
+        zip -r "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.yaml
 
     - name: Package Artifact (Linux)
       if: matrix.archive == 'tar.gz'
       run: |
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.tar.gz"
-        tar -czvf "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.json web/dist
+        tar -czvf "$PKG_NAME" "mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}" config.yaml
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
