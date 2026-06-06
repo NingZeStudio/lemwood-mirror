@@ -43,10 +43,37 @@ export interface Config {
   captcha_app_id: string
   captcha_secret_key?: string
   launchers: LauncherConfig[]
+  self_update_enabled?: boolean
+  self_update_repo_url?: string
+  self_update_channel?: string
+  self_update_check_cron?: string
+  self_update_auto_restart?: boolean
 }
 
 export interface ConfigUpdateRequest extends Partial<Config> {
   admin_password?: string
+}
+
+export interface TagInfo {
+  name: string
+  stable: boolean
+}
+
+export interface SelfUpdateStatus {
+  enabled: boolean
+  repo_url: string
+  channel: string
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  can_apply: boolean
+  pending_restart: boolean
+  last_checked_at: string
+  last_applied_at: string
+  last_check_error: string
+  last_apply_error: string
+  last_apply_message: string
+  available_versions: TagInfo[]
 }
 
 export interface FileInfo {

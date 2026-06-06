@@ -65,6 +65,12 @@ mysql_password: {{ yaml .MySQLPassword }}
 mysql_database: {{ yaml .MySQLDatabase }}
 mysql_migration: {{ .MySQLMigration }}
 
+self_update_enabled: {{ .SelfUpdateEnabled }}
+self_update_repo_url: {{ yaml .SelfUpdateRepoURL }}
+self_update_channel: {{ yaml .SelfUpdateChannel }}
+self_update_check_cron: {{ yaml .SelfUpdateCheckCron }}
+self_update_auto_restart: {{ .SelfUpdateAutoRestart }}
+
 # 启动器列表
 # mode:
 #   - release: 仅同步 Release 资源
@@ -83,10 +89,16 @@ launchers:
 
 type LauncherMode string
 
+type SelfUpdateChannel string
+
 const (
 	LauncherModeRelease LauncherMode = "release"
 	LauncherModeClone   LauncherMode = "clone"
 	LauncherModeAll     LauncherMode = "all"
+
+	SelfUpdateChannelNotify  SelfUpdateChannel = "notify"
+	SelfUpdateChannelRelease SelfUpdateChannel = "release"
+	SelfUpdateChannelPreview SelfUpdateChannel = "preview"
 )
 
 type LauncherConfig struct {
@@ -108,6 +120,19 @@ func NormalizeLauncherMode(mode string) (LauncherMode, error) {
 		return LauncherModeAll, nil
 	default:
 		return "", fmt.Errorf("无效的 launcher.mode %q，需要 release、clone 或 all", mode)
+	}
+}
+
+func NormalizeSelfUpdateChannel(channel string) (SelfUpdateChannel, error) {
+	switch SelfUpdateChannel(channel) {
+	case "", SelfUpdateChannelNotify:
+		return SelfUpdateChannelNotify, nil
+	case SelfUpdateChannelRelease:
+		return SelfUpdateChannelRelease, nil
+	case SelfUpdateChannelPreview:
+		return SelfUpdateChannelPreview, nil
+	default:
+		return "", fmt.Errorf("无效的 self_update_channel %q，需要 notify、release 或 preview", channel)
 	}
 }
 
@@ -161,6 +186,11 @@ type Config struct {
 	MySQLPassword          string           `json:"mysql_password" yaml:"mysql_password"`
 	MySQLDatabase          string           `json:"mysql_database" yaml:"mysql_database"`
 	MySQLMigration         bool             `json:"mysql_migration" yaml:"mysql_migration"`
+	SelfUpdateEnabled      bool             `json:"self_update_enabled" yaml:"self_update_enabled"`
+	SelfUpdateRepoURL      string           `json:"self_update_repo_url" yaml:"self_update_repo_url"`
+	SelfUpdateChannel      string           `json:"self_update_channel" yaml:"self_update_channel"`
+	SelfUpdateCheckCron    string           `json:"self_update_check_cron" yaml:"self_update_check_cron"`
+	SelfUpdateAutoRestart  bool             `json:"self_update_auto_restart" yaml:"self_update_auto_restart"`
 }
 
 func DefaultConfig() *Config {
@@ -179,6 +209,7 @@ func DefaultConfig() *Config {
 		BanRecordFile:          "banned_ips.txt",
 		AppealContact:          "QQ群 https://qm.qq.com/q/FOGt99aayY",
 		MySQLPort:              3306,
+		SelfUpdateChannel:      string(SelfUpdateChannelNotify),
 		Launchers:              []LauncherConfig{},
 	}
 }
@@ -252,6 +283,11 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.CheckCron == "" {
 		cfg.CheckCron = "*/10 * * * *"
 	}
+	channel, err := NormalizeSelfUpdateChannel(cfg.SelfUpdateChannel)
+	if err != nil {
+		return err
+	}
+	cfg.SelfUpdateChannel = string(channel)
 	if cfg.AdminEnabled {
 		if cfg.AdminUser == "" || cfg.AdminPassword == "" {
 			fmt.Println("警告: 管理员账号或密码未配置，管理后台已自动禁用")

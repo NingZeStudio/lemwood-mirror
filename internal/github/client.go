@@ -1,19 +1,22 @@
 package gh
 
 import (
-    "context"
-    "errors"
-    "net/http"
-    "strings"
-    "time"
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
 
-    github "github.com/google/go-github/v50/github"
-    "golang.org/x/oauth2"
+	github "github.com/google/go-github/v50/github"
+	"golang.org/x/oauth2"
 )
 
 type Client struct {
 	cli *github.Client
 }
+
+type RepositoryRelease = github.RepositoryRelease
+type ReleaseAsset = github.ReleaseAsset
 
 func NewClient(token string) *Client {
 	var httpClient *http.Client
@@ -40,7 +43,7 @@ func ParseOwnerRepo(repoURL string) (string, string, error) {
 
 // LatestRelease 仅获取最新的发布元数据。
 func (c *Client) LatestRelease(ctx context.Context, owner, repo string) (*github.RepositoryRelease, *github.Response, error) {
-    return c.cli.Repositories.GetLatestRelease(ctx, owner, repo)
+	return c.cli.Repositories.GetLatestRelease(ctx, owner, repo)
 }
 
 // LatestReleaseIncludingPrerelease 获取最新的发布版本（包括 pre-release）。
@@ -109,11 +112,53 @@ func (c *Client) ListReleasesByPolicy(ctx context.Context, owner, repo string, l
 	return filtered, lastResp, nil
 }
 
+func (c *Client) ListTags(ctx context.Context, owner, repo string, limit int) ([]*github.RepositoryTag, *github.Response, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	filtered := make([]*github.RepositoryTag, 0, limit)
+	opts := &github.ListOptions{PerPage: min(limit*3, 100)}
+	var lastResp *github.Response
+
+	for {
+		tags, resp, err := c.cli.Repositories.ListTags(ctx, owner, repo, opts)
+		if err != nil {
+			return nil, resp, err
+		}
+		lastResp = resp
+		if len(tags) == 0 {
+			break
+		}
+
+		for _, tag := range tags {
+			if tag == nil || tag.GetName() == "" {
+				continue
+			}
+			filtered = append(filtered, tag)
+			if len(filtered) >= limit {
+				return filtered[:limit], lastResp, nil
+			}
+		}
+
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	return filtered, lastResp, nil
+}
+
+func (c *Client) GetReleaseByTag(ctx context.Context, owner, repo, tag string) (*github.RepositoryRelease, *github.Response, error) {
+	return c.cli.Repositories.GetReleaseByTag(ctx, owner, repo, tag)
+}
+
 // BackoffIfRateLimited 检查响应是否受到速率限制，并在需要时休眠。
 func BackoffIfRateLimited(resp *github.Response) {
-    if resp == nil || resp.Rate.Remaining > 0 {
-        return
-    }
+	if resp == nil || resp.Rate.Remaining > 0 {
+		return
+	}
 	reset := resp.Rate.Reset.Time
 	// 休眠直到重置时间 + 小段余量
 	d := time.Until(reset) + 2*time.Second

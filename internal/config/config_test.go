@@ -55,6 +55,39 @@ func TestNormalizeLauncherMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeSelfUpdateChannel(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    SelfUpdateChannel
+		wantErr bool
+	}{
+		{name: "empty defaults to notify", in: "", want: SelfUpdateChannelNotify},
+		{name: "notify", in: "notify", want: SelfUpdateChannelNotify},
+		{name: "release", in: "release", want: SelfUpdateChannelRelease},
+		{name: "preview", in: "preview", want: SelfUpdateChannelPreview},
+		{name: "invalid", in: "beta", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeSelfUpdateChannel(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalizeSelfUpdateChannel(%q) error = %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Fatalf("NormalizeSelfUpdateChannel(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldSyncByMode(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -78,5 +111,12 @@ func TestShouldSyncByMode(t *testing.T) {
 				t.Fatalf("ShouldSyncClone(%q) = %v, want %v", tt.mode, got, tt.wantClone)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigSelfUpdateChannel(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.SelfUpdateChannel != string(SelfUpdateChannelNotify) {
+		t.Fatalf("DefaultConfig().SelfUpdateChannel = %q, want %q", cfg.SelfUpdateChannel, SelfUpdateChannelNotify)
 	}
 }

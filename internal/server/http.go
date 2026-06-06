@@ -17,9 +17,10 @@ type LauncherScanResponse struct {
 	Message string `json:"message"`
 }
 
-func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc func(launcherName string)) error {
+func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc func(launcherName string), selfUpdateCheckFunc func(), selfUpdateApplyFunc func() error, restartFunc func() error) error {
 	mux := http.NewServeMux()
 	s.Routes(mux)
+	s.SetSelfUpdateActions(selfUpdateApplyFunc, restartFunc)
 
 	mux.HandleFunc("/api/scan", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -53,6 +54,18 @@ func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc 
 			Message: "扫描已触发",
 		})
 	})
+
+	if selfUpdateCheckFunc != nil {
+		mux.HandleFunc("/api/self-update/check", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			go selfUpdateCheckFunc()
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprintln(w, "Self update check triggered")
+		})
+	}
 
 	staticDir := filepath.Join(s.ProjectRoot, "web", "dist")
 	handler := SPAFallbackMiddleware(mux, staticDir)

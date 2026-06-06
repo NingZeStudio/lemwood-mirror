@@ -22,10 +22,13 @@ import (
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
 	"lemwood_mirror/internal/gitmirror"
+	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/server"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 )
+
+var Version = "dev"
 
 type LauncherState struct {
 	Name     string
@@ -60,6 +63,15 @@ func NewScanner(cfg *config.Config, base string, s *server.State, ghc *gh.Client
 		s:         s,
 		ghc:       ghc,
 		launchers: launchers,
+	}
+}
+
+func buildSelfUpdateConfig(cfg *config.Config) selfupdate.Config {
+	return selfupdate.Config{
+		Enabled:     cfg.SelfUpdateEnabled,
+		RepoURL:     cfg.SelfUpdateRepoURL,
+		Channel:     cfg.SelfUpdateChannel,
+		AutoRestart: cfg.SelfUpdateAutoRestart,
 	}
 }
 
@@ -250,8 +262,7 @@ func main() {
 	if err := s.InitFromDisk(); err != nil {
 		log.Printf("初始化索引失败: %v", err)
 	}
-	
-	// 修复 index.json 中的 URL 域名不一致问题
+
 	if err := s.FixAssetURLs(); err != nil {
 		log.Printf("修复资产 URL 失败: %v", err)
 	}
@@ -262,20 +273,57 @@ func main() {
 			log.Printf("%s: 启动时清理旧版本失败: %v", lcfg.Name, err)
 		}
 	}
-	
+
 	ghc := gh.NewClient(cfg.GitHubToken)
+	selfUpdateManager := selfupdate.NewManager(ghc, Version, os.Args[0], buildSelfUpdateConfig(cfg))
+	s.SetSelfUpdateManager(selfUpdateManager)
 
 	scanner := NewScanner(cfg, base, s, ghc)
-
 	go scanner.ScanAll()
+
+	if cfg.SelfUpdateEnabled {
+		go func() {
+			if _, err := selfUpdateManager.Check(context.Background()); err != nil {
+				log.Printf("自更新检查失败: %v", err)
+			}
+		}()
+	}
 
 	c := cron.New()
 	_, err = c.AddFunc(cfg.CheckCron, scanner.ScanAll)
 	if err != nil {
 		log.Fatalf("无效的 cron 表达式 %q: %v", cfg.CheckCron, err)
 	}
+	if cfg.SelfUpdateEnabled && cfg.SelfUpdateCheckCron != "" {
+		_, err = c.AddFunc(cfg.SelfUpdateCheckCron, func() {
+			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {
+				log.Printf("定时自更新检查失败: %v", checkErr)
+			}
+		})
+		if err != nil {
+			log.Fatalf("无效的 self update cron 表达式 %q: %v", cfg.SelfUpdateCheckCron, err)
+		}
+	}
 	c.Start()
 	defer c.Stop()
+
+	applySelfUpdate := func() error {
+		_, err := selfUpdateManager.Check(context.Background())
+		if err != nil {
+			return fmt.Errorf("检查更新失败: %w", err)
+		}
+		_, err = selfUpdateManager.Apply(context.Background())
+		return err
+	}
+
+	restartProcess := func() error {
+		bin := os.Args[0]
+		if bin == "" {
+			bin = selfUpdateManager.BinaryPath()
+		}
+		log.Printf("正在重启进程: %s", bin)
+		return syscall.Exec(bin, os.Args, os.Environ())
+	}
 
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	log.Printf("正在启动服务器于 %s", addr)
@@ -284,7 +332,11 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		if err := server.StartHTTPWithScan(addr, s, scanner.ScanAll, scanner.ScanLauncher); err != nil {
+		if err := server.StartHTTPWithScan(addr, s, scanner.ScanAll, scanner.ScanLauncher, func() {
+			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {
+				log.Printf("手动自更新检查失败: %v", checkErr)
+			}
+		}, applySelfUpdate, restartProcess); err != nil {
 			log.Printf("http 服务器出错: %v", err)
 		}
 	}()

@@ -13,6 +13,7 @@ import (
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/download_token"
 	"lemwood_mirror/internal/netutil"
+	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 	"log"
@@ -47,6 +48,9 @@ type State struct {
 	// 验证码
 	captchaValidator  *captcha.Validator
 	downloadTokenMgr *download_token.Manager
+	selfUpdate       *selfupdate.Manager
+	applySelfUpdate  func() error
+	restartProcess   func() error
 }
 
 func (s *State) cloneRepoURL(r *http.Request, launcher string) string {
@@ -90,6 +94,19 @@ func NewState(base string, projectRoot string, cfg *config.Config) *State {
 	s.downloadTokenMgr = download_token.NewManager()
 
 	return s
+}
+
+func (s *State) SetSelfUpdateManager(manager *selfupdate.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.selfUpdate = manager
+}
+
+func (s *State) SetSelfUpdateActions(apply func() error, restart func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applySelfUpdate = apply
+	s.restartProcess = restart
 }
 
 func (s *State) UpdateIndex(launcher string, version string, infoPath string) {
@@ -443,7 +460,17 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 		s.mu.Lock()
 		s.Config = &newCfg
+		manager := s.selfUpdate
 		s.mu.Unlock()
+
+		if manager != nil {
+			manager.UpdateConfig(selfupdate.Config{
+				Enabled:     newCfg.SelfUpdateEnabled,
+				RepoURL:     newCfg.SelfUpdateRepoURL,
+				Channel:     newCfg.SelfUpdateChannel,
+				AutoRestart: newCfg.SelfUpdateAutoRestart,
+			})
+		}
 
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "Config updated")
@@ -451,6 +478,77 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+func (s *State) handleAdminSelfUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.selfUpdate == nil {
+		http.Error(w, "Self update not configured", http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.selfUpdate.Status())
+}
+
+func (s *State) handleAdminSelfUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.selfUpdate == nil {
+		http.Error(w, "Self update not configured", http.StatusNotImplemented)
+		return
+	}
+	status, err := s.selfUpdate.Check(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
+func (s *State) handleAdminSelfUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.selfUpdate == nil || s.applySelfUpdate == nil {
+		http.Error(w, "Self update apply is not available", http.StatusNotImplemented)
+		return
+	}
+	if err := s.applySelfUpdate(); err != nil {
+		status := s.selfUpdate.SetApplyError(err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.selfUpdate.Status())
+}
+
+func (s *State) handleAdminSelfUpdateRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.restartProcess == nil {
+		http.Error(w, "Restart is not available", http.StatusNotImplemented)
+		return
+	}
+	if err := s.restartProcess(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "accepted",
+		"message": "重启请求已触发",
+	})
 }
 
 func (s *State) handleAdminBlacklist(w http.ResponseWriter, r *http.Request) {
@@ -1006,6 +1104,10 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.Handle("/api/admin/blacklist", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminBlacklist))))
 	mux.Handle("/api/admin/files", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFiles))))
 	mux.Handle("/api/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
+	mux.Handle("/api/admin/self-update/status", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateStatus))))
+	mux.Handle("/api/admin/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateCheck))))
+	mux.Handle("/api/admin/self-update/apply", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateApply))))
+	mux.Handle("/api/admin/self-update/restart", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateRestart))))
 
 	// Admin UI
 	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

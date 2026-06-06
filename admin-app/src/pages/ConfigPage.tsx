@@ -12,10 +12,12 @@ import {
   Spin,
   Space,
   Image,
+  Tag,
+  Descriptions,
 } from 'antd'
-import { PlusOutlined, MinusCircleOutlined, SyncOutlined } from '@ant-design/icons'
-import { getConfig, updateConfig, triggerLauncherScan } from '@/api/config'
-import type { Config } from '@/types'
+import { PlusOutlined, MinusCircleOutlined, SyncOutlined, CloudUploadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { getConfig, updateConfig, triggerLauncherScan, getSelfUpdateStatus, checkSelfUpdate, applySelfUpdate, restartSelfUpdate } from '@/api/config'
+import type { Config, SelfUpdateStatus } from '@/types'
 import { generateTOTPSecret, getTOTPQRCodeUrl } from '@/lib/utils'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 
@@ -25,6 +27,10 @@ export function ConfigPage() {
   const [saving, setSaving] = useState(false)
   const [totpSecret, setTotpSecret] = useState('')
   const [scanningLauncher, setScanningLauncher] = useState<string | null>(null)
+  const [selfUpdateStatus, setSelfUpdateStatus] = useState<SelfUpdateStatus | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [applyingUpdate, setApplyingUpdate] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const { isMobile } = useBreakpoint()
 
   async function loadConfig() {
@@ -45,8 +51,18 @@ export function ConfigPage() {
     }
   }
 
+  async function loadSelfUpdateStatus() {
+    try {
+      const status = await getSelfUpdateStatus()
+      setSelfUpdateStatus(status)
+    } catch {
+      // 自更新未启用时不报错
+    }
+  }
+
   useEffect(() => {
     loadConfig()
+    loadSelfUpdateStatus()
   }, [])
 
   const handleSave = async (values: Config & { admin_password?: string; github_token?: string; captcha_secret_key?: string }) => {
@@ -96,6 +112,50 @@ export function ConfigPage() {
       message.error(`触发 ${launcherName} 更新扫描失败`)
     } finally {
       setScanningLauncher(null)
+    }
+  }
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true)
+    try {
+      const status = await checkSelfUpdate()
+      setSelfUpdateStatus(status)
+      if (status.has_update) {
+        message.success(`发现新版本 ${status.latest_version}`)
+      } else {
+        message.info('当前已是最新版本')
+      }
+    } catch {
+      message.error('检查更新失败')
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  const handleApplyUpdate = async () => {
+    setApplyingUpdate(true)
+    try {
+      const status = await applySelfUpdate()
+      setSelfUpdateStatus(status)
+      if (status.pending_restart) {
+        message.success('更新已应用，待重启生效')
+      }
+    } catch {
+      message.error('应用更新失败')
+    } finally {
+      setApplyingUpdate(false)
+    }
+  }
+
+  const handleRestart = async () => {
+    setRestarting(true)
+    try {
+      await restartSelfUpdate()
+      message.success('重启请求已发出')
+    } catch {
+      message.error('重启失败')
+    } finally {
+      setRestarting(false)
     }
   }
 
@@ -255,8 +315,100 @@ export function ConfigPage() {
         </Form.Item>
       </Card>
 
-      <Card 
-        title="启动器配置" 
+      <Card title="程序自更新" style={{ marginBottom: 16 }}>
+        <Form.Item name="self_update_enabled" label="启用自更新检查" valuePropName="checked" extra="开启后可从 GitHub 检查程序自身更新">
+          <Switch />
+        </Form.Item>
+        <Form.Item name="self_update_repo_url" label="更新仓库地址" extra="例如: https://github.com/NingZeStudio/lemwood-mirror">
+          <Input placeholder="https://github.com/owner/repo" />
+        </Form.Item>
+        <Form.Item name="self_update_channel" label="更新类型" initialValue="notify">
+          <Select
+            options={[
+              { label: '提醒 (仅提示)', value: 'notify' },
+              { label: 'Release (稳定版)', value: 'release' },
+              { label: 'Preview (预览版)', value: 'preview' },
+            ]}
+            style={{ width: 200 }}
+          />
+        </Form.Item>
+        <Form.Item name="self_update_check_cron" label="自动检查频率 (Cron)" extra="留空则仅手动检查。例如: @every 1h">
+          <Input placeholder="@every 1h" />
+        </Form.Item>
+        <Form.Item name="self_update_auto_restart" label="更新后自动重启" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+
+        {selfUpdateStatus && selfUpdateStatus.enabled && (
+          <Card size="small" style={{ background: '#fafafa', marginTop: 12 }}>
+            <Descriptions column={isMobile ? 1 : 2} size="small">
+              <Descriptions.Item label="当前版本">
+                <Tag color="blue">{selfUpdateStatus.current_version}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="远端版本">
+                <Tag color={selfUpdateStatus.has_update ? 'green' : 'default'}>
+                  {selfUpdateStatus.latest_version || '-'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="最近检查">
+                {selfUpdateStatus.last_checked_at
+                  ? new Date(selfUpdateStatus.last_checked_at).toLocaleString()
+                  : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="状态">
+                {selfUpdateStatus.pending_restart
+                  ? <Tag color="orange">待重启</Tag>
+                  : selfUpdateStatus.has_update
+                    ? <Tag color="green">有更新</Tag>
+                    : <Tag>已最新</Tag>}
+              </Descriptions.Item>
+              {selfUpdateStatus.last_check_error && (
+                <Descriptions.Item label="检查错误" span={2}>
+                  <span style={{ color: 'red' }}>{selfUpdateStatus.last_check_error}</span>
+                </Descriptions.Item>
+              )}
+              {selfUpdateStatus.last_apply_error && (
+                <Descriptions.Item label="更新错误" span={2}>
+                  <span style={{ color: 'red' }}>{selfUpdateStatus.last_apply_error}</span>
+                </Descriptions.Item>
+              )}
+              {selfUpdateStatus.last_apply_message && (
+                <Descriptions.Item label="更新信息" span={2}>
+                  {selfUpdateStatus.last_apply_message}
+                </Descriptions.Item>
+              )}
+            </Descriptions>
+            <Space style={{ marginTop: 8 }}>
+              <Button
+                icon={<SearchOutlined />}
+                loading={checkingUpdate}
+                onClick={handleCheckUpdate}
+              >
+                检查更新
+              </Button>
+              <Button
+                icon={<CloudUploadOutlined />}
+                loading={applyingUpdate}
+                disabled={!selfUpdateStatus.can_apply}
+                onClick={handleApplyUpdate}
+              >
+                应用更新
+              </Button>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={restarting}
+                danger
+                onClick={handleRestart}
+              >
+                重启
+              </Button>
+            </Space>
+          </Card>
+        )}
+      </Card>
+
+      <Card
+        title="启动器配置"
         style={{ marginBottom: 16 }}
         extra={
           !isMobile && (
