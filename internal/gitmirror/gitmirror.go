@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var launcherNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -16,8 +17,13 @@ func RepoDir(projectRoot, launcher string) (string, error) {
 		return "", fmt.Errorf("无效的 launcher 名称 %q", launcher)
 	}
 
+	repoName := launcher
+	if !strings.HasSuffix(repoName, ".git") {
+		repoName += ".git"
+	}
+
 	repoBase := filepath.Join(projectRoot, "repo")
-	repoDir := filepath.Join(repoBase, launcher+".git")
+	repoDir := filepath.Join(repoBase, repoName)
 
 	absBase, err := filepath.Abs(repoBase)
 	if err != nil {

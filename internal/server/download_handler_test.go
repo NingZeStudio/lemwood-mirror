@@ -420,3 +420,29 @@ func TestRepoHandlerRecordsRepoDownloadSeparately(t *testing.T) {
 		t.Fatalf("downloads count = %d, want 0", downloadCount)
 	}
 }
+
+func TestRepoHandlerAllowsLauncherNamesEndingWithGit(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	base, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+	_ = base
+
+	repoFilePath := filepath.Join(base.ProjectRoot, "repo", "miawa.git", "readme")
+	if err := os.MkdirAll(filepath.Dir(repoFilePath), 0755); err != nil {
+		t.Fatalf("MkdirAll() repo error = %v", err)
+	}
+	if err := os.WriteFile(repoFilePath, []byte("repo readme"), 0644); err != nil {
+		t.Fatalf("WriteFile() repo error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/miawa.git/readme", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != "repo readme" {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), "repo readme")
+	}
+}
