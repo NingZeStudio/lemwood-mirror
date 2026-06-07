@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +18,7 @@ type LauncherScanResponse struct {
 	Message string `json:"message"`
 }
 
-func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc func(launcherName string), selfUpdateCheckFunc func(), selfUpdateApplyFunc func() error, restartFunc func() error) error {
+func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc func(launcherName string), selfUpdateCheckFunc func(), selfUpdateApplyFunc func(ctx context.Context) error, restartFunc func() error) error {
 	mux := http.NewServeMux()
 	s.Routes(mux)
 	s.SetSelfUpdateActions(selfUpdateApplyFunc, restartFunc)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,7 +50,7 @@ type State struct {
 	captchaValidator  *captcha.Validator
 	downloadTokenMgr *download_token.Manager
 	selfUpdate       *selfupdate.Manager
-	applySelfUpdate  func() error
+	applySelfUpdate  func(ctx context.Context) error
 	restartProcess   func() error
 }
 
@@ -102,7 +103,7 @@ func (s *State) SetSelfUpdateManager(manager *selfupdate.Manager) {
 	s.selfUpdate = manager
 }
 
-func (s *State) SetSelfUpdateActions(apply func() error, restart func() error) {
+func (s *State) SetSelfUpdateActions(apply func(ctx context.Context) error, restart func() error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.applySelfUpdate = apply
@@ -465,10 +466,12 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 
 		if manager != nil {
 			manager.UpdateConfig(selfupdate.Config{
-				Enabled:     newCfg.SelfUpdateEnabled,
-				RepoURL:     newCfg.SelfUpdateRepoURL,
-				Channel:     newCfg.SelfUpdateChannel,
-				AutoRestart: newCfg.SelfUpdateAutoRestart,
+				Enabled:       newCfg.SelfUpdateEnabled,
+				RepoURL:       newCfg.SelfUpdateRepoURL,
+				Channel:       newCfg.SelfUpdateChannel,
+				AutoRestart:   newCfg.SelfUpdateAutoRestart,
+				ProxyURL:      newCfg.ProxyURL,
+				AssetProxyURL: newCfg.AssetProxyURL,
 			})
 		}
 
@@ -520,7 +523,7 @@ func (s *State) handleAdminSelfUpdateApply(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Self update apply is not available", http.StatusNotImplemented)
 		return
 	}
-	if err := s.applySelfUpdate(); err != nil {
+	if err := s.applySelfUpdate(r.Context()); err != nil {
 		status := s.selfUpdate.SetApplyError(err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -53,10 +54,12 @@ type Status struct {
 }
 
 type Config struct {
-	Enabled     bool
-	RepoURL     string
-	Channel     string
-	AutoRestart bool
+	Enabled       bool
+	RepoURL       string
+	Channel       string
+	AutoRestart   bool
+	ProxyURL      string
+	AssetProxyURL string
 }
 
 type Manager struct {
@@ -65,6 +68,10 @@ type Manager struct {
 	binaryPath     string
 	mu             sync.RWMutex
 	status         Status
+	applyMu        sync.Mutex
+	httpClient     *http.Client
+	autoRestart    bool
+	onRestart      func() error
 }
 
 func NewManager(client *gh.Client, currentVersion, binaryPath string, cfg Config) *Manager {
@@ -78,8 +85,28 @@ func NewManager(client *gh.Client, currentVersion, binaryPath string, cfg Config
 			Channel:        normalizeChannel(cfg.Channel),
 			CurrentVersion: normalizeVersion(currentVersion),
 		},
+		httpClient:  buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL),
+		autoRestart: cfg.AutoRestart,
 	}
 	return m
+}
+
+func buildHTTPClient(proxyURL, assetProxyURL string) *http.Client {
+	proxy := assetProxyURL
+	if proxy == "" {
+		proxy = proxyURL
+	}
+	if proxy == "" {
+		return http.DefaultClient
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: func(_ *http.Request) (*url.URL, error) {
+				return url.Parse(proxy)
+			},
+		},
+		Timeout: 10 * time.Minute,
+	}
 }
 
 func (m *Manager) UpdateConfig(cfg Config) {
@@ -88,6 +115,14 @@ func (m *Manager) UpdateConfig(cfg Config) {
 	m.status.Enabled = cfg.Enabled
 	m.status.RepoURL = cfg.RepoURL
 	m.status.Channel = normalizeChannel(cfg.Channel)
+	m.httpClient = buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL)
+	m.autoRestart = cfg.AutoRestart
+}
+
+func (m *Manager) SetOnRestart(fn func() error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRestart = fn
 }
 
 func (m *Manager) Status() Status {
@@ -202,10 +237,16 @@ func (m *Manager) ClearPendingRestart() {
 }
 
 func (m *Manager) Apply(ctx context.Context) (Status, error) {
+	if !m.applyMu.TryLock() {
+		return m.Status(), fmt.Errorf("更新正在应用中，请勿重复操作")
+	}
+	defer m.applyMu.Unlock()
+
 	m.mu.RLock()
 	canApply := m.status.CanApply
 	latestVersion := m.status.LatestVersion
 	repoURL := m.status.RepoURL
+	httpClient := m.httpClient
 	m.mu.RUnlock()
 
 	if !canApply {
@@ -232,12 +273,29 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 		return status, err
 	}
 
-	if err := downloadAndReplace(ctx, asset, m.binaryPath, isArchive); err != nil {
+	if err := downloadAndReplace(ctx, httpClient, asset, m.binaryPath, isArchive); err != nil {
 		status := m.SetApplyError(err)
 		return status, err
 	}
 
-	return m.MarkApplied(latestVersion, fmt.Sprintf("已从 %s 下载并安装资产 %s", latestVersion, asset.GetName())), nil
+	status := m.MarkApplied(latestVersion, fmt.Sprintf("已从 %s 下载并安装资产 %s", latestVersion, asset.GetName()))
+
+	m.mu.RLock()
+	autoRestart := m.autoRestart
+	onRestart := m.onRestart
+	m.mu.RUnlock()
+
+	if autoRestart && onRestart != nil {
+		m.ClearPendingRestart()
+		go func() {
+			log.Printf("自更新: 自动重启已启用，正在重启...")
+			if err := onRestart(); err != nil {
+				log.Printf("自更新: 自动重启失败: %v", err)
+			}
+		}()
+	}
+
+	return status, nil
 }
 
 func (m *Manager) BinaryPath() string {
@@ -311,11 +369,11 @@ func compareVersions(v1, v2 string) int {
 		return 0
 	}
 
-	v1Clean := strings.TrimPrefix(v1, "v")
-	v2Clean := strings.TrimPrefix(v2, "v")
+	v1Core, v1Pre := splitPreRelease(strings.TrimPrefix(v1, "v"))
+	v2Core, v2Pre := splitPreRelease(strings.TrimPrefix(v2, "v"))
 
-	parts1 := strings.Split(v1Clean, ".")
-	parts2 := strings.Split(v2Clean, ".")
+	parts1 := strings.Split(v1Core, ".")
+	parts2 := strings.Split(v2Core, ".")
 
 	maxLen := len(parts1)
 	if len(parts2) > maxLen {
@@ -360,7 +418,29 @@ func compareVersions(v1, v2 string) int {
 			}
 		}
 	}
+
+	// SemVer: a version with a pre-release suffix is lower than the same version without one.
+	if v1Pre == "" && v2Pre != "" {
+		return 1
+	}
+	if v1Pre != "" && v2Pre == "" {
+		return -1
+	}
+	if v1Pre != v2Pre {
+		if v1Pre > v2Pre {
+			return 1
+		}
+		return -1
+	}
 	return 0
+}
+
+// splitPreRelease splits a version string like "1.2.3-beta.1" into core "1.2.3" and pre-release "beta.1".
+func splitPreRelease(v string) (string, string) {
+	if idx := strings.Index(v, "-"); idx >= 0 {
+		return v[:idx], v[idx+1:]
+	}
+	return v, ""
 }
 
 func parseFirstInt(s string) (int, error) {
@@ -375,12 +455,20 @@ func ReplaceTargetPath(binaryPath string) string {
 
 func findPlatformAsset(release *gh.RepositoryRelease) (*gh.ReleaseAsset, bool) {
 	patterns := platformPatterns()
+	suffixes := []string{"", ".tar.gz", ".tgz", ".zip"}
 
 	var archiveFallback *gh.ReleaseAsset
 	for _, asset := range release.Assets {
 		name := strings.ToLower(asset.GetName())
 		for _, pat := range patterns {
-			if !strings.Contains(name, pat) {
+			matched := false
+			for _, suf := range suffixes {
+				if name == pat+suf || strings.Contains(name, "-"+pat+suf) || strings.Contains(name, "_"+pat+suf) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
 			if isArchiveAsset(name) {
@@ -425,7 +513,7 @@ func platformPatterns() []string {
 	return base
 }
 
-func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath string, isArchive bool) error {
+func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.ReleaseAsset, targetPath string, isArchive bool) error {
 	downloadURL := asset.GetBrowserDownloadURL()
 	if downloadURL == "" {
 		return fmt.Errorf("资产 %s 没有下载链接", asset.GetName())
@@ -439,7 +527,7 @@ func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath 
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载请求失败: %w", err)
 	}
@@ -497,7 +585,7 @@ func downloadAndReplace(ctx context.Context, asset *gh.ReleaseAsset, targetPath 
 		return fmt.Errorf("设置执行权限失败: %w", err)
 	}
 
-	if err := os.Rename(tmpBin, targetPath); err != nil {
+	if err := renameOrCopy(tmpBin, targetPath); err != nil {
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
@@ -510,6 +598,26 @@ func extractBinaryFromArchive(archivePath string) (string, error) {
 		return extractFromZip(archivePath)
 	}
 	return extractFromTarGz(archivePath)
+}
+
+func isExtractableBinary(name string) bool {
+	base := strings.ToLower(filepath.Base(name))
+	if base == "." || base == "" {
+		return false
+	}
+	skipKeywords := []string{"config", "readme", "license", "copying", "changelog", "news", "notice", "authors", "contributors", "thanks", "todo", "install", "man"}
+	for _, kw := range skipKeywords {
+		if strings.Contains(base, kw) {
+			return false
+		}
+	}
+	skipExts := []string{".txt", ".md", ".rst", ".html", ".xml", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".example", ".sample", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico"}
+	for _, ext := range skipExts {
+		if strings.HasSuffix(base, ext) {
+			return false
+		}
+	}
+	return true
 }
 
 func extractFromTarGz(tgzPath string) (string, error) {
@@ -536,7 +644,7 @@ func extractFromTarGz(tgzPath string) (string, error) {
 		}
 		if header.Typeflag == tar.TypeReg {
 			name := filepath.Base(header.Name)
-			if name == "." || strings.Contains(name, "config") {
+			if !isExtractableBinary(name) {
 				continue
 			}
 			outPath := tgzPath + ".extracted"
@@ -569,7 +677,7 @@ func extractFromZip(zipPath string) (string, error) {
 			continue
 		}
 		name := filepath.Base(f.Name)
-		if strings.Contains(name, "config") {
+		if !isExtractableBinary(name) {
 			continue
 		}
 		outPath := zipPath + ".extracted"
@@ -577,18 +685,19 @@ func extractFromZip(zipPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer rc.Close()
 		out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
+			rc.Close()
 			return "", err
 		}
-		defer out.Close()
 		if _, err := io.Copy(out, rc); err != nil {
 			out.Close()
+			rc.Close()
 			os.Remove(outPath)
 			return "", err
 		}
 		out.Close()
+		rc.Close()
 		return outPath, nil
 	}
 	return "", fmt.Errorf("在压缩包中未找到可执行文件")
@@ -607,6 +716,16 @@ func copyFile(src, dst string) error {
 	defer d.Close()
 	_, err = io.Copy(d, s)
 	return err
+}
+
+func renameOrCopy(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
 }
 
 type progressTracker struct {

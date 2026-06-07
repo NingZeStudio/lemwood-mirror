@@ -68,10 +68,12 @@ func NewScanner(cfg *config.Config, base string, s *server.State, ghc *gh.Client
 
 func buildSelfUpdateConfig(cfg *config.Config) selfupdate.Config {
 	return selfupdate.Config{
-		Enabled:     cfg.SelfUpdateEnabled,
-		RepoURL:     cfg.SelfUpdateRepoURL,
-		Channel:     cfg.SelfUpdateChannel,
-		AutoRestart: cfg.SelfUpdateAutoRestart,
+		Enabled:       cfg.SelfUpdateEnabled,
+		RepoURL:       cfg.SelfUpdateRepoURL,
+		Channel:       cfg.SelfUpdateChannel,
+		AutoRestart:   cfg.SelfUpdateAutoRestart,
+		ProxyURL:      cfg.ProxyURL,
+		AssetProxyURL: cfg.AssetProxyURL,
 	}
 }
 
@@ -307,23 +309,24 @@ func main() {
 	c.Start()
 	defer c.Stop()
 
-	applySelfUpdate := func() error {
-		_, err := selfUpdateManager.Check(context.Background())
+	applySelfUpdate := func(ctx context.Context) error {
+		_, err := selfUpdateManager.Check(ctx)
 		if err != nil {
 			return fmt.Errorf("检查更新失败: %w", err)
 		}
-		_, err = selfUpdateManager.Apply(context.Background())
+		_, err = selfUpdateManager.Apply(ctx)
 		return err
 	}
 
-	restartProcess := func() error {
+	doRestart := func() error {
 		bin := os.Args[0]
 		if bin == "" {
 			bin = selfUpdateManager.BinaryPath()
 		}
-		log.Printf("正在重启进程: %s", bin)
-		return syscall.Exec(bin, os.Args, os.Environ())
+		return restartProcess(bin, os.Args, os.Environ())
 	}
+
+	selfUpdateManager.SetOnRestart(doRestart)
 
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	log.Printf("正在启动服务器于 %s", addr)
@@ -336,7 +339,7 @@ func main() {
 			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {
 				log.Printf("手动自更新检查失败: %v", checkErr)
 			}
-		}, applySelfUpdate, restartProcess); err != nil {
+		}, applySelfUpdate, doRestart); err != nil {
 			log.Printf("http 服务器出错: %v", err)
 		}
 	}()
