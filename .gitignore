@@ -15,3 +15,11 @@ web/pnpm-workspace.yaml
 # Local workspace files
 .qwen/
 .trae/
+skills/.skills_store_lock.json
+skills/golang/_meta.json
+skills/golang/SKILL.md
+skills/golang/scripts/script.sh
+skills/golang-code-style/_meta.json
+skills/golang-code-style/SKILL.md
+skills/golang-code-style/evals/evals.json
+skills/golang-code-style/references/details.md

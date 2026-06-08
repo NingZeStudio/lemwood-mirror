@@ -110,6 +110,12 @@ func (s *State) SetSelfUpdateActions(apply func(ctx context.Context) error, rest
 	s.restartProcess = restart
 }
 
+func (s *State) updateInfoCache(path string, info map[string]any) {
+	s.mu.Lock()
+	s.infoCache[path] = info
+	s.mu.Unlock()
+}
+
 func (s *State) UpdateIndex(launcher string, version string, infoPath string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,7 +124,6 @@ func (s *State) UpdateIndex(launcher string, version string, infoPath string) {
 	}
 	s.index[launcher][version] = infoPath
 
-	// 尝试从磁盘读取并更新缓存
 	if content, err := os.ReadFile(infoPath); err == nil {
 		var info map[string]interface{}
 		if err := json.Unmarshal(content, &info); err == nil {
@@ -1178,9 +1183,6 @@ func containsDotDot(v string) bool {
 
 func SecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 记录访问
-		stats.RecordVisit(r)
-
 		ip := netutil.ExtractClientIP(r)
 
 		// 检查本地黑名单
@@ -1196,6 +1198,9 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip), http.StatusForbidden)
 			return
 		}
+
+		// 记录访问（仅在通过黑名单检查后）
+		stats.RecordVisit(r)
 
 		path := r.URL.Path
 		// 拦截路径遍历尝试
@@ -1240,21 +1245,9 @@ func (s *State) InitFromDisk() error {
 		if len(parts) < 2 {
 			return nil
 		}
-		// 假设目录结构为 launcher/version
 		launcher := parts[0]
 		version := parts[1]
 		s.UpdateIndex(launcher, version, path)
-		
-		// 缓存 index.json 文件内容
-		content, err := os.ReadFile(path)
-		if err == nil {
-			var info map[string]interface{}
-			if err := json.Unmarshal(content, &info); err == nil {
-				s.mu.Lock()
-				s.infoCache[path] = info
-				s.mu.Unlock()
-			}
-		}
 		return nil
 	})
 }
@@ -1529,9 +1522,7 @@ func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 					var fileInfo map[string]any
 					if err := json.Unmarshal(content, &fileInfo); err == nil {
 						infoCacheCopy[p] = fileInfo
-						s.mu.Lock()
-						s.infoCache[p] = fileInfo
-						s.mu.Unlock()
+						s.updateInfoCache(p, fileInfo)
 						for k, val := range fileInfo {
 							if k != "is_latest" {
 								info[k] = val
@@ -1605,9 +1596,7 @@ func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
 				var fileInfo map[string]any
 				if err := json.Unmarshal(content, &fileInfo); err == nil {
 					infoCacheCopy[p] = fileInfo
-					s.mu.Lock()
-					s.infoCache[p] = fileInfo
-					s.mu.Unlock()
+					s.updateInfoCache(p, fileInfo)
 					for k, val := range fileInfo {
 						if k != "is_latest" {
 							info[k] = val
