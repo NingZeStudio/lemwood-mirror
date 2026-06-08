@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"lemwood_mirror/internal/logger"
 	"net/http"
 	"net/url"
 	"os"
@@ -288,9 +288,9 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 	if autoRestart && onRestart != nil {
 		m.ClearPendingRestart()
 		go func() {
-			log.Printf("自更新: 自动重启已启用，正在重启...")
+			logger.Info(logger.ModSelfUpdate, "自动重启已启用，正在重启...")
 			if err := onRestart(); err != nil {
-				log.Printf("自更新: 自动重启失败: %v", err)
+				logger.Error(logger.ModSelfUpdate, "自动重启失败: %v", err)
 			}
 		}()
 	}
@@ -519,7 +519,7 @@ func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.
 		return fmt.Errorf("资产 %s 没有下载链接", asset.GetName())
 	}
 
-	log.Printf("自更新: 下载 %s (%d 字节)", asset.GetName(), asset.GetSize())
+	logger.Info(logger.ModSelfUpdate, "下载 %s (%d 字节)", asset.GetName(), asset.GetSize())
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
@@ -589,7 +589,7 @@ func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
-	log.Printf("自更新: 已替换二进制 %s", targetPath)
+	logger.Info(logger.ModSelfUpdate, "已替换二进制 %s", targetPath)
 	return nil
 }
 
@@ -741,7 +741,7 @@ func (pt *progressTracker) Write(p []byte) (int, error) {
 	if time.Since(pt.lastUpdate) > 2*time.Second {
 		pt.lastUpdate = time.Now()
 		percentage := float64(pt.written) / float64(pt.total) * 100
-		log.Printf("自更新下载 %s: %d / %d (%.2f%%)", pt.fileName, pt.written, pt.total, percentage)
+		logger.Info(logger.ModSelfUpdate, "下载 %s: %d / %d (%.2f%%)", pt.fileName, pt.written, pt.total, percentage)
 	}
 	return n, nil
 }

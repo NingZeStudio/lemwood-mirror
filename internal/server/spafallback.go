@@ -1,7 +1,7 @@
 package server
 
 import (
-	"log"
+	"lemwood_mirror/internal/logger"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,7 +55,7 @@ func SPAFallbackMiddleware(next http.Handler, staticDir string) http.Handler {
 		absBase, _ := filepath.Abs(staticDir)
 		absPath, _ := filepath.Abs(cleanPath)
 		if !strings.HasPrefix(absPath, absBase) {
-			log.Printf("安全警告：拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			logger.Warn(logger.ModSecurity, "拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
 			http.NotFound(w, r)
 			return
 		}

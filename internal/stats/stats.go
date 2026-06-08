@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/logger"
 	"lemwood_mirror/internal/netutil"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -77,7 +77,7 @@ func InitWritePool(workers int, queueSize int) {
 	workerWg.Add(1)
 	go ipInfoWorker()
 
-	log.Printf("[Stats] 写入工作池已初始化: %d workers, queue size: %d", workers, queueSize)
+	logger.Info(logger.ModStats, "写入工作池已初始化: %d workers, queue size: %d", workers, queueSize)
 }
 
 func CloseWritePool() {
@@ -102,7 +102,7 @@ func writeWorker() {
 				return
 			}
 			if _, err := db.DB.Exec(task.query, task.args...); err != nil {
-				log.Printf("数据库写入失败: %v", err)
+				logger.Error(logger.ModStats, "数据库写入失败: %v", err)
 			}
 		}
 	}
@@ -252,7 +252,7 @@ func enqueueWrite(task *writeTask) {
 	case writeQueue <- task:
 	default:
 		atomic.AddInt64(&droppedCount, 1)
-		log.Printf("写入队列已满，丢弃记录 (总丢弃: %d)", atomic.LoadInt64(&droppedCount))
+		logger.Warn(logger.ModStats, "写入队列已满，丢弃记录 (总丢弃: %d)", atomic.LoadInt64(&droppedCount))
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"io"
 	"lemwood_mirror/internal/db"
-	"log"
+	"lemwood_mirror/internal/logger"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,7 +37,7 @@ func SyncExternalBlacklist(url string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[黑名单同步] 获取外部黑名单失败，状态码: %d", resp.StatusCode)
+		logger.Warn(logger.ModBlacklist, "获取外部黑名单失败，状态码: %d", resp.StatusCode)
 		return nil
 	}
 
@@ -72,7 +72,7 @@ func SyncExternalBlacklist(url string) error {
 		return err
 	}
 
-	log.Printf("[黑名单同步] 成功同步 %d 个外部黑名单IP", len(ips))
+	logger.Info(logger.ModBlacklist, "成功同步 %d 个外部黑名单IP", len(ips))
 	return nil
 }
 

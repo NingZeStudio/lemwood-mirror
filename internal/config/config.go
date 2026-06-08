@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lemwood_mirror/internal/logger"
 	"os"
 	"path/filepath"
 	"strings"
@@ -290,7 +291,7 @@ func normalizeConfig(cfg *Config) error {
 	cfg.SelfUpdateChannel = string(channel)
 	if cfg.AdminEnabled {
 		if cfg.AdminUser == "" || cfg.AdminPassword == "" {
-			fmt.Println("警告: 管理员账号或密码未配置，管理后台已自动禁用")
+			logger.Warn(logger.ModConfig, "管理员账号或密码未配置，管理后台已自动禁用")
 			cfg.AdminEnabled = false
 		}
 		if cfg.AdminMaxRetries <= 0 {
@@ -300,7 +301,7 @@ func normalizeConfig(cfg *Config) error {
 			cfg.AdminLockDuration = 120
 		}
 	} else {
-		fmt.Println("提示: 管理后台当前处于禁用状态")
+		logger.Info(logger.ModConfig, "管理后台当前处于禁用状态")
 	}
 	if env := os.Getenv("GITHUB_TOKEN"); env != "" {
 		cfg.GitHubToken = env

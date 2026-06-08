@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"lemwood_mirror/internal/config"
-	"log"
+	"lemwood_mirror/internal/logger"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,16 +56,15 @@ func InitDB(storagePath string, cfg *config.Config) error {
 		// 检查是否需要从 SQLite 迁移
 		if cfg.MySQLMigration {
 			if _, err := os.Stat(dbPath); err == nil {
-				log.Println("[数据库] 发现 SQLite 数据库，开始自动迁移到 MySQL...")
+				logger.Info(logger.ModDB, "发现 SQLite 数据库，开始自动迁移到 MySQL...")
 				if err := migrateFromSQLite(dbPath); err != nil {
 					return fmt.Errorf("自动迁移到 MySQL 失败: %w", err)
 				}
-				log.Println("[数据库] 迁移成功！")
-				// 迁移成功后，将 stats.db 重命名为 stats.db.bak
+				logger.Info(logger.ModDB, "迁移成功！")
 				if err := os.Rename(dbPath, dbPath+".bak"); err != nil {
-					log.Printf("[数据库] 备份原 SQLite 文件失败: %v", err)
+					logger.Warn(logger.ModDB, "备份原 SQLite 文件失败: %v", err)
 				} else {
-					log.Printf("[数据库] 已将原 SQLite 文件备份为 %s.bak", dbPath)
+					logger.Info(logger.ModDB, "已将原 SQLite 文件备份为 %s.bak", dbPath)
 				}
 			}
 		}
@@ -222,7 +221,7 @@ func migrateTable(src, dst *sql.DB, tableName string) error {
 		return err
 	}
 
-	log.Printf("[数据库迁移] 表 %s: 迁移了 %d 条数据", tableName, count)
+	logger.Info(logger.ModDB, "表 %s: 迁移了 %d 条数据", tableName, count)
 	return nil
 }
 
@@ -420,7 +419,7 @@ func migrateTables() error {
 
 	// 如果没有 source 列，添加新列
 	if !hasSourceColumn {
-		log.Println("数据库迁移: 为 ip_blacklist 表添加 source 和 ban_type 列")
+		logger.Info(logger.ModDB, "数据库迁移: 为 ip_blacklist 表添加 source 和 ban_type 列")
 		alterQueries := []string{
 			"ALTER TABLE ip_blacklist ADD COLUMN source TEXT DEFAULT 'manual'",
 			"ALTER TABLE ip_blacklist ADD COLUMN ban_type TEXT DEFAULT 'manual'",
@@ -664,7 +663,7 @@ func AddExternalBlacklist(ips []string) error {
 			continue
 		}
 		if _, err := stmt.Exec(ip, "外部黑名单"); err != nil {
-			log.Printf("添加外部黑名单IP失败: %s, %v", ip, err)
+			logger.Error(logger.ModDB, "添加外部黑名单IP失败: %s, %v", ip, err)
 		}
 	}
 

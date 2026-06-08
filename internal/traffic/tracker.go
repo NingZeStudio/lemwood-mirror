@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"lemwood_mirror/internal/db"
-	"log"
+	"lemwood_mirror/internal/logger"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -76,7 +76,7 @@ func (t *Tracker) syncWorker() {
 			}
 			timer = time.AfterFunc(debounceDuration, func() {
 				if err := t.SyncBanRecordFile(); err != nil {
-					log.Printf("[防刷墙] 异步同步封禁记录文件失败: %v", err)
+					logger.Error(logger.ModFirewall, "异步同步封禁记录文件失败: %v", err)
 				}
 			})
 		case <-t.ctx.Done():
@@ -109,7 +109,7 @@ func (t *Tracker) initBanRecordFile() {
 	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("[防刷墙] 创建封禁记录目录失败: %v", err)
+		logger.Error(logger.ModFirewall, "创建封禁记录目录失败: %v", err)
 		return
 	}
 
@@ -120,7 +120,7 @@ func (t *Tracker) initBanRecordFile() {
 
 `, t.appealContact)
 		if err := os.WriteFile(fullPath, []byte(header), 0644); err != nil {
-			log.Printf("[防刷墙] 初始化封禁记录文件失败: %v", err)
+			logger.Error(logger.ModFirewall, "初始化封禁记录文件失败: %v", err)
 		}
 	}
 }
@@ -204,7 +204,7 @@ func (t *Tracker) ReserveTraffic(ip string, estimatedBytes int64) (bool, int64, 
 	if t.limitGB == 0 || estimatedBytes == 0 {
 		currentBytes, err := t.GetDailyTraffic(ip)
 		if err != nil {
-			log.Printf("[防刷墙] 获取IP %s 流量失败: %v", ip, err)
+			logger.Error(logger.ModFirewall, "获取IP %s 流量失败: %v", ip, err)
 			return false, 0, 0, "获取当日流量失败"
 		}
 		return true, currentBytes, currentBytes + estimatedBytes, ""
@@ -215,7 +215,7 @@ func (t *Tracker) ReserveTraffic(ip string, estimatedBytes int64) (bool, int64, 
 
 	currentBytes, err := t.GetDailyTraffic(ip)
 	if err != nil {
-		log.Printf("[防刷墙] 获取IP %s 流量失败: %v", ip, err)
+		logger.Error(logger.ModFirewall, "获取IP %s 流量失败: %v", ip, err)
 		return false, 0, 0, "获取当日流量失败"
 	}
 
@@ -290,7 +290,7 @@ func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 
 	traffic, err := t.GetDailyTraffic(ip)
 	if err != nil {
-		log.Printf("[防刷墙] 获取IP %s 流量失败: %v", ip, err)
+		logger.Error(logger.ModFirewall, "获取IP %s 流量失败: %v", ip, err)
 		return false, "", 0
 	}
 
@@ -299,13 +299,13 @@ func (t *Tracker) CheckAndBan(ip string) (bool, string, float64) {
 		reason := fmt.Sprintf("单日下载流量超过%dGB限制", t.limitGB/(1024*1024*1024))
 
 		if err := db.AddIPToBlacklistWithSource(ip, reason, "local", "traffic"); err != nil {
-			log.Printf("[防刷墙] 封禁IP %s 失败: %v", ip, err)
+			logger.Error(logger.ModFirewall, "封禁IP %s 失败: %v", ip, err)
 			return false, "", trafficGB
 		}
 
 		t.TriggerSync()
 
-		log.Printf("[防刷墙] IP %s 已被封禁，原因: %s，当日流量: %.2fGB，如有误封请联系 %s",
+		logger.Warn(logger.ModFirewall, "IP %s 已被封禁，原因: %s，当日流量: %.2fGB，如有误封请联系 %s",
 			ip, reason, trafficGB, t.appealContact)
 
 		return true, reason, trafficGB

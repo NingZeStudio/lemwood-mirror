@@ -13,11 +13,11 @@ import (
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/download_token"
+	"lemwood_mirror/internal/logger"
 	"lemwood_mirror/internal/netutil"
 	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -132,7 +132,7 @@ func (s *State) UpdateIndex(launcher string, version string, infoPath string) {
 	}
 
 	s.latest[launcher] = s.pickLatest(s.index[launcher])
-	log.Printf("更新启动器 %s 索引: 版本=%s, 最新版本=%s", launcher, version, s.latest[launcher])
+	logger.Info(logger.ModMirror, "更新启动器 %s 索引: 版本=%s, 最新版本=%s", launcher, version, s.latest[launcher])
 }
 
 // GetLatestVersion 获取启动器的最新版本号
@@ -207,7 +207,7 @@ func (s *State) TrimLauncherVersions(launcher string, keep int) error {
 	}
 
 	if len(deleted) > 0 {
-		log.Printf("%s: 已清理旧版本 %s", launcher, strings.Join(deleted, ", "))
+		logger.Info(logger.ModMirror, "%s: 已清理旧版本 %s", launcher, strings.Join(deleted, ", "))
 	}
 
 	return nil
@@ -232,8 +232,7 @@ func (s *State) ClearLatestFlags(launcher string) error {
 		// 如果缓存存在且 is_latest 为 true，或者缓存不存在（需要读取文件），则处理
 		if !exists || (exists && info["is_latest"] == true) {
 			if err := s.clearLatestFlag(infoPath); err != nil {
-				log.Printf("清除 %s 的 latest 标记失败: %v", infoPath, err)
-				// 继续处理其他文件，不返回错误
+				logger.Warn(logger.ModMirror, "清除 %s 的 latest 标记失败: %v", infoPath, err)				// 继续处理其他文件，不返回错误
 			}
 		}
 	}
@@ -281,7 +280,7 @@ func (s *State) clearLatestFlag(infoPath string) error {
 		s.infoCache[infoPath] = info
 		s.mu.Unlock()
 		
-		log.Printf("已清除 %s 的 latest 标记", infoPath)
+		logger.Info(logger.ModMirror, "已清除 %s 的 latest 标记", infoPath)
 	}
 	
 	return nil
@@ -378,11 +377,11 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if attempts >= s.Config.AdminMaxRetries {
 			lockUntil := time.Now().Add(time.Duration(s.Config.AdminLockDuration) * time.Minute)
 			s.loginLocks[ip] = lockUntil
-			log.Printf("IP %s 登录失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
+			logger.Warn(logger.ModAuth, "IP %s 登录失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
 			s.loginAttemptsMu.Unlock()
 			http.Error(w, fmt.Sprintf("登录失败次数过多，账号已锁定 %d 小时", s.Config.AdminLockDuration/60), http.StatusForbidden)
 		} else {
-			log.Printf("IP %s 登录失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
+			logger.Warn(logger.ModAuth, "IP %s 登录失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
 			s.loginAttemptsMu.Unlock()
 			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		}
@@ -400,7 +399,7 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.loginAttemptsMu.Lock()
 			s.loginAttempts[ip]++
 			attempts := s.loginAttempts[ip]
-			log.Printf("IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
+			logger.Warn(logger.ModAuth, "IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
 			s.loginAttemptsMu.Unlock()
 			http.Error(w, "验证码错误", http.StatusUnauthorized)
 			return
@@ -771,7 +770,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		absBase, _ := filepath.Abs(baseDir)
 		absPath, _ := filepath.Abs(cleanPath)
 		if !strings.HasPrefix(absPath, absBase) {
-			log.Printf("安全警告：拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			logger.Warn(logger.ModSecurity, "拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
 			http.NotFound(w, r)
 			return
 		}
@@ -815,7 +814,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		absBase, _ := filepath.Abs(repoDir)
 		absPath, _ := filepath.Abs(cleanPath)
 		if !strings.HasPrefix(absPath, absBase) {
-			log.Printf("安全警告：拦截到来自 %s 的 repo 路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			logger.Warn(logger.ModSecurity, "拦截到来自 %s 的 repo 路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
 			http.NotFound(w, r)
 			return
 		}
@@ -852,7 +851,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 				message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
 			}
 			http.Error(w, message, http.StatusForbidden)
-			log.Printf("[Repo防刷墙] 拒绝请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
+			logger.Warn(logger.ModFirewall, "拒绝请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
 			return
 		}
 
@@ -862,9 +861,9 @@ func (s *State) Routes(mux *http.ServeMux) {
 
 		if repoTracker != nil {
 			if banned, reason, trafficGB, err := repoTracker.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
-				log.Printf("[Repo防刷墙] 记录流量失败: %v", err)
+				logger.Error(logger.ModFirewall, "记录流量失败: %v", err)
 			} else if banned {
-				log.Printf("[Repo防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+				logger.Warn(logger.ModFirewall, "IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
 			}
 		}
 
@@ -1019,7 +1018,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		absBase, _ := filepath.Abs(s.BasePath)
 		absPath, _ := filepath.Abs(cleanPath)
 		if !strings.HasPrefix(absPath, absBase) {
-			log.Printf("安全警告：拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
+			logger.Warn(logger.ModSecurity, "拦截到来自 %s 的路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
 			http.NotFound(w, r)
 			return
 		}
@@ -1031,7 +1030,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 				http.NotFound(w, r)
 				return
 			}
-			log.Printf("访问文件出错：%s, %v", path, err)
+			logger.Error(logger.ModServer, "访问文件出错：%s, %v", path, err)
 			http.NotFound(w, r)
 			return
 		}
@@ -1064,7 +1063,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 				message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
 			}
 			http.Error(w, message, http.StatusForbidden)
-			log.Printf("[防刷墙] 拒绝下载请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
+			logger.Warn(logger.ModFirewall, "拒绝下载请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
 			return
 		}
 
@@ -1077,9 +1076,9 @@ func (s *State) Routes(mux *http.ServeMux) {
 		http.ServeFile(countingWriter, r, cleanPath)
 
 		if banned, reason, trafficGB, err := traffic.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
-			log.Printf("[防刷墙] 记录流量失败: %v", err)
+			logger.Error(logger.ModFirewall, "记录流量失败: %v", err)
 		} else if banned {
-			log.Printf("[防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
+			logger.Warn(logger.ModFirewall, "IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
 		}
 
 		if counter.Total > 0 && isSuccessfulDownloadStatus(countingWriter.statusCode) {
@@ -1187,14 +1186,14 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 
 		// 检查本地黑名单
 		if banned, createdAt, _ := db.GetIPBlacklistInfo(ip); banned {
-			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "https://qm.qq.com/q/FOGt99aayY")
+			logger.Warn(logger.ModFirewall, "拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "https://qm.qq.com/q/FOGt99aayY")
 			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip, createdAt), http.StatusForbidden)
 			return
 		}
 
 		// 检查外部黑名单
 		if blacklist.IsExternalBlacklisted(ip) {
-			log.Printf("[防刷墙] 拒绝来自外部黑名单 IP 的访问: %s", ip)
+			logger.Warn(logger.ModFirewall, "拒绝来自外部黑名单 IP 的访问: %s", ip)
 			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip), http.StatusForbidden)
 			return
 		}
@@ -1205,7 +1204,7 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 		// 拦截路径遍历尝试
 		if containsDotDot(path) {
-			log.Printf("安全警告：拦截到来自 %s 的路径遍历尝试，请求路径：%s", r.RemoteAddr, path)
+			logger.Warn(logger.ModSecurity, "拦截到来自 %s 的路径遍历尝试，请求路径：%s", r.RemoteAddr, path)
 			http.NotFound(w, r)
 			return
 		}
@@ -1326,7 +1325,7 @@ func (s *State) FixAssetURLs() error {
 			}
 			
 			if err := os.WriteFile(infoPath, newContent, 0o644); err != nil {
-				log.Printf("修复 %s 的 URL 失败: %v", infoPath, err)
+				logger.Warn(logger.ModURLCheck, "修复 %s 的 URL 失败: %v", infoPath, err)
 				continue
 			}
 			
@@ -1340,7 +1339,7 @@ func (s *State) FixAssetURLs() error {
 	}
 	
 	if fixedCount > 0 {
-		log.Printf("[URL 统一性检查] 修复了 %d 个 index.json 文件中的下载链接", fixedCount)
+		logger.Info(logger.ModURLCheck, "修复了 %d 个 index.json 文件中的下载链接", fixedCount)
 	}
 	
 	return nil
@@ -1661,7 +1660,7 @@ func (s *State) handleStats(w http.ResponseWriter, r *http.Request) {
 	data, err := stats.GetStats(s.BasePath)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		log.Printf("获取统计数据失败: %v", err)
+		logger.Error(logger.ModStats, "获取统计数据失败: %v", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1844,7 +1843,7 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.captchaValidator.Verify(req.LotNumber, req.CaptchaOutput, req.PassToken, req.GenTime, ip)
 	if err != nil {
-		log.Printf("验证码验证失败: %v", err)
+		logger.Error(logger.ModCaptcha, "验证码验证失败: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -1855,7 +1854,7 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Result != "success" {
-		log.Printf("验证码验证不成功: result=%s, reason=%s", result.Result, result.Reason)
+		logger.Warn(logger.ModCaptcha, "验证码验证不成功: result=%s, reason=%s", result.Result, result.Reason)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		json.NewEncoder(w).Encode(map[string]interface{}{

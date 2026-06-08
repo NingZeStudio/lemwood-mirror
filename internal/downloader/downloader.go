@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"lemwood_mirror/internal/logger"
 	"net/http"
 	"net/url"
 	"os"
@@ -87,7 +87,7 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 		} else {
 			publicIP, err := getPublicIP()
 			if err != nil {
-				log.Printf("无法获取公网 IP: %v。回退到资源 %s 的 GitHub URL", err, a.GetName())
+				logger.Warn(logger.ModDownload, "无法获取公网 IP: %v。回退到资源 %s 的 GitHub URL", err, a.GetName())
 				downloadURL = a.GetBrowserDownloadURL()
 			} else {
 				downloadURL = FormatDownloadURL("", serverPort, publicIP, launcher, version, a.GetName())
@@ -118,7 +118,7 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 		if err := os.WriteFile(indexPath, b, 0o644); err != nil {
 			return "", fmt.Errorf("写入 index.json 失败: %w", err)
 		}
-		log.Printf("已将版本信息写入 %s", indexPath)
+		logger.Info(logger.ModDownload, "已将版本信息写入 %s", indexPath)
 	}
 
 	client := d.httpClient
@@ -222,7 +222,7 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 			// 文件大小一致，认为是同一个文件，跳过下载且不打印日志
 			return nil
 		}
-		log.Printf("文件 %s 已存在但大小不一致 (本地: %d, 远程: %d)，将重新下载。", name, fileInfo.Size(), asset.GetSize())
+		logger.Warn(logger.ModDownload, "文件 %s 已存在但大小不一致 (本地: %d, 远程: %d)，将重新下载。", name, fileInfo.Size(), asset.GetSize())
 	}
 
 	downloadURL := asset.GetBrowserDownloadURL()
@@ -233,13 +233,13 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 		downloadURL = strings.Replace(downloadURL, "https://github.com/", xgetDomain+"/gh/", 1)
 	}
 	if downloadURL == "" {
-		log.Printf("资源 %s 没有下载链接，跳过", name)
+		logger.Warn(logger.ModDownload, "资源 %s 没有下载链接，跳过", name)
 		return nil
 	}
 	if name == "" {
 		name = filepath.Base(downloadURL)
 	}
-	log.Printf("开始下载 %s 到 %s", downloadURL, outfile)
+	logger.Info(logger.ModDownload, "开始下载 %s 到 %s", downloadURL, outfile)
 
 	partial := outfile + ".partial"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
@@ -256,7 +256,7 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 		if resp != nil {
 			resp.Body.Close()
 		}
-		log.Printf("下载 %s 失败，5秒后重试...", downloadURL)
+		logger.Warn(logger.ModDownload, "下载 %s 失败，5秒后重试...", downloadURL)
 		time.Sleep(5 * time.Second)
 	}
 	if err != nil {
@@ -300,14 +300,14 @@ func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, ass
 	}
 
 	if written != resp.ContentLength && resp.ContentLength > 0 {
-		log.Printf("警告: 下载 %s 字节数不匹配 (期望: %d, 实际: %d)", name, resp.ContentLength, written)
+		logger.Warn(logger.ModDownload, "警告: 下载 %s 字节数不匹配 (期望: %d, 实际: %d)", name, resp.ContentLength, written)
 	}
 
 	if err := os.Rename(partial, outfile); err != nil {
 		return err
 	}
 
-	log.Printf("完成下载 %s", outfile)
+	logger.Info(logger.ModDownload, "完成下载 %s", outfile)
 	return nil
 }
 
@@ -324,7 +324,7 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 	if time.Since(pw.lastUpdate) > 2*time.Second {
 		pw.lastUpdate = time.Now()
 		percentage := float64(pw.written) / float64(pw.total) * 100
-		log.Printf("下载 %s: %d / %d (%.2f%%)", pw.fileName, pw.written, pw.total, percentage)
+		logger.Info(logger.ModDownload, "下载 %s: %d / %d (%.2f%%)", pw.fileName, pw.written, pw.total, percentage)
 	}
 	return n, nil
 }
