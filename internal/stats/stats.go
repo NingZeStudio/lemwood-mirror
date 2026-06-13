@@ -3,9 +3,11 @@ package stats
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/netutil"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -37,9 +39,10 @@ var (
 	ipCache = make(map[string]*IPInfo)
 	ipMutex sync.RWMutex
 
-	statsCache     *StatsData
-	statsCacheTime time.Time
-	statsMutex     sync.RWMutex
+	lastSnapshot     *StatsData
+	lastSnapshotTime time.Time
+	snapshotMu       sync.RWMutex
+	refreshInFlight  sync.Mutex
 
 	writeQueue   chan *writeTask
 	ipInfoQueue  chan *ipInfoTask
@@ -55,7 +58,17 @@ const (
 	defaultQueueSize = 1000
 	maxIPCacheSize   = 50000
 	cacheTTL         = 5 * time.Minute
+	snapshotTTL      = 15 * time.Minute
 )
+
+func scanCount(label, query string) int64 {
+	var n int64
+	if err := db.DB.QueryRow(query).Scan(&n); err != nil {
+		log.Printf("[Stats] %s 查询失败: %v", label, err)
+		return 0
+	}
+	return n
+}
 
 func InitWritePool(workers int, queueSize int) {
 	if workers <= 0 {
@@ -81,9 +94,29 @@ func InitWritePool(workers int, queueSize int) {
 }
 
 func CloseWritePool() {
+	if writeQueue == nil && ipInfoQueue == nil {
+		return
+	}
+	if writeQueue != nil {
+		close(writeQueue)
+	}
+	if ipInfoQueue != nil {
+		close(ipInfoQueue)
+	}
 	if workerCancel != nil {
 		workerCancel()
+	}
+
+	done := make(chan struct{})
+	go func() {
 		workerWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		log.Printf("[Stats] 关闭写入池超时，可能仍有未落盘记录")
 	}
 }
 
@@ -93,17 +126,9 @@ func DroppedCount() int64 {
 
 func writeWorker() {
 	defer workerWg.Done()
-	for {
-		select {
-		case <-workerCtx.Done():
-			return
-		case task, ok := <-writeQueue:
-			if !ok {
-				return
-			}
-			if _, err := db.DB.Exec(task.query, task.args...); err != nil {
-				log.Printf("数据库写入失败: %v", err)
-			}
+	for task := range writeQueue {
+		if _, err := db.DB.Exec(task.query, task.args...); err != nil {
+			log.Printf("数据库写入失败: %v", err)
 		}
 	}
 }
@@ -114,30 +139,22 @@ func ipInfoWorker() {
 	var lastReq time.Time
 	minInterval := 2 * time.Second
 
-	for {
-		select {
-		case <-workerCtx.Done():
-			return
-		case task, ok := <-ipInfoQueue:
-			if !ok {
-				return
+	for task := range ipInfoQueue {
+		if elapsed := time.Since(lastReq); elapsed < minInterval {
+			time.Sleep(minInterval - elapsed)
+		}
+		info := fetchIPInfo(client, task.ip)
+		lastReq = time.Now()
+		if info != nil {
+			ipMutex.Lock()
+			if len(ipCache) >= maxIPCacheSize {
+				evictIPCache()
 			}
-			if elapsed := time.Since(lastReq); elapsed < minInterval {
-				time.Sleep(minInterval - elapsed)
-			}
-			info := fetchIPInfo(client, task.ip)
-			lastReq = time.Now()
-			if info != nil {
-				ipMutex.Lock()
-				if len(ipCache) >= maxIPCacheSize {
-					evictIPCache()
-				}
-				ipCache[task.ip] = info
-				ipMutex.Unlock()
-			}
-			if task.callback != nil {
-				task.callback(info)
-			}
+			ipCache[task.ip] = info
+			ipMutex.Unlock()
+		}
+		if task.callback != nil {
+			task.callback(info)
 		}
 	}
 }
@@ -164,28 +181,15 @@ func evictIPCache() {
 	}
 }
 
-func isPrivateIP(ip string) bool {
-	if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" ||
-		strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") {
+func isPrivateIP(ipStr string) bool {
+	if ipStr == "localhost" {
 		return true
 	}
-	if strings.HasPrefix(ip, "172.") {
-		parts := strings.SplitN(ip, ".", 3)
-		if len(parts) >= 2 {
-			var second int
-			for _, c := range parts[1] {
-				if c >= '0' && c <= '9' {
-					second = second*10 + int(c-'0')
-				} else {
-					break
-				}
-			}
-			if second >= 16 && second <= 31 {
-				return true
-			}
-		}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
 	}
-	return false
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
 func fetchIPInfo(client *http.Client, ip string) *IPInfo {
@@ -203,8 +207,18 @@ func fetchIPInfo(client *http.Client, ip string) *IPInfo {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		log.Printf("[Stats] ip-api.com 429 限流，暂停 IP 查询: ip=%s", ip)
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[Stats] ip-api.com 返回异常状态: %d, ip=%s", resp.StatusCode, ip)
+		return nil
+	}
+
 	var info IPInfo
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		log.Printf("[Stats] ip-api.com 响应解析失败: %v, ip=%s", err, ip)
 		return nil
 	}
 
@@ -235,6 +249,13 @@ func getIPInfoAsync(ip string, callback func(info *IPInfo)) {
 		return
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			if callback != nil {
+				callback(nil)
+			}
+		}
+	}()
 	select {
 	case ipInfoQueue <- &ipInfoTask{ip: ip, callback: callback}:
 	default:
@@ -248,6 +269,11 @@ func enqueueWrite(task *writeTask) {
 	if writeQueue == nil {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			atomic.AddInt64(&droppedCount, 1)
+		}
+	}()
 	select {
 	case writeQueue <- task:
 	default:
@@ -368,14 +394,111 @@ type DailyStat struct {
 }
 
 func GetStats(storagePath string) (*StatsData, error) {
-	statsMutex.RLock()
-	if statsCache != nil && time.Since(statsCacheTime) < cacheTTL {
-		cached := statsCache
-		statsMutex.RUnlock()
-		return cached, nil
-	}
-	statsMutex.RUnlock()
+	snapshot, updatedAt := loadSnapshot()
 
+	if snapshot != nil {
+		age := time.Since(updatedAt)
+		if age < snapshotTTL {
+			if storagePath != "" {
+				if diskInfo, err := GetDiskUsage(storagePath); err == nil {
+					snapshot.Disk = diskInfo
+				}
+			}
+			snapshot.DroppedRecords = DroppedCount()
+			return snapshot, nil
+		}
+		// Stale: serve old data, refresh in background
+		go RefreshSnapshot()
+		if storagePath != "" {
+			if diskInfo, err := GetDiskUsage(storagePath); err == nil {
+				snapshot.Disk = diskInfo
+			}
+		}
+		snapshot.DroppedRecords = DroppedCount()
+		return snapshot, nil
+	}
+
+	// Cold start: no snapshot yet, compute synchronously
+	if err := RefreshSnapshot(); err != nil {
+		return &StatsData{
+			TopDownloads:     []DownloadRank{},
+			TopRepoDownloads: []RepoDownloadRank{},
+			GeoDistribution:  []GeoStat{},
+			DailyStats:       []DailyStat{},
+			DroppedRecords:   DroppedCount(),
+		}, err
+	}
+
+	snapshot, _ = loadSnapshot()
+	if snapshot == nil {
+		snapshot = &StatsData{
+			TopDownloads:     []DownloadRank{},
+			TopRepoDownloads: []RepoDownloadRank{},
+			GeoDistribution:  []GeoStat{},
+			DailyStats:       []DailyStat{},
+		}
+	}
+	if storagePath != "" {
+		if diskInfo, err := GetDiskUsage(storagePath); err == nil {
+			snapshot.Disk = diskInfo
+		}
+	}
+	snapshot.DroppedRecords = DroppedCount()
+	return snapshot, nil
+}
+
+func loadSnapshot() (*StatsData, time.Time) {
+	snapshotMu.RLock()
+	if lastSnapshot != nil {
+		cached := lastSnapshot
+		updated := lastSnapshotTime
+		snapshotMu.RUnlock()
+		return cached, updated
+	}
+	snapshotMu.RUnlock()
+
+	if db.DB == nil {
+		return nil, time.Time{}
+	}
+
+	var dataJSON string
+	var updatedAt time.Time
+	var err error
+	if db.IsMySQL() {
+		err = db.DB.QueryRow("SELECT data, updated_at FROM stats_snapshot WHERE id = 1").Scan(&dataJSON, &updatedAt)
+	} else {
+		var raw interface{}
+		err = db.DB.QueryRow("SELECT data, updated_at FROM stats_snapshot WHERE id = 1").Scan(&dataJSON, &raw)
+		if err == nil {
+			switch v := raw.(type) {
+			case time.Time:
+				updatedAt = v
+			case string:
+				updatedAt, _ = time.Parse("2006-01-02 15:04:05", v)
+			case []byte:
+				updatedAt, _ = time.Parse("2006-01-02 15:04:05", string(v))
+			}
+		}
+	}
+	if err != nil {
+		return nil, time.Time{}
+	}
+
+	var data StatsData
+	if err := json.Unmarshal([]byte(dataJSON), &data); err != nil {
+		log.Printf("[Stats] 快照 JSON 解析失败: %v", err)
+		return nil, time.Time{}
+	}
+
+	snapshotMu.Lock()
+	lastSnapshot = &data
+	lastSnapshotTime = updatedAt
+	snapshotMu.Unlock()
+
+	return &data, updatedAt
+}
+
+func computeStatsData() *StatsData {
 	data := &StatsData{
 		TopDownloads:     []DownloadRank{},
 		TopRepoDownloads: []RepoDownloadRank{},
@@ -385,118 +508,79 @@ func GetStats(storagePath string) (*StatsData, error) {
 	}
 
 	if db.DB == nil {
-		return data, nil
+		return data
 	}
 
 	if db.IsMySQL() {
-		return getStatsMySQL(data, storagePath)
-	}
-	return getStatsSQLite(data, storagePath)
-}
+		var wg sync.WaitGroup
 
-func getStatsMySQL(data *StatsData, storagePath string) (*StatsData, error) {
-	var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.TotalRepoDownloads = scanCount("total_repo_downloads", "SELECT COUNT(*) FROM repo_downloads")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.Last30Downloads = scanCount("last_30_downloads", "SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data.Last30RepoDownloads = scanCount("last_30_repo_downloads", "SELECT COUNT(*) FROM repo_downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			computeTotalDaysMySQL(data)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryTopDownloads(data)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryTopRepoDownloads(data)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryGeoDistribution(data)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryDailyStatsMySQL(data)
+		}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if storagePath != "" {
-			if diskInfo, err := GetDiskUsage(storagePath); err == nil {
-				data.Disk = diskInfo
-			}
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM visits").Scan(&data.TotalVisits)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM downloads").Scan(&data.TotalDownloads)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads").Scan(&data.TotalRepoDownloads)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)").Scan(&data.Last30Visits)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)").Scan(&data.Last30Downloads)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)").Scan(&data.Last30RepoDownloads)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		computeTotalDaysMySQL(data)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		queryTopDownloads(data)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		queryTopRepoDownloads(data)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		queryGeoDistribution(data)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		queryDailyStatsMySQL(data)
-	}()
-
-	wg.Wait()
-
-	statsMutex.Lock()
-	statsCache = data
-	statsCacheTime = time.Now()
-	statsMutex.Unlock()
-
-	return data, nil
-}
-
-func getStatsSQLite(data *StatsData, storagePath string) (*StatsData, error) {
-	if storagePath != "" {
-		if diskInfo, err := GetDiskUsage(storagePath); err == nil {
-			data.Disk = diskInfo
-		}
+		wg.Wait()
+		return data
 	}
 
-	db.DB.QueryRow("SELECT COUNT(*) FROM visits").Scan(&data.TotalVisits)
-	db.DB.QueryRow("SELECT COUNT(*) FROM downloads").Scan(&data.TotalDownloads)
-	db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads").Scan(&data.TotalRepoDownloads)
+	data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
+	data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
+	data.TotalRepoDownloads = scanCount("total_repo_downloads", "SELECT COUNT(*) FROM repo_downloads")
 
-	db.DB.QueryRow("SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')").Scan(&data.Last30Visits)
-	db.DB.QueryRow("SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')").Scan(&data.Last30Downloads)
-	db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads WHERE created_at > datetime('now', '-30 days')").Scan(&data.Last30RepoDownloads)
+	data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')")
+	data.Last30Downloads = scanCount("last_30_downloads", "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')")
+	data.Last30RepoDownloads = scanCount("last_30_repo_downloads", "SELECT COUNT(*) FROM repo_downloads WHERE created_at > datetime('now', '-30 days')")
 
 	computeTotalDaysSQLite(data)
 	queryTopDownloads(data)
@@ -504,22 +588,59 @@ func getStatsSQLite(data *StatsData, storagePath string) (*StatsData, error) {
 	queryGeoDistribution(data)
 	queryDailyStatsSQLite(data)
 
-	statsMutex.Lock()
-	statsCache = data
-	statsCacheTime = time.Now()
-	statsMutex.Unlock()
+	return data
+}
 
-	return data, nil
+func saveSnapshot(data *StatsData) error {
+	if db.DB == nil {
+		return nil
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("序列化快照失败: %w", err)
+	}
+	var query string
+	if db.IsMySQL() {
+		query = "INSERT INTO stats_snapshot (id, data, updated_at) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = NOW()"
+	} else {
+		query = "INSERT INTO stats_snapshot (id, data, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"
+	}
+	if _, err := db.DB.Exec(query, string(b)); err != nil {
+		return fmt.Errorf("保存快照失败: %w", err)
+	}
+	return nil
+}
+
+func RefreshSnapshot() error {
+	refreshInFlight.Lock()
+	defer refreshInFlight.Unlock()
+
+	data := computeStatsData()
+	if err := saveSnapshot(data); err != nil {
+		return err
+	}
+
+	snapshotMu.Lock()
+	lastSnapshot = data
+	lastSnapshotTime = time.Now()
+	snapshotMu.Unlock()
+
+	return nil
 }
 
 func computeTotalDaysMySQL(data *StatsData) {
 	var minDate string
 	if err := db.DB.QueryRow("SELECT MIN(DATE(created_at)) FROM visits").Scan(&minDate); err != nil || minDate == "" {
+		if err != nil {
+			log.Printf("[Stats] min_visit_date 查询失败: %v", err)
+		}
 		var startTimeStr string
 		if err := db.DB.QueryRow("SELECT value FROM system_info WHERE `key` = 'start_time'").Scan(&startTimeStr); err == nil {
 			if t, err := time.Parse("2006-01-02 15:04:05", startTimeStr); err == nil {
 				data.TotalDays = int64(time.Since(t).Hours()/24) + 1
 			}
+		} else {
+			log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
 		}
 		return
 	}
@@ -531,11 +652,16 @@ func computeTotalDaysMySQL(data *StatsData) {
 func computeTotalDaysSQLite(data *StatsData) {
 	var minDate string
 	if err := db.DB.QueryRow("SELECT date(MIN(created_at)) FROM visits").Scan(&minDate); err != nil || minDate == "" {
+		if err != nil {
+			log.Printf("[Stats] min_visit_date 查询失败: %v", err)
+		}
 		var startTimeStr string
 		if err := db.DB.QueryRow("SELECT value FROM system_info WHERE key = 'start_time'").Scan(&startTimeStr); err == nil {
 			if t, err := time.Parse("2006-01-02 15:04:05", startTimeStr); err == nil {
 				data.TotalDays = int64(time.Since(t).Hours()/24) + 1
 			}
+		} else {
+			log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
 		}
 		return
 	}

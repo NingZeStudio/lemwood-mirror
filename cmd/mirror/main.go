@@ -296,6 +296,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("无效的 cron 表达式 %q: %v", cfg.CheckCron, err)
 	}
+
+	// 预热 + 定时刷新统计快照，避免 /api/stats 每次跑聚合查询
+	go func() {
+		if err := stats.RefreshSnapshot(); err != nil {
+			log.Printf("[Stats] 启动预热快照失败: %v", err)
+		}
+	}()
+	if _, err := c.AddFunc("@every 10m", func() {
+		if err := stats.RefreshSnapshot(); err != nil {
+			log.Printf("[Stats] 定时刷新快照失败: %v", err)
+		}
+	}); err != nil {
+		log.Fatalf("无效的统计快照 cron 表达式: %v", err)
+	}
+
 	if cfg.SelfUpdateEnabled && cfg.SelfUpdateCheckCron != "" {
 		_, err = c.AddFunc(cfg.SelfUpdateCheckCron, func() {
 			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {

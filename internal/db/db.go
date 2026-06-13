@@ -284,6 +284,11 @@ func createTables() error {
                 value TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			`CREATE TABLE IF NOT EXISTS stats_snapshot (
+                id INT PRIMARY KEY,
+                data LONGTEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE INDEX idx_visits_created_at ON visits(created_at)`,
 			`CREATE INDEX idx_visits_country ON visits(country)`,
 			`CREATE INDEX idx_downloads_created_at ON downloads(created_at)`,
@@ -347,6 +352,11 @@ func createTables() error {
                 key TEXT PRIMARY KEY,
                 value TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`,
+			`CREATE TABLE IF NOT EXISTS stats_snapshot (
+                id INTEGER PRIMARY KEY,
+                data TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
 			`CREATE INDEX IF NOT EXISTS idx_visits_created_at ON visits(created_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_visits_country ON visits(country)`,

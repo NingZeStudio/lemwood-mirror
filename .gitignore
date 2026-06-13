@@ -1,6 +1,6 @@
 # Binaries
 *.exe
-mirror
+/mirror
 
 # Downloaded files
 download/
