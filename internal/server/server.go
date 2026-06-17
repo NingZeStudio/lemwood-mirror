@@ -1102,34 +1102,46 @@ func (s *State) Routes(mux *http.ServeMux) {
 		}
 	})
 
-	// API 端点
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/status/", s.handleLauncherStatus)
-	mux.HandleFunc("/api/files", s.handleFiles)
-	mux.HandleFunc("/api/latest", s.handleLatestAll)
-	mux.HandleFunc("/api/latest/", s.handleLatestLauncher)
-	mux.HandleFunc("/api/stats", s.handleStats)
-	mux.HandleFunc("/api/auth/2fa/status", s.handle2FAStatus)
-	mux.HandleFunc("/api/captcha/config", s.handleCaptchaConfig)
-	mux.HandleFunc("/api/download/prepare", s.handleDownloadPrepare)
-	mux.HandleFunc("/api/download/landing", s.handleDownloadLanding)
-	mux.HandleFunc("/api/download/verify", s.handleDownloadVerify)
+	// ============================================================
+	// 公共查询 API 端点 (/api/v1/)
+	// ============================================================
+	mux.HandleFunc("/api/v1/launchers", s.handleStatus)
+	mux.HandleFunc("/api/v1/launchers/", s.handleLauncherStatus)
+	mux.HandleFunc("/api/v1/latest", s.handleLatestAll)
+	mux.HandleFunc("/api/v1/latest/", s.handleLatestLauncher)
+	mux.HandleFunc("/api/v1/stats", s.handleStats)
+	mux.HandleFunc("/api/v1/files", s.handleFiles)
+	mux.HandleFunc("/api/v1/captcha/config", s.handleCaptchaConfig)
+	mux.HandleFunc("/api/v1/auth/2fa/status", s.handle2FAStatus)
 
-	// Admin API
-	mux.Handle("/api/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))
-	mux.Handle("/api/admin/config", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminConfig))))
-	mux.Handle("/api/admin/blacklist", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminBlacklist))))
-	mux.Handle("/api/admin/files", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFiles))))
-	mux.Handle("/api/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
-	mux.Handle("/api/admin/self-update/status", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateStatus))))
-	mux.Handle("/api/admin/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateCheck))))
-	mux.Handle("/api/admin/self-update/apply", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateApply))))
-	mux.Handle("/api/admin/self-update/restart", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateRestart))))
+	// 下载 API 端点 (/api/v1/downloads/)
+	mux.HandleFunc("/api/v1/downloads/prepare", s.handleDownloadPrepare)
+	mux.HandleFunc("/api/v1/downloads/landing", s.handleDownloadLanding)
+	mux.HandleFunc("/api/v1/downloads/verify", s.handleDownloadVerify)
 
-	// Admin-protected scan endpoints
-	mux.Handle("/api/scan", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanAll))))
-	mux.Handle("/api/scan/launcher", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanLauncher))))
-	mux.Handle("/api/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleSelfUpdateCheckEndpoint))))
+	// ============================================================
+	// 管理后台 API 端点 (/api/v1/admin/)
+	// ============================================================
+
+	// 认证
+	mux.Handle("/api/v1/auth/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))
+
+	// 配置 & 黑名单 & 文件管理
+	mux.Handle("/api/v1/admin/config", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminConfig))))
+	mux.Handle("/api/v1/admin/blacklist", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminBlacklist))))
+	mux.Handle("/api/v1/admin/files", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFiles))))
+	mux.Handle("/api/v1/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
+
+	// 自更新
+	mux.Handle("/api/v1/admin/self-update/status", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateStatus))))
+	mux.Handle("/api/v1/admin/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateCheck))))
+	mux.Handle("/api/v1/admin/self-update/apply", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateApply))))
+	mux.Handle("/api/v1/admin/self-update/restart", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateRestart))))
+
+	// 扫描
+	mux.Handle("/api/v1/admin/scans", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanAll))))
+	mux.Handle("/api/v1/admin/scans/launcher", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanLauncher))))
+	mux.Handle("/api/v1/admin/self-update", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleSelfUpdateCheckEndpoint))))
 
 	// Admin UI
 	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1519,7 +1531,7 @@ func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
-	launcher := strings.TrimPrefix(r.URL.Path, "/api/status/")
+	launcher := strings.TrimPrefix(r.URL.Path, "/api/v1/launchers/")
 	s.mu.RLock()
 	versions, ok := s.index[launcher]
 	versionsCopy := make(map[string]string)
@@ -1604,7 +1616,7 @@ func (s *State) handleLatestAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *State) handleLatestLauncher(w http.ResponseWriter, r *http.Request) {
-	launcher := strings.TrimPrefix(r.URL.Path, "/api/latest/")
+	launcher := strings.TrimPrefix(r.URL.Path, "/api/v1/latest/")
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if val, ok := s.latest[launcher]; ok {
@@ -1715,7 +1727,7 @@ func (s *State) issueDownloadToken(filePath, returnURL, source, flow string) (do
 	return downloadTokenResponse{
 		DownloadToken: token,
 		DownloadURL:   buildDownloadURL(token, filePath),
-		LandingURL:    fmt.Sprintf("/api/download/landing?token=%s", url.QueryEscape(token)),
+		LandingURL:    fmt.Sprintf("/api/v1/downloads/landing?token=%s", url.QueryEscape(token)),
 	}, nil
 }
 
@@ -2087,7 +2099,7 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
         function verifyCaptcha(lotNumber, captchaOutput, passToken, genTime) {
             document.getElementById('loading').style.display = 'flex';
             
-            fetch('/api/download/verify', {
+            fetch('/api/v1/downloads/verify', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

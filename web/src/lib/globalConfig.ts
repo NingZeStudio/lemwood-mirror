@@ -31,7 +31,7 @@ export const globalConfig = {
   },
 
   api: {
-    baseUrl: import.meta.env.VITE_API_BASE_URL || 'https://beta.miawa.cn/api',
+    baseUrl: import.meta.env.VITE_API_BASE_URL || 'https://beta.miawa.cn/api/v1',
     endpoints: {
       status: '/status',
       latest: '/latest',

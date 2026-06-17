@@ -2,7 +2,7 @@ import axios from 'axios'
 import { message } from 'antd'
 
 const api = axios.create({
-  baseURL: 'https://mirror.lemwood.icu/api',
+  baseURL: 'https://beta.miawa.cn/api/v1',
   timeout: 30000,
 })
 

@@ -1,26 +1,30 @@
 # 柠枺镜像 API 文档
 
 > 本文档覆盖所有公共查询接口、下载接口和扫描触发接口。
-> 后台管理接口（`/api/admin/*`、`/api/login`）不在本文档范围内。
+> 后台管理接口（`/api/v1/admin/*`、`/api/v1/auth/login`）不在本文档范围内。
 
 ## 1. 基础约定
 
-### 1.1 Base URL
+### 1.1 API 版本
 
-- 站内调用使用相对路径：`/api/...`
-- 外部调用拼接站点域名，例如：`https://mirror.example.com/api`
+所有 API 端点均以 `/api/v1/` 为前缀，如需升级到新版本可并行启用 `/api/v2/` 而不影响现有调用。
 
-### 1.2 内容类型
+### 1.2 Base URL
+
+- 站内调用使用相对路径：`/api/v1/...`
+- 外部调用拼接站点域名，例如：`https://beta.miawa.cn/api/v1`
+
+### 1.3 内容类型
 
 | 接口 | 返回类型 |
 |------|----------|
-| `GET /api/status`、`/api/stats` 等查询接口 | `application/json` |
-| `GET /api/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本） |
+| `GET /api/v1/launchers`、`/api/v1/stats` 等查询接口 | `application/json` |
+| `GET /api/v1/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本） |
 | `GET /download/{token}/{file_path}` | `application/octet-stream`（文件流） |
 | `GET /repo/{launcher}.git/...` | Git 仓库静态文件（供 `git clone` / `git fetch` 使用） |
-| `POST /api/scan`、`/api/scan/launcher` | `text/plain` 或 `application/json` |
+| `POST /api/v1/admin/scans`、`/api/v1/admin/scans/launcher` | `text/plain` 或 `application/json` |
 
-### 1.3 CORS
+### 1.4 CORS
 
 所有接口均返回以下 CORS 响应头：
 
@@ -32,7 +36,7 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 
 `OPTIONS` 预检请求直接返回 `200 OK`，无需额外配置。
 
-### 1.4 常见状态码
+### 1.5 常见状态码
 
 | 状态码 | 含义 |
 |--------|------|
@@ -44,19 +48,19 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 | `404 Not Found` | 启动器不存在、文件不存在、或路径无效 |
 | `405 Method Not Allowed` | 请求方法不正确（如用 GET 访问扫描接口） |
 | `500 Internal Server Error` | 服务端执行失败 |
-| `501 Not Implemented` | 接口尚未实现（`/api/files`） |
+| `501 Not Implemented` | 接口尚未实现（`/api/v1/files`） |
 
-### 1.5 下载令牌
+### 1.6 下载令牌
 
 - 令牌为 64 字符十六进制随机字符串（32 字节），不包含任何用户信息。
 - 默认有效期 **5 分钟**，超时自动失效。
 - **两种操作模式：**
-  - **`Peek`**：查看令牌对应的下载信息，不消耗令牌。`/api/download/landing` 使用此模式。
+  - **`Peek`**：查看令牌对应的下载信息，不消耗令牌。`/api/v1/downloads/landing` 使用此模式。
   - **`Validate`**：验证令牌并立即消费（删除）。`/download/{token}/...` 实际下载时使用此模式，令牌一次性有效。
 - 令牌一旦被 `Validate` 消费，后续的 `Peek` 或再次 `Validate` 都会失败。
 - 后台协程每 1 分钟清理一次过期令牌。
 
-### 1.6 流量限制
+### 1.7 流量限制
 
 - 配置项 `traffic_limit_gb` 控制单 IP 每日下载流量上限。
 - `0` 表示**完全关闭**流量限制。
@@ -68,15 +72,15 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - 实际传输完成后，精确字节数会被写入数据库；若对应类型的当日累计超限，IP 会被自动加入本地黑名单。
 - 触发流量封禁后，所有该 IP 的后续请求均返回 `403 Forbidden`。
 
-### 1.7 Git 仓库镜像
+### 1.8 Git 仓库镜像
 
 - 当 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会同步 Git 镜像到项目根目录 `repo/{launcher}.git`。
-- 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://mirror.example.com/repo/fcl.git`。
+- 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://beta.miawa.cn/repo/fcl.git`。
 - `/repo/...` 仅支持只读访问，供 `git clone` / `git fetch` 使用。
 - `/repo/...` 走**独立的 repo 流量计量与 repo 下载统计**，不与普通 `/download/...` 混算。
 - `/repo/...` 不走下载验证码与下载令牌。
 
-### 1.8 内嵌前端资源
+### 1.9 内嵌前端资源
 
 - 用户前端和后台前端会被构建进二进制。
 - 服务启动时会自动释放 `web/dist` 和 `web/admin` 到项目目录。
@@ -89,7 +93,7 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 ### 2.1 获取所有启动器状态
 
 ```
-GET /api/status
+GET /api/v1/launchers
 ```
 
 返回所有启动器的全部版本列表，每个启动器按版本从新到旧排序。
@@ -105,11 +109,11 @@ GET /api/status
       "name": "1.3.0.7",
       "published_at": "2025-01-01T00:00:00Z",
       "is_latest": true,
-      "clone_url": "https://mirror.example.com/repo/fcl.git",
+      "clone_url": "https://beta.miawa.cn/repo/fcl.git",
       "assets": [
         {
           "name": "FCL-release-1.3.0.7-all.apk",
-          "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+          "url": "https://beta.miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
           "size": 12345678
         }
       ]
@@ -139,7 +143,7 @@ GET /api/status
 ### 2.2 获取指定启动器状态
 
 ```
-GET /api/status/{launcher}
+GET /api/v1/launchers/{launcher}
 ```
 
 **路径参数：**
@@ -163,7 +167,7 @@ GET /api/status/{launcher}
     "assets": [
       {
         "name": "FCL-release-1.3.0.7-all.apk",
-        "url": "https://mirror.example.com/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+        "url": "https://beta.miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
         "size": 12345678
       }
     ]
@@ -178,7 +182,7 @@ GET /api/status/{launcher}
 ### 2.3 获取所有启动器最新版本
 
 ```
-GET /api/latest
+GET /api/v1/latest
 ```
 
 返回每个启动器的最新版本号。**结果同时以 JSON 响应体和自定义响应头两种形式返回**，方便不同场景读取。
@@ -203,7 +207,7 @@ GET /api/latest
 ### 2.4 获取指定启动器最新版本
 
 ```
-GET /api/latest/{launcher}
+GET /api/v1/latest/{launcher}
 ```
 
 **路径参数：**
@@ -229,7 +233,7 @@ GET /api/latest/{launcher}
 ### 2.5 获取站点统计信息
 
 ```
-GET /api/stats
+GET /api/v1/stats
 ```
 
 返回访问量、下载量、Repo 拉取量、磁盘占用、热门资源和趋势数据。
@@ -315,7 +319,7 @@ GET /api/stats
 ### 2.6 获取验证码配置
 
 ```
-GET /api/captcha/config
+GET /api/v1/captcha/config
 ```
 
 前端发起浏览器下载前可先读取验证码配置，判断是否需要走验证流程。
@@ -339,7 +343,7 @@ GET /api/captcha/config
 ### 2.7 获取两步验证状态
 
 ```
-GET /api/auth/2fa/status
+GET /api/v1/auth/2fa/status
 ```
 
 返回当前是否启用管理员两步验证（TOTP）。
@@ -361,7 +365,7 @@ GET /api/auth/2fa/status
 ### 2.8 触发全量扫描
 
 ```
-POST /api/scan
+POST /api/v1/admin/scans
 ```
 
 触发对所有已配置启动器的全量扫描。扫描为**异步**执行，接口立即返回。
@@ -378,7 +382,7 @@ Scan triggered
 ### 2.9 触发单个启动器扫描
 
 ```
-POST /api/scan/launcher
+POST /api/v1/admin/scans/launcher
 ```
 
 触发对指定启动器的扫描。扫描为**异步**执行。
@@ -420,7 +424,7 @@ POST /api/scan/launcher
 ### 3.1 准备下载（无验证码）
 
 ```
-POST /api/download/prepare
+POST /api/v1/downloads/prepare
 ```
 
 在验证码**关闭**时，前端调用此接口生成下载令牌和下载地址。
@@ -449,7 +453,7 @@ POST /api/download/prepare
 {
   "download_token": "a1b2c3d4e5f6...（64字符十六进制字符串）",
   "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
-  "landing_url": "/api/download/landing?token=a1b2c3..."
+  "landing_url": "/api/v1/downloads/landing?token=a1b2c3..."
 }
 ```
 
@@ -462,7 +466,7 @@ POST /api/download/prepare
 ### 3.2 获取下载引导信息
 
 ```
-GET /api/download/landing?token={token}
+GET /api/v1/downloads/landing?token={token}
 ```
 
 **Query 参数：**
@@ -520,7 +524,7 @@ GET /api/download/landing?token={token}
 ### 3.3 验证后生成下载令牌
 
 ```
-POST /api/download/verify
+POST /api/v1/downloads/verify
 ```
 
 在验证码**开启**时，前端完成极验验证后调用此接口获取下载令牌。
@@ -557,7 +561,7 @@ POST /api/download/verify
 {
   "download_token": "a1b2c3d4e5f6...",
   "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
-  "landing_url": "/api/download/landing?token=a1b2c3..."
+  "landing_url": "/api/v1/downloads/landing?token=a1b2c3..."
 }
 ```
 
@@ -664,7 +668,7 @@ GET /download/{token}/{file_path}
 ```
 前端                      服务端
  │                          │
- │  POST /api/download/prepare
+ │  POST /api/v1/downloads/prepare
  │  { file_path, ... }      │
  │ ─────────────────────────>
  │                          │  生成 token（Flow: "prepare"）
@@ -673,7 +677,7 @@ GET /download/{token}/{file_path}
  │    landing_url }         │
  │ <─────────────────────────
  │                          │
- │  GET /api/download/landing?token=...
+ │  GET /api/v1/downloads/landing?token=...
  │ ─────────────────────────>
  │                          │  Peek token（不消费）
  │  { download_url,         │
@@ -694,7 +698,7 @@ GET /download/{token}/{file_path}
 ```
 前端                      服务端                      极验
  │                          │                          │
- │  GET /api/captcha/config
+ │  GET /api/v1/captcha/config
  │ ─────────────────────────>
  │  { enabled, app_id }     │
  │ <─────────────────────────
@@ -703,7 +707,7 @@ GET /download/{token}/{file_path}
  │ ────────────────────────────────────────────────────>
  │ <────────── lot_number, captcha_output, pass_token, gen_time
  │                          │
- │  POST /api/download/verify
+ │  POST /api/v1/downloads/verify
  │  { lot_number, ... }     │
  │ ─────────────────────────>
  │                          │  ── POST /api/v2/validate
@@ -715,7 +719,7 @@ GET /download/{token}/{file_path}
  │    landing_url }         │
  │ <─────────────────────────
  │                          │
- │  GET /api/download/landing?token=...
+ │  GET /api/v1/downloads/landing?token=...
  │ ─────────────────────────>
  │                          │  Peek token（不消费）
  │  { download_url, ... }   │
@@ -763,8 +767,8 @@ GET /download/{token}/{file_path}
 
 ### 6.2 手动扫描
 
-- `POST /api/scan`：全量扫描所有启动器
-- `POST /api/scan/launcher`：扫描指定启动器
+- `POST /api/v1/admin/scans`：全量扫描所有启动器
+- `POST /api/v1/admin/scans/launcher`：扫描指定启动器
 
 两者均为异步执行，立即返回 `202 Accepted`。同一时间只允许一个全量扫描运行（互斥锁保护）。手动扫描同样遵循 launcher 的 `mode` 配置。
 
@@ -780,7 +784,7 @@ GET /download/{token}/{file_path}
 
 ## 7. 注意事项
 
-- **`GET /api/latest/{launcher}` 返回纯文本**，不是 JSON。解析时不要调用 `JSON.parse()`，直接读取响应文本。
+- **`GET /api/v1/latest/{launcher}` 返回纯文本**，不是 JSON。解析时不要调用 `JSON.parse()`，直接读取响应文本。
 - **`/download/...` 接口对 token 的两种操作不同：**
   - `landing` 用 `Peek`（不消费，可多次调用）
   - 实际下载用 `Validate`（消费，一次性，用完即删）
@@ -789,5 +793,5 @@ GET /download/{token}/{file_path}
 - **`download_url_base` 为空时**，服务端会自动尝试使用 `server_address`，若也为空则通过 `ifconfig.me/ip` 获取公网 IP 作为下载地址 host。
 - **`max_versions = 0` 等价于 `max_versions = 3`**（由 `NormalizeMaxVersions` 函数统一处理，≤0 均修正为 3）。
 - **`traffic_limit_gb` 负值会自动修正为 5** GB，`0` 表示完全禁用。
-- **扫描接口无认证保护**，建议在生产环境通过反向代理添加访问控制。
+- **扫描接口需要 Admin 认证**，调用前需先通过 `/api/v1/auth/login` 登录获取 token。
 - 站内 API 速查页（`/api`）用于快速浏览与复制示例，**正式接入请以本文档为准**。

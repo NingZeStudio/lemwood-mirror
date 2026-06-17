@@ -162,7 +162,7 @@ func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -195,7 +195,7 @@ func TestDownloadLandingReturnsContext(t *testing.T) {
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	prepareReq := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareRec := httptest.NewRecorder()
 	handler.ServeHTTP(prepareRec, prepareReq)
@@ -237,7 +237,7 @@ func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
 	state, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	prepareReq := httptest.NewRequest(http.MethodPost, "/api/download/prepare", body)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareRec := httptest.NewRecorder()
 	handler.ServeHTTP(prepareRec, prepareReq)
