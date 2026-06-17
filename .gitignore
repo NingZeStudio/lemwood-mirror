@@ -2,6 +2,10 @@
 *.exe
 /mirror
 
+# Local config (contains secrets, never commit)
+config.yaml
+config.json
+
 # Downloaded files
 download/
 repo/

@@ -1,6 +1,9 @@
 package selfupdate
 
-import "testing"
+import (
+	"lemwood_mirror/internal/version"
+	"testing"
+)
 
 func TestNormalizeChannel(t *testing.T) {
 	tests := []struct {
@@ -42,33 +45,33 @@ func TestIsStable(t *testing.T) {
 	}
 
 	for _, tt := range cases {
-		if got := isStable(tt.version); got != tt.stable {
-			t.Fatalf("isStable(%q) = %v, want %v", tt.version, got, tt.stable)
+		if got := version.IsStable(tt.version); got != tt.stable {
+			t.Fatalf("version.IsStable(%q) = %v, want %v", tt.version, got, tt.stable)
 		}
 	}
 }
 
 func TestCompareVersions(t *testing.T) {
-	if got := compareVersions("v1.2.4", "v1.2.3"); got <= 0 {
+	if got := version.Compare("v1.2.4", "v1.2.3"); got <= 0 {
 		t.Fatalf("expected newer version comparison > 0, got %d", got)
 	}
-	if got := compareVersions("v1.2.3", "v1.2.3"); got != 0 {
+	if got := version.Compare("v1.2.3", "v1.2.3"); got != 0 {
 		t.Fatalf("expected equal version comparison = 0, got %d", got)
 	}
-	if got := compareVersions("v1.2.3-beta.1", "v1.2.3-beta.2"); got >= 0 {
+	if got := version.Compare("v1.2.3-beta.1", "v1.2.3-beta.2"); got >= 0 {
 		t.Fatalf("expected beta.1 < beta.2, got %d", got)
 	}
 	// SemVer: pre-release is lower than the corresponding release
-	if got := compareVersions("v1.2.3", "v1.2.3-beta.1"); got <= 0 {
+	if got := version.Compare("v1.2.3", "v1.2.3-beta.1"); got <= 0 {
 		t.Fatalf("expected v1.2.3 > v1.2.3-beta.1 (pre-release is lower), got %d", got)
 	}
-	if got := compareVersions("v1.2.3-beta.1", "v1.2.3"); got >= 0 {
+	if got := version.Compare("v1.2.3-beta.1", "v1.2.3"); got >= 0 {
 		t.Fatalf("expected v1.2.3-beta.1 < v1.2.3 (pre-release is lower), got %d", got)
 	}
-	if got := compareVersions("v1.2.3-alpha.1", "v1.2.3-beta.1"); got >= 0 {
+	if got := version.Compare("v1.2.3-alpha.1", "v1.2.3-beta.1"); got >= 0 {
 		t.Fatalf("expected alpha < beta (lexicographic), got %d", got)
 	}
-	if got := compareVersions("v1.2.4", "v1.2.3-rc1"); got <= 0 {
+	if got := version.Compare("v1.2.4", "v1.2.3-rc1"); got <= 0 {
 		t.Fatalf("expected v1.2.4 > v1.2.3-rc1, got %d", got)
 	}
 }
@@ -104,13 +107,13 @@ func TestPlatformPatterns(t *testing.T) {
 }
 
 func TestSplitPreRelease(t *testing.T) {
-	core, pre := splitPreRelease("1.2.3-beta.1")
+	core, pre := version.SplitPreRelease("1.2.3-beta.1")
 	if core != "1.2.3" || pre != "beta.1" {
-		t.Fatalf("splitPreRelease(1.2.3-beta.1) = %q, %q; want %q, %q", core, pre, "1.2.3", "beta.1")
+		t.Fatalf("version.SplitPreRelease(1.2.3-beta.1) = %q, %q; want %q, %q", core, pre, "1.2.3", "beta.1")
 	}
-	core, pre = splitPreRelease("1.2.3")
+	core, pre = version.SplitPreRelease("1.2.3")
 	if core != "1.2.3" || pre != "" {
-		t.Fatalf("splitPreRelease(1.2.3) = %q, %q; want %q, %q", core, pre, "1.2.3", "")
+		t.Fatalf("version.SplitPreRelease(1.2.3) = %q, %q; want %q, %q", core, pre, "1.2.3", "")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -349,18 +350,34 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	// 使用 channel 跨 goroutine 安全地传递 srv，避免数据竞争
+	srvCh := make(chan *http.Server, 1)
 	go func() {
-		if err := server.StartHTTPWithScan(addr, s, scanner.ScanAll, scanner.ScanLauncher, func() {
+		srv, err := server.StartHTTPWithScan(addr, s, scanner.ScanAll, scanner.ScanLauncher, func() {
 			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {
 				log.Printf("手动自更新检查失败: %v", checkErr)
 			}
-		}, applySelfUpdate, doRestart); err != nil {
+		}, applySelfUpdate, doRestart)
+		if err != nil {
 			log.Printf("http 服务器出错: %v", err)
 		}
+		srvCh <- srv
 	}()
 
 	<-stop
 	log.Println("正在关闭服务...")
+	select {
+	case srv := <-srvCh:
+		if srv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				log.Printf("HTTP 服务关闭出错: %v", err)
+			}
+		}
+	default:
+		log.Println("HTTP 服务器尚未启动，跳过 Shutdown")
+	}
 	stats.CloseWritePool()
 	traffic.CloseTracker()
 	log.Println("服务已正常退出")

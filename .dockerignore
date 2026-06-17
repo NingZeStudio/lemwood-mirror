@@ -1,0 +1,9 @@
+node_modules
+.git
+download
+repo
+web/dist
+web/admin
+*.db
+*.db.bak
+banned_ips.txt

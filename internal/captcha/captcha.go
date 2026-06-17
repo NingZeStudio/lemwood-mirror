@@ -61,8 +61,6 @@ func (v *Validator) Verify(lotNumber, captchaOutput, passToken, genTime, userIP 
 
 	apiURL := fmt.Sprintf("%s?captcha_id=%s", validateAPI, v.captchaId)
 
-	fmt.Printf("[DEBUG] Geetest validate request - captcha_id: %s, lot_number: %s\n", v.captchaId, lotNumber)
-
 	resp, err := v.client.PostForm(apiURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call validate API: %w", err)
@@ -73,8 +71,6 @@ func (v *Validator) Verify(lotNumber, captchaOutput, passToken, genTime, userIP 
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
-	fmt.Printf("[DEBUG] Geetest validate response: %s\n", string(body))
 
 	var result ValidateResponse
 	if err := json.Unmarshal(body, &result); err != nil {

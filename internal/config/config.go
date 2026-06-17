@@ -238,7 +238,7 @@ func LoadConfig(projectRoot string) (*Config, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := normalizeConfig(cfg); err != nil {
+			if err := NormalizeConfig(cfg); err != nil {
 				return nil, err
 			}
 			if err := cfg.Save(projectRoot); err != nil {
@@ -263,13 +263,13 @@ func LoadConfig(projectRoot string) (*Config, error) {
 	if err := yaml.Unmarshal(b, cfg); err != nil {
 		return nil, fmt.Errorf("解析 config.yaml 失败: %w", err)
 	}
-	if err := normalizeConfig(cfg); err != nil {
+	if err := NormalizeConfig(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-func normalizeConfig(cfg *Config) error {
+func NormalizeConfig(cfg *Config) error {
 	if cfg.StoragePath == "" {
 		return errors.New("config.storage_path 不能为空")
 	}

@@ -129,8 +129,13 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 		}
 		// 为代理创建新的客户端，因为默认客户端可能是共享的
 		client = &http.Client{
-			Timeout:   d.httpClient.Timeout,
-			Transport: &http.Transport{Proxy: http.ProxyURL(proxy)},
+			Timeout: d.httpClient.Timeout,
+			Transport: &http.Transport{
+				Proxy:               http.ProxyURL(proxy),
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 5,
+				IdleConnTimeout:     90 * time.Second,
+			},
 		}
 	}
 
@@ -165,52 +170,44 @@ func (d *Downloader) DownloadLatest(ctx context.Context, launcher string, destBa
 
 // 缓存公网 IP，避免重复请求
 var (
-	publicIP     string
-	publicIPOnce sync.Once
-	publicIPMu   sync.RWMutex
+	publicIP   string
+	publicIPMu sync.RWMutex
 )
 
 func getPublicIP() (string, error) {
-	// 先检查缓存
 	publicIPMu.RLock()
 	cachedIP := publicIP
 	publicIPMu.RUnlock()
-	
+
 	if cachedIP != "" {
 		return cachedIP, nil
 	}
-	
-	// 使用 sync.Once 确保只请求一次
-	var err error
-	publicIPOnce.Do(func() {
-		resp, reqErr := http.Get("http://ifconfig.me/ip")
-		if reqErr != nil {
-			err = reqErr
-			return
-		}
-		defer resp.Body.Close()
 
-		ipBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			err = readErr
-			return
-		}
+	publicIPMu.Lock()
+	defer publicIPMu.Unlock()
 
-		ipStr := string(ipBytes)
-		publicIPMu.Lock()
-		publicIP = ipStr
-		publicIPMu.Unlock()
-	})
-	
+	if publicIP != "" {
+		return publicIP, nil
+	}
+
+	resp, err := http.Get("http://ifconfig.me/ip")
 	if err != nil {
 		return "", err
 	}
-	
-	publicIPMu.RLock()
-	result := publicIP
-	publicIPMu.RUnlock()
-	
-	return result, nil
+	defer resp.Body.Close()
+
+	ipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	ipStr := strings.TrimSpace(string(ipBytes))
+	if ipStr == "" {
+		return "", errors.New("empty response from ifconfig.me")
+	}
+
+	publicIP = ipStr
+	return publicIP, nil
 }
 
 func (d *Downloader) downloadAsset(ctx context.Context, client *http.Client, asset *github.ReleaseAsset, dir, assetProxyURL string, xgetEnabled bool, xgetDomain string) error {

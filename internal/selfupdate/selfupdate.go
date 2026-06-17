@@ -20,6 +20,7 @@ import (
 	"time"
 
 	gh "lemwood_mirror/internal/github"
+	"lemwood_mirror/internal/version"
 )
 
 type Channel string
@@ -96,16 +97,19 @@ func buildHTTPClient(proxyURL, assetProxyURL string) *http.Client {
 	if proxy == "" {
 		proxy = proxyURL
 	}
-	if proxy == "" {
-		return http.DefaultClient
+	transport := &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	if proxy != "" {
+		transport.Proxy = func(_ *http.Request) (*url.URL, error) {
+			return url.Parse(proxy)
+		}
 	}
 	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: func(_ *http.Request) (*url.URL, error) {
-				return url.Parse(proxy)
-			},
-		},
-		Timeout: 10 * time.Minute,
+		Transport: transport,
+		Timeout:   10 * time.Minute,
 	}
 }
 
@@ -179,12 +183,12 @@ func (m *Manager) Check(ctx context.Context) (Status, error) {
 		}
 		available = append(available, TagInfo{
 			Name:   name,
-			Stable: isStable(name),
+			Stable: version.IsStable(name),
 		})
 	}
 
 	sort.SliceStable(available, func(i, j int) bool {
-		return compareVersions(available[i].Name, available[j].Name) > 0
+		return version.Compare(available[i].Name, available[j].Name) > 0
 	})
 
 	latest := pickLatest(available, normalizeChannel(cfg.Channel))
@@ -194,8 +198,8 @@ func (m *Manager) Check(ctx context.Context) (Status, error) {
 		Channel:           normalizeChannel(cfg.Channel),
 		CurrentVersion:    m.currentVersion,
 		LatestVersion:     latest,
-		HasUpdate:         latest != "" && compareVersions(latest, m.currentVersion) > 0,
-		CanApply:          normalizeChannel(cfg.Channel) != string(ChannelNotify) && latest != "" && compareVersions(latest, m.currentVersion) > 0,
+		HasUpdate:         latest != "" && version.Compare(latest, m.currentVersion) > 0,
+		CanApply:          normalizeChannel(cfg.Channel) != string(ChannelNotify) && latest != "" && version.Compare(latest, m.currentVersion) > 0,
 		PendingRestart:    prev.PendingRestart,
 		LastCheckedAt:     time.Now(),
 		LastAppliedAt:     prev.LastAppliedAt,
@@ -351,102 +355,6 @@ func normalizeVersion(version string) string {
 		return "dev"
 	}
 	return version
-}
-
-func isStable(v string) bool {
-	vLower := strings.ToLower(v)
-	keywords := []string{"alpha", "beta", "rc", "snapshot", "pre", "dev", "preview"}
-	for _, k := range keywords {
-		if strings.Contains(vLower, k) {
-			return false
-		}
-	}
-	return true
-}
-
-func compareVersions(v1, v2 string) int {
-	if v1 == v2 {
-		return 0
-	}
-
-	v1Core, v1Pre := splitPreRelease(strings.TrimPrefix(v1, "v"))
-	v2Core, v2Pre := splitPreRelease(strings.TrimPrefix(v2, "v"))
-
-	parts1 := strings.Split(v1Core, ".")
-	parts2 := strings.Split(v2Core, ".")
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var p1, p2 string
-		if i < len(parts1) {
-			p1 = parts1[i]
-		}
-		if i < len(parts2) {
-			p2 = parts2[i]
-		}
-
-		if p1 == p2 {
-			continue
-		}
-
-		n1, err1 := parseFirstInt(p1)
-		n2, err2 := parseFirstInt(p2)
-
-		if err1 == nil && err2 == nil {
-			if n1 > n2 {
-				return 1
-			}
-			if n1 < n2 {
-				return -1
-			}
-			if p1 > p2 {
-				return 1
-			}
-			if p1 < p2 {
-				return -1
-			}
-		} else {
-			if p1 > p2 {
-				return 1
-			}
-			if p1 < p2 {
-				return -1
-			}
-		}
-	}
-
-	// SemVer: a version with a pre-release suffix is lower than the same version without one.
-	if v1Pre == "" && v2Pre != "" {
-		return 1
-	}
-	if v1Pre != "" && v2Pre == "" {
-		return -1
-	}
-	if v1Pre != v2Pre {
-		if v1Pre > v2Pre {
-			return 1
-		}
-		return -1
-	}
-	return 0
-}
-
-// splitPreRelease splits a version string like "1.2.3-beta.1" into core "1.2.3" and pre-release "beta.1".
-func splitPreRelease(v string) (string, string) {
-	if idx := strings.Index(v, "-"); idx >= 0 {
-		return v[:idx], v[idx+1:]
-	}
-	return v, ""
-}
-
-func parseFirstInt(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
 }
 
 func ReplaceTargetPath(binaryPath string) string {
@@ -642,6 +550,10 @@ func extractFromTarGz(tgzPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Zip Slip 防护：拒绝包含 ".." 的非规范化路径，拒绝非法路径
+		if strings.Contains(header.Name, "..") || !filepath.IsLocal(header.Name) {
+			continue
+		}
 		if header.Typeflag == tar.TypeReg {
 			name := filepath.Base(header.Name)
 			if !isExtractableBinary(name) {
@@ -674,6 +586,10 @@ func extractFromZip(zipPath string) (string, error) {
 
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
+			continue
+		}
+		// Zip Slip 防护：拒绝路径穿越条目
+		if strings.Contains(f.Name, "..") || !filepath.IsLocal(f.Name) {
 			continue
 		}
 		name := filepath.Base(f.Name)

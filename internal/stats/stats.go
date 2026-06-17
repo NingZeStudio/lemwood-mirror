@@ -567,7 +567,7 @@ func computeStatsData() *StatsData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			queryDailyStatsMySQL(data)
+			queryDailyStats(data)
 		}()
 
 		wg.Wait()
@@ -586,7 +586,7 @@ func computeStatsData() *StatsData {
 	queryTopDownloads(data)
 	queryTopRepoDownloads(data)
 	queryGeoDistribution(data)
-	queryDailyStatsSQLite(data)
+	queryDailyStats(data)
 
 	return data
 }
@@ -753,12 +753,7 @@ func dailyQueryFlavor() (visitQ, downloadQ, repoQ string) {
 	return
 }
 
-func queryDailyStatsMySQL(data *StatsData) {
-	visitQ, downloadQ, repoQ := dailyQueryFlavor()
-	fillDailyStats(data, visitQ, downloadQ, repoQ)
-}
-
-func queryDailyStatsSQLite(data *StatsData) {
+func queryDailyStats(data *StatsData) {
 	visitQ, downloadQ, repoQ := dailyQueryFlavor()
 	fillDailyStats(data, visitQ, downloadQ, repoQ)
 }

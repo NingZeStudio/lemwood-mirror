@@ -14,7 +14,7 @@ storage_path: "download"
 github_token: ""
 
 # 对外下载地址基准（为空时回退到 server_address）
-download_url_base: "https://beta.miawa.cn"
+download_url_base: ""
 
 # 单文件下载超时（分钟），Git 镜像同步也复用此超时
 download_timeout_minutes: 40
@@ -26,8 +26,8 @@ xget_domain: "https://xget.xi-xu.me"
 xget_enabled: true
 
 admin_enabled: true
-admin_user: "ningmo"
-admin_password: "$2a$14$RbIcnqGpbmYAKdLvO1XyH.hxxcdbITqTf4/bIJc8gWoPK3BRRe5Fi"
+admin_user: ""
+admin_password: ""
 admin_max_retries: 10
 admin_lock_duration: 120
 
@@ -35,8 +35,8 @@ two_factor_enabled: false
 two_factor_secret: ""
 
 captcha_enabled: false
-captcha_app_id: "9fab8370f958912499555f6ce0cd5c56"
-captcha_secret_key: "b74e2bb93f86d697a7930705ba8bf49b"
+captcha_app_id: ""
+captcha_secret_key: ""
 
 traffic_limit_gb: 0
 ban_record_file: "banned_ips.txt"

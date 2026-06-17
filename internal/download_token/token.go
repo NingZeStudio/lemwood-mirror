@@ -3,6 +3,7 @@ package download_token
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -22,21 +23,30 @@ type TokenEntry struct {
 type Manager struct {
 	tokens sync.Map
 	ttl    time.Duration
+	stop   chan struct{}
 }
 
 func NewManager() *Manager {
 	m := &Manager{
-		ttl: defaultTTL,
+		ttl:  defaultTTL,
+		stop: make(chan struct{}),
 	}
 	go m.cleanupExpired()
 	return m
 }
 
-func (m *Manager) Generate(entry TokenEntry) string {
-	token := generateToken()
+func (m *Manager) Close() {
+	close(m.stop)
+}
+
+func (m *Manager) Generate(entry TokenEntry) (string, error) {
+	token, err := generateToken()
+	if err != nil {
+		return "", err
+	}
 	entry.ExpiresAt = time.Now().Add(m.ttl)
 	m.tokens.Store(token, entry)
-	return token
+	return token, nil
 }
 
 func (m *Manager) Validate(token string) (TokenEntry, bool) {
@@ -53,6 +63,11 @@ func (m *Manager) Validate(token string) (TokenEntry, bool) {
 
 	m.tokens.Delete(token)
 	return entry, true
+}
+
+func (m *Manager) Consume(token string) bool {
+	_, loaded := m.tokens.LoadAndDelete(token)
+	return loaded
 }
 
 func (m *Manager) Peek(token string) (TokenEntry, bool) {
@@ -72,19 +87,27 @@ func (m *Manager) Peek(token string) (TokenEntry, bool) {
 
 func (m *Manager) cleanupExpired() {
 	ticker := time.NewTicker(1 * time.Minute)
-	for range ticker.C {
-		m.tokens.Range(func(key, value interface{}) bool {
-			entry := value.(TokenEntry)
-			if time.Now().After(entry.ExpiresAt) {
-				m.tokens.Delete(key)
-			}
-			return true
-		})
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.stop:
+			return
+		case <-ticker.C:
+			m.tokens.Range(func(key, value interface{}) bool {
+				entry := value.(TokenEntry)
+				if time.Now().After(entry.ExpiresAt) {
+					m.tokens.Delete(key)
+				}
+				return true
+			})
+		}
 	}
 }
 
-func generateToken() string {
+func generateToken() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }

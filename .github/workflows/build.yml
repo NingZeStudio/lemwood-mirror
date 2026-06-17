@@ -33,7 +33,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.24'
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -61,14 +61,18 @@ jobs:
       run: pnpm build
       working-directory: ./admin-app
 
+    - name: Test
+      run: go test ./... -count=1 -timeout 120s
+
     - name: Build binary
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
       run: |
         BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
         VERSION="${{ github.ref_name }}"
-        go build -ldflags "-X main.Version=${VERSION}" -o "$BINARY_NAME" ./cmd/mirror
+        go build -ldflags "-s -w -X main.Version=${VERSION}" -o "$BINARY_NAME" ./cmd/mirror
 
     - name: Package Artifact (Windows)
       if: matrix.archive == 'zip'

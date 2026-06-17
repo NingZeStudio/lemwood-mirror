@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"lemwood_mirror/internal/auth"
@@ -17,8 +18,8 @@ import (
 	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
+	"lemwood_mirror/internal/version"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,6 +53,11 @@ type State struct {
 	selfUpdate       *selfupdate.Manager
 	applySelfUpdate  func(ctx context.Context) error
 	restartProcess   func() error
+
+	// 扫描回调（在 Routes 中使用）
+	scanAllFunc       func()
+	scanLauncherFunc  func(launcherName string)
+	selfUpdateCheckFunc func()
 }
 
 func (s *State) cloneRepoURL(r *http.Request, launcher string) string {
@@ -175,7 +181,7 @@ func (s *State) TrimLauncherVersions(launcher string, keep int) error {
 	}
 
 	sort.Slice(versions, func(i, j int) bool {
-		return compareVersions(versions[i], versions[j]) > 0
+		return version.Compare(versions[i], versions[j]) > 0
 	})
 
 	var deleted []string
@@ -326,17 +332,7 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 获取 IP
-	ip := r.RemoteAddr
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ip = strings.Split(xff, ",")[0]
-	} else if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		ip = xri
-	}
-	if strings.Contains(ip, ":") {
-		if host, _, err := net.SplitHostPort(ip); err == nil {
-			ip = host
-		}
-	}
+	ip := netutil.ExtractClientIP(r)
 
 	// 检查锁定状态
 	s.loginAttemptsMu.Lock()
@@ -396,13 +392,20 @@ func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !auth.ValidateTOTP(req.OTPCode, s.Config.TwoFactorSecret) {
-			// 验证码错误也算作一次失败尝试
 			s.loginAttemptsMu.Lock()
 			s.loginAttempts[ip]++
 			attempts := s.loginAttempts[ip]
-			log.Printf("IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
-			s.loginAttemptsMu.Unlock()
-			http.Error(w, "验证码错误", http.StatusUnauthorized)
+			if attempts >= s.Config.AdminMaxRetries {
+				lockUntil := time.Now().Add(time.Duration(s.Config.AdminLockDuration) * time.Minute)
+				s.loginLocks[ip] = lockUntil
+				log.Printf("IP %s 2FA 验证失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
+				s.loginAttemptsMu.Unlock()
+				http.Error(w, fmt.Sprintf("登录失败次数过多，账号已锁定 %d 小时", s.Config.AdminLockDuration/60), http.StatusForbidden)
+			} else {
+				log.Printf("IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
+				s.loginAttemptsMu.Unlock()
+				http.Error(w, "验证码错误", http.StatusUnauthorized)
+			}
 			return
 		}
 	}
@@ -441,6 +444,7 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 		var newCfg config.Config
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
@@ -457,6 +461,11 @@ func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			newCfg.AdminPassword = hashed
+		}
+
+		if err := config.NormalizeConfig(&newCfg); err != nil {
+			http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
+			return
 		}
 
 		if err := newCfg.Save(s.ProjectRoot); err != nil {
@@ -628,7 +637,10 @@ func (s *State) handleAdminFiles(w http.ResponseWriter, r *http.Request) {
 
 		var result []map[string]interface{}
 		for _, e := range entries {
-			info, _ := e.Info()
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
 			result = append(result, map[string]interface{}{
 				"name":     e.Name(),
 				"is_dir":   e.IsDir(),
@@ -884,14 +896,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		// 根路径和 index.html
 		if path == "/" || path == "/index.html" {
 			indexPath := filepath.Join(staticDir, "index.html")
-			f, err := os.Open(indexPath)
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			defer f.Close()
-			d, _ := f.Stat()
-			http.ServeContent(w, r, "index.html", d.ModTime(), f)
+			http.ServeFile(w, r, indexPath)
 			return
 		}
 
@@ -977,7 +982,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 				return
 			}
 
-			tokenEntry, valid := s.downloadTokenMgr.Validate(token)
+			tokenEntry, valid := s.downloadTokenMgr.Peek(token)
 			if !valid {
 				if isBrowserRequest(r) {
 					s.serveVerifyPage(w, r, relPath)
@@ -1074,6 +1079,10 @@ func (s *State) Routes(mux *http.ServeMux) {
 			counter:        counter,
 		}
 
+		if s.Config.CaptchaEnabled && token != "" {
+			s.downloadTokenMgr.Consume(token)
+		}
+
 		http.ServeFile(countingWriter, r, cleanPath)
 
 		if banned, reason, trafficGB, err := traffic.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
@@ -1117,12 +1126,21 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.Handle("/api/admin/self-update/apply", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateApply))))
 	mux.Handle("/api/admin/self-update/restart", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateRestart))))
 
+	// Admin-protected scan endpoints
+	mux.Handle("/api/scan", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanAll))))
+	mux.Handle("/api/scan/launcher", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanLauncher))))
+	mux.Handle("/api/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleSelfUpdateCheckEndpoint))))
+
 	// Admin UI
 	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
 	})))
 	mux.Handle("/admin/", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		if containsDotDot(path) {
+			http.NotFound(w, r)
+			return
+		}
 		relPath := strings.TrimPrefix(path, "/admin/")
 		
 		if relPath == "" || relPath == "index.html" {
@@ -1131,8 +1149,17 @@ func (s *State) Routes(mux *http.ServeMux) {
 		}
 
 		fullPath := filepath.Join(adminStaticDir, relPath)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, fullPath)
+		cleanPath := filepath.Clean(fullPath)
+		// 路径安全验证：防止路径穿越
+		absBase, _ := filepath.Abs(adminStaticDir)
+		absPath, _ := filepath.Abs(cleanPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			http.NotFound(w, r)
+			return
+		}
+
+		if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, cleanPath)
 			return
 		}
 		
@@ -1210,10 +1237,21 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// CORS Headers
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// 安全响应头
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
+		// CORS Headers — 根据 Origin 动态设置，而非通配符 *
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			// API 端点允许跨域，静态资源同源访问无 Origin 头不受影响
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Expose-Headers", "X-Latest-Version, X-Latest-Versions")
 
 		if r.Method == http.MethodOptions {
@@ -1367,7 +1405,7 @@ func (s *State) pickLatest(versions map[string]string) string {
 	if len(latestFlagged) > 0 {
 		latest := latestFlagged[0]
 		for _, v := range latestFlagged[1:] {
-			if compareVersions(v, latest) > 0 {
+			if version.Compare(v, latest) > 0 {
 				latest = v
 			}
 		}
@@ -1378,7 +1416,7 @@ func (s *State) pickLatest(versions map[string]string) string {
 	var unstableVersions []string
 
 	for v := range versions {
-		if isStable(v) {
+		if version.IsStable(v) {
 			stableVersions = append(stableVersions, v)
 		} else {
 			unstableVersions = append(unstableVersions, v)
@@ -1388,7 +1426,7 @@ func (s *State) pickLatest(versions map[string]string) string {
 	if len(stableVersions) > 0 {
 		latest := stableVersions[0]
 		for _, v := range stableVersions[1:] {
-			if compareVersions(v, latest) > 0 {
+			if version.Compare(v, latest) > 0 {
 				latest = v
 			}
 		}
@@ -1398,7 +1436,7 @@ func (s *State) pickLatest(versions map[string]string) string {
 	if len(unstableVersions) > 0 {
 		latest := unstableVersions[0]
 		for _, v := range unstableVersions[1:] {
-			if compareVersions(v, latest) > 0 {
+			if version.Compare(v, latest) > 0 {
 				latest = v
 			}
 		}
@@ -1406,86 +1444,6 @@ func (s *State) pickLatest(versions map[string]string) string {
 	}
 
 	return ""
-}
-
-// isStable 检查版本号是否为稳定版
-func isStable(v string) bool {
-	vLower := strings.ToLower(v)
-	keywords := []string{"alpha", "beta", "rc", "snapshot", "pre", "dev"}
-	for _, k := range keywords {
-		if strings.Contains(vLower, k) {
-			return false
-		}
-	}
-	// 额外检查：如果包含横杠，通常也是非稳定版（如 1.2.3-v1）
-	// 但有些启动器可能使用横杠作为正常版本号的一部分，所以以关键词优先
-	return true
-}
-
-// compareVersions 比较版本
-func compareVersions(v1, v2 string) int {
-	if v1 == v2 {
-		return 0
-	}
-
-	v1Clean := strings.TrimPrefix(v1, "v")
-	v2Clean := strings.TrimPrefix(v2, "v")
-
-	parts1 := strings.Split(v1Clean, ".")
-	parts2 := strings.Split(v2Clean, ".")
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var p1, p2 string
-		if i < len(parts1) {
-			p1 = parts1[i]
-		}
-		if i < len(parts2) {
-			p2 = parts2[i]
-		}
-
-		if p1 == p2 {
-			continue
-		}
-
-		n1, err1 := parseFirstInt(p1)
-		n2, err2 := parseFirstInt(p2)
-
-		if err1 == nil && err2 == nil {
-			if n1 > n2 {
-				return 1
-			}
-			if n1 < n2 {
-				return -1
-			}
-			// 如果数字部分相同，比较整个字符串（例如 2.0.0_beta-1 vs 2.0.0_beta-2）
-			if p1 > p2 {
-				return 1
-			}
-			if p1 < p2 {
-				return -1
-			}
-		} else {
-			// 如果不能解析为数字，按字符串比较
-			if p1 > p2 {
-				return 1
-			}
-			if p1 < p2 {
-				return -1
-			}
-		}
-	}
-	return 0
-}
-
-func parseFirstInt(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
 }
 
 func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -1537,7 +1495,7 @@ func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(list, func(i, j int) bool {
 			v1, _ := list[i]["tag_name"].(string)
 			v2, _ := list[j]["tag_name"].(string)
-			return compareVersions(v1, v2) > 0
+			return version.Compare(v1, v2) > 0
 		})
 		result[launcher] = list
 	}
@@ -1611,7 +1569,7 @@ func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list, func(i, j int) bool {
 		v1, _ := list[i]["tag_name"].(string)
 		v2, _ := list[j]["tag_name"].(string)
-		return compareVersions(v1, v2) > 0
+		return version.Compare(v1, v2) > 0
 	})
 
 	// 注入 clone_url
@@ -1743,19 +1701,22 @@ func (s *State) validateDownloadFile(filePath string) (string, os.FileInfo, *dow
 	return cleanPath, info, nil
 }
 
-func (s *State) issueDownloadToken(filePath, returnURL, source, flow string) downloadTokenResponse {
+func (s *State) issueDownloadToken(filePath, returnURL, source, flow string) (downloadTokenResponse, error) {
 	entry := download_token.TokenEntry{
 		FilePath:  filePath,
 		ReturnURL: returnURL,
 		Source:    source,
 		Flow:      flow,
 	}
-	token := s.downloadTokenMgr.Generate(entry)
+	token, err := s.downloadTokenMgr.Generate(entry)
+	if err != nil {
+		return downloadTokenResponse{}, err
+	}
 	return downloadTokenResponse{
 		DownloadToken: token,
 		DownloadURL:   buildDownloadURL(token, filePath),
 		LandingURL:    fmt.Sprintf("/api/download/landing?token=%s", url.QueryEscape(token)),
-	}
+	}, nil
 }
 
 func buildDownloadURL(token, filePath string) string {
@@ -1784,7 +1745,11 @@ func (s *State) handleDownloadPrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "prepare")
+	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "prepare")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -1870,7 +1835,11 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "verify")
+	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "verify")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -2058,12 +2027,12 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
             </div>
         </div>
         <div class="footer">
-            <p class="file-path">文件: ` + filepath.Base(filePath) + `</p>
+            <p class="file-path">文件: ` + html.EscapeString(filepath.Base(filePath)) + `</p>
         </div>
     </div>
     <script>
-        const filePath = "` + filePath + `";
-        const captchaId = "` + s.Config.CaptchaAppId + `";
+        const filePath = "` + html.EscapeString(filePath) + `";
+        const captchaId = "` + html.EscapeString(s.Config.CaptchaAppId) + `";
         let captchaObj = null;
         let downloadUrl = "";
         
@@ -2176,6 +2145,62 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
 </html>`
 	
 	w.Write([]byte(html))
+}
+
+func (s *State) handleScanAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.scanAllFunc != nil {
+		go s.scanAllFunc()
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintln(w, "Scan triggered")
+	} else {
+		http.Error(w, "Scan not available", http.StatusNotImplemented)
+	}
+}
+
+func (s *State) handleScanLauncher(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.scanLauncherFunc == nil {
+		http.Error(w, "Scan not available", http.StatusNotImplemented)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req LauncherScanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Launcher == "" {
+		http.Error(w, "launcher is required", http.StatusBadRequest)
+		return
+	}
+	go s.scanLauncherFunc(req.Launcher)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(LauncherScanResponse{
+		Status:  "accepted",
+		Message: "扫描已触发",
+	})
+}
+
+func (s *State) handleSelfUpdateCheckEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.selfUpdateCheckFunc != nil {
+		go s.selfUpdateCheckFunc()
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintln(w, "Self update check triggered")
+	} else {
+		http.Error(w, "Self update check not available", http.StatusNotImplemented)
+	}
 }
 
 // responseWriterCounter 包装 http.ResponseWriter 以统计实际写入的字节数
