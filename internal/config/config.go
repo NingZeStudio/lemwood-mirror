@@ -251,8 +251,15 @@ func LoadConfig(projectRoot string) (*Config, error) {
 			}
 			return cfg, nil
 		}
+		// 释放嵌入的默认配置文件（default.yaml）
+		if err := os.WriteFile(cfgPath, defaultConfigYAML, 0o644); err != nil {
+			return nil, fmt.Errorf("写入默认 config.yaml 失败: %w", err)
+		}
 		cfg := DefaultConfig()
-		if err := cfg.Save(projectRoot); err != nil {
+		if err := yaml.Unmarshal(defaultConfigYAML, cfg); err != nil {
+			return nil, fmt.Errorf("解析默认配置失败: %w", err)
+		}
+		if err := NormalizeConfig(cfg); err != nil {
 			return nil, err
 		}
 		return cfg, nil

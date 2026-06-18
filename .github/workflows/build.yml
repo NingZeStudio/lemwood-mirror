@@ -45,13 +45,13 @@ jobs:
       with:
         version: 10.12.4
 
-    - name: Install web dependencies
+    - name: Install frontend dependencies
       run: pnpm install --frozen-lockfile=false
-      working-directory: ./web
+      working-directory: ./frontend
 
-    - name: Build web frontend
-      run: pnpm build
-      working-directory: ./web
+    - name: Build frontend (v1 + v2 themes)
+      run: pnpm build && pnpm build:v2
+      working-directory: ./frontend
 
     - name: Install admin dependencies
       run: pnpm install --frozen-lockfile=false
@@ -79,14 +79,14 @@ jobs:
       run: |
         BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.zip"
-        zip -r "$PKG_NAME" "$BINARY_NAME" config.yaml
+        zip -r "$PKG_NAME" "$BINARY_NAME"
 
     - name: Package Artifact (Linux)
       if: matrix.archive == 'tar.gz'
       run: |
         BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
         PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.tar.gz"
-        tar -czvf "$PKG_NAME" "$BINARY_NAME" config.yaml
+        tar -czvf "$PKG_NAME" "$BINARY_NAME"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
