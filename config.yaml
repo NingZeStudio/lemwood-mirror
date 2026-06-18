@@ -14,6 +14,9 @@ server_address: ""
 # 服务器监听端口（默认 8080）
 server_port: 8080
 
+# 启用的 API 版本：v1（仅旧版）、v2（仅新版）、both（两者并行，默认）
+api_version: both
+
 # -----------------------------------------------------------------------------
 # 扫描与同步设置
 # -----------------------------------------------------------------------------
@@ -67,10 +70,10 @@ xget_enabled: true
 admin_enabled: true
 
 # 管理员用户名
-admin_user: ""
+admin_user: "admin"
 
 # 管理员密码（存储为 bcrypt 哈希值，明文密码仅在首次配置时输入）
-admin_password: ""
+admin_password: "$2a$04$UsOkJmLf1nYOQ7rDY4Pp3.3ou68RFHdzbfR3x4HSNZgqdDA7bJnay"
 
 # 登录失败最大重试次数，超过后锁定 IP（默认 10）
 admin_max_retries: 10

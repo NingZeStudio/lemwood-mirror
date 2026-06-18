@@ -48,15 +48,15 @@ type State struct {
 	loginAttemptsMu sync.Mutex
 
 	// 验证码
-	captchaValidator  *captcha.Validator
+	captchaValidator *captcha.Validator
 	downloadTokenMgr *download_token.Manager
 	selfUpdate       *selfupdate.Manager
 	applySelfUpdate  func(ctx context.Context) error
 	restartProcess   func() error
 
 	// 扫描回调（在 Routes 中使用）
-	scanAllFunc       func()
-	scanLauncherFunc  func(launcherName string)
+	scanAllFunc         func()
+	scanLauncherFunc    func(launcherName string)
 	selfUpdateCheckFunc func()
 }
 
@@ -224,17 +224,17 @@ func (s *State) ClearLatestFlags(launcher string) error {
 	s.mu.RLock()
 	versions, exists := s.index[launcher]
 	s.mu.RUnlock()
-	
+
 	if !exists {
 		return nil // 启动器不存在，无需清除
 	}
-	
+
 	for _, infoPath := range versions {
 		// 检查缓存中的 is_latest 字段，如果为 true 才处理
 		s.mu.RLock()
 		info, exists := s.infoCache[infoPath]
 		s.mu.RUnlock()
-		
+
 		// 如果缓存存在且 is_latest 为 true，或者缓存不存在（需要读取文件），则处理
 		if !exists || (exists && info["is_latest"] == true) {
 			if err := s.clearLatestFlag(infoPath); err != nil {
@@ -243,7 +243,7 @@ func (s *State) ClearLatestFlags(launcher string) error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -252,44 +252,44 @@ func (s *State) clearLatestFlag(infoPath string) error {
 	s.mu.RLock()
 	info, exists := s.infoCache[infoPath]
 	s.mu.RUnlock()
-	
+
 	// 如果缓存不存在，读取文件
 	if !exists {
 		content, err := os.ReadFile(infoPath)
 		if err != nil {
 			return fmt.Errorf("读取文件失败: %w", err)
 		}
-		
+
 		var fileInfo map[string]interface{}
 		if err := json.Unmarshal(content, &fileInfo); err != nil {
 			return fmt.Errorf("解析 JSON 失败: %w", err)
 		}
-		
+
 		info = fileInfo
 	}
-	
+
 	// 如果存在 is_latest 字段且为 true，则将其设置为 false
 	if isLatest, exists := info["is_latest"]; exists && isLatest == true {
 		info["is_latest"] = false
-		
+
 		// 重新写入文件
 		newContent, err := json.MarshalIndent(info, "", "  ")
 		if err != nil {
 			return fmt.Errorf("序列化 JSON 失败: %w", err)
 		}
-		
+
 		if err := os.WriteFile(infoPath, newContent, 0o644); err != nil {
 			return fmt.Errorf("写入文件失败: %w", err)
 		}
-		
+
 		// 更新缓存
 		s.mu.Lock()
 		s.infoCache[infoPath] = info
 		s.mu.Unlock()
-		
+
 		log.Printf("已清除 %s 的 latest 标记", infoPath)
 	}
-	
+
 	return nil
 }
 
@@ -616,7 +616,7 @@ func (s *State) handleAdminFiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		path := r.URL.Query().Get("path")
 		fullPath := filepath.Join(s.BasePath, path)
-		
+
 		// 安全检查
 		absBase, _ := filepath.Abs(s.BasePath)
 		absPath, _ := filepath.Abs(fullPath)
@@ -756,9 +756,26 @@ func (s *State) handleAdminFileDownload(w http.ResponseWriter, r *http.Request) 
 	http.ServeFile(w, r, fullPath)
 }
 
+// getFrontendThemeDir 根据 APIVersion 返回前端主题目录（相对路径）。
+// 主题选择规则：
+//   - v2 模式 → web/default_v2
+//   - v1 模式 → web/default
+//   - both 模式 → web/default（v1 前端，兼容性优先）
+// 若选定目录不存在 index.html，回退到 web/default。
+func (s *State) getFrontendThemeDir() string {
+	preferred := filepath.Join("web", "default")
+	if s.Config != nil && s.Config.APIVersion == "v2" {
+		preferred = filepath.Join("web", "default_v2")
+	}
+	if _, err := os.Stat(filepath.Join(preferred, "index.html")); err == nil {
+		return preferred
+	}
+	return filepath.Join("web", "default")
+}
+
 func (s *State) Routes(mux *http.ServeMux) {
-	// 静态 UI
-	staticDir := filepath.Join("web", "dist")
+	// 静态 UI — 根据 APIVersion 选择主题目录
+	staticDir := s.getFrontendThemeDir()
 	adminStaticDir := filepath.Join("web", "admin")
 	repoDir := filepath.Join(s.ProjectRoot, "repo")
 
@@ -892,7 +909,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 	// 根路径处理器 - 处理静态文件和 SPA fallback
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		
+
 		// 根路径和 index.html
 		if path == "/" || path == "/index.html" {
 			indexPath := filepath.Join(staticDir, "index.html")
@@ -905,7 +922,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		if relPath != "" {
 			fullPath := filepath.Join(staticDir, relPath)
 			cleanPath := filepath.Clean(fullPath)
-			
+
 			// 安全检查
 			absBase, _ := filepath.Abs(staticDir)
 			absPath, _ := filepath.Abs(cleanPath)
@@ -952,7 +969,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			if len(parts) == 2 {
 				potentialToken := parts[0]
 				potentialPath := parts[1]
-				
+
 				// 检查这个 token 是否有效，或者它的长度为 64 (标准的 token 长度)
 				_, valid := s.downloadTokenMgr.Peek(potentialToken)
 				if valid || len(potentialToken) == 64 {
@@ -974,10 +991,10 @@ func (s *State) Routes(mux *http.ServeMux) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":      "verification_required",
-					"message":    "Download requires captcha verification",
-					"captcha":    true,
-					"app_id":     s.Config.CaptchaAppId,
+					"error":   "verification_required",
+					"message": "Download requires captcha verification",
+					"captcha": true,
+					"app_id":  s.Config.CaptchaAppId,
 				})
 				return
 			}
@@ -991,10 +1008,10 @@ func (s *State) Routes(mux *http.ServeMux) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":      "invalid_token",
-					"message":    "Download token is invalid or expired",
-					"captcha":    true,
-					"app_id":     s.Config.CaptchaAppId,
+					"error":   "invalid_token",
+					"message": "Download token is invalid or expired",
+					"captcha": true,
+					"app_id":  s.Config.CaptchaAppId,
 				})
 				return
 			}
@@ -1010,8 +1027,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"error":      "token_mismatch",
-					"message":    "Download token does not match requested file",
+					"error":   "token_mismatch",
+					"message": "Download token does not match requested file",
 				})
 				return
 			}
@@ -1143,6 +1160,30 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.Handle("/api/v1/admin/scans/launcher", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanLauncher))))
 	mux.Handle("/api/v1/admin/self-update", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleSelfUpdateCheckEndpoint))))
 
+	// ============================================================
+	// v2 API 端点 (/api/v2/) — 受 api_version 配置控制
+	// ============================================================
+	if s.Config != nil && (s.Config.APIVersion == "v2" || s.Config.APIVersion == "both") {
+		// 公共查询
+		mux.HandleFunc("/api/v2/launchers", s.handleV2Status)
+		mux.HandleFunc("/api/v2/launchers/", s.handleV2LauncherStatus)
+		mux.HandleFunc("/api/v2/latest", s.handleV2LatestAll)
+		mux.HandleFunc("/api/v2/latest/", s.handleV2LatestLauncher)
+		mux.HandleFunc("/api/v2/stats", s.handleV2Stats)
+		mux.HandleFunc("/api/v2/captcha/config", s.handleV2CaptchaConfig)
+		mux.HandleFunc("/api/v2/auth/2fa/status", s.handleV2Auth2FAStatus)
+
+		// 下载
+		mux.HandleFunc("/api/v2/downloads/prepare", s.handleV2DownloadPrepare)
+		mux.HandleFunc("/api/v2/downloads/landing", s.handleV2DownloadLanding)
+		mux.HandleFunc("/api/v2/downloads/verify", s.handleV2DownloadVerify)
+
+		// 认证 + 扫描（v2 admin 中间件，返回信封格式错误）
+		mux.Handle("/api/v2/auth/login", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.handleV2Login)))
+		mux.Handle("/api/v2/admin/scans", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanAll))))
+		mux.Handle("/api/v2/admin/scans/launcher", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanLauncher))))
+	}
+
 	// Admin UI
 	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
@@ -1154,7 +1195,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			return
 		}
 		relPath := strings.TrimPrefix(path, "/admin/")
-		
+
 		if relPath == "" || relPath == "index.html" {
 			http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
 			return
@@ -1174,7 +1215,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			http.ServeFile(w, r, cleanPath)
 			return
 		}
-		
+
 		// Fallback to index.html for SPA-like behavior in admin
 		http.ServeFile(w, r, filepath.Join(adminStaticDir, "index.html"))
 	})))
@@ -1306,19 +1347,19 @@ func (s *State) FixAssetURLs() error {
 	if s.Config.DownloadUrlBase == "" {
 		return nil
 	}
-	
+
 	baseURL := s.Config.DownloadUrlBase
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "https://" + baseURL
 	}
-	
+
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return fmt.Errorf("解析 download_url_base 失败: %w", err)
 	}
 	targetDomain := parsedURL.Host
 	targetScheme := parsedURL.Scheme
-	
+
 	// 第一阶段：只持有读锁，复制文件路径列表
 	s.mu.RLock()
 	paths := make([]string, 0, len(s.infoCache))
@@ -1326,7 +1367,7 @@ func (s *State) FixAssetURLs() error {
 		paths = append(paths, path)
 	}
 	s.mu.RUnlock()
-	
+
 	// 第二阶段：无锁状态下进行文件 IO 和处理
 	fixedCount := 0
 	for _, infoPath := range paths {
@@ -1334,65 +1375,65 @@ func (s *State) FixAssetURLs() error {
 		if err != nil {
 			continue
 		}
-		
+
 		var info map[string]interface{}
 		if err := json.Unmarshal(content, &info); err != nil {
 			continue
 		}
-		
+
 		assets, ok := info["assets"].([]interface{})
 		if !ok {
 			continue
 		}
-		
+
 		changed := false
 		for _, asset := range assets {
 			assetMap, ok := asset.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			
+
 			assetURL, ok := assetMap["url"].(string)
 			if !ok {
 				continue
 			}
-			
+
 			parsedAssetURL, err := url.Parse(assetURL)
 			if err != nil {
 				continue
 			}
-			
+
 			if parsedAssetURL.Host != targetDomain {
 				newURL := fmt.Sprintf("%s://%s%s", targetScheme, targetDomain, parsedAssetURL.Path)
 				assetMap["url"] = newURL
 				changed = true
 			}
 		}
-		
+
 		if changed {
 			newContent, err := json.MarshalIndent(info, "", "  ")
 			if err != nil {
 				continue
 			}
-			
+
 			if err := os.WriteFile(infoPath, newContent, 0o644); err != nil {
 				log.Printf("修复 %s 的 URL 失败: %v", infoPath, err)
 				continue
 			}
-			
+
 			// 第三阶段：最小化持有写锁，仅更新缓存
 			s.mu.Lock()
 			s.infoCache[infoPath] = info
 			s.mu.Unlock()
-			
+
 			fixedCount++
 		}
 	}
-	
+
 	if fixedCount > 0 {
 		log.Printf("[URL 统一性检查] 修复了 %d 个 index.json 文件中的下载链接", fixedCount)
 	}
-	
+
 	return nil
 }
 
@@ -1607,11 +1648,11 @@ func (s *State) handleFiles(w http.ResponseWriter, r *http.Request) {
 func (s *State) handleLatestAll(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-    
-    // 添加 Header X-Latest-Versions
-    if b, err := json.Marshal(s.latest); err == nil {
-        w.Header().Set("X-Latest-Versions", string(b))
-    }
+
+	// 添加 Header X-Latest-Versions
+	if b, err := json.Marshal(s.latest); err == nil {
+		w.Header().Set("X-Latest-Versions", string(b))
+	}
 	json.NewEncoder(w).Encode(s.latest)
 }
 
@@ -1620,7 +1661,7 @@ func (s *State) handleLatestLauncher(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if val, ok := s.latest[launcher]; ok {
-        w.Header().Set("X-Latest-Version", val)
+		w.Header().Set("X-Latest-Version", val)
 		w.Write([]byte(val))
 	} else {
 		http.NotFound(w, r)
@@ -1859,27 +1900,27 @@ func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
 func isBrowserRequest(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
 	userAgent := r.Header.Get("User-Agent")
-	
+
 	if strings.Contains(accept, "text/html") {
 		return true
 	}
-	
+
 	if strings.Contains(userAgent, "Mozilla") ||
-	   strings.Contains(userAgent, "Chrome") ||
-	   strings.Contains(userAgent, "Safari") ||
-	   strings.Contains(userAgent, "Edge") ||
-	   strings.Contains(userAgent, "Firefox") {
+		strings.Contains(userAgent, "Chrome") ||
+		strings.Contains(userAgent, "Safari") ||
+		strings.Contains(userAgent, "Edge") ||
+		strings.Contains(userAgent, "Firefox") {
 		if !strings.Contains(accept, "application/json") && accept != "" {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
 func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
+
 	html := `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -2155,7 +2196,7 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
     </script>
 </body>
 </html>`
-	
+
 	w.Write([]byte(html))
 }
 

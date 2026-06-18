@@ -82,9 +82,10 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 
 ### 1.9 内嵌前端资源
 
-- 用户前端和后台前端会被构建进二进制。
-- 服务启动时会自动释放 `web/dist` 和 `web/admin` 到项目目录。
+- 用户前端（v1 主题 `web/default`、v2 主题 `web/default_v2`）和后台前端（`web/admin`）会被构建进二进制。
+- 服务启动时会根据 `api_version` 配置选择对应主题目录，并自动释放 `web/default`、`web/default_v2`、`web/admin` 到项目目录。
 - 当二进制内嵌资源版本变化时，启动时会自动覆盖更新本地前端文件。
+- 主题选择规则：`v2` → `web/default_v2`；`v1` 或 `both` → `web/default`（回退到 `web/default` 保证可用性）。
 
 ---
 
@@ -795,3 +796,190 @@ GET /download/{token}/{file_path}
 - **`traffic_limit_gb` 负值会自动修正为 5** GB，`0` 表示完全禁用。
 - **扫描接口需要 Admin 认证**，调用前需先通过 `/api/v1/auth/login` 登录获取 token。
 - 站内 API 速查页（`/api`）用于快速浏览与复制示例，**正式接入请以本文档为准**。
+
+---
+
+## 8. v2 API
+
+### 8.1 设计目标
+
+v2 API 在 v1 基础上优化**可读性**与**性能**，与 v1 并行运行、互不影响：
+
+- **可读性** — 所有 JSON 接口统一 `{data, error, meta}` 信封结构，客户端只需一套解析逻辑
+- **性能** — ETag 条件请求（304 Not Modified）、统一 Cache-Control 缓存头、gzip 压缩
+
+### 8.2 配置
+
+在 `config.yaml` 中通过 `api_version` 控制启用的 API 版本：
+
+```yaml
+# 启用的 API 版本：v1（仅旧版）、v2（仅新版）、both（两者并行，默认）
+api_version: both
+```
+
+| 取值 | 行为 |
+|------|------|
+| `v1` | 仅注册 `/api/v1/*` 路由，v2 端点返回 404 |
+| `v2` | 仅注册 `/api/v2/*` 路由，v1 端点返回 404 |
+| `both`（默认/空） | v1 与 v2 路由并行注册 |
+
+非法值（如 `v3`）会导致启动报错。
+
+### 8.3 统一响应信封
+
+所有 v2 JSON 接口返回统一信封：
+
+```json
+{
+  "data": "<业务载荷，失败时为 null>",
+  "error": {
+    "code": "error_code",
+    "message": "人类可读说明",
+    "details": {}
+  },
+  "meta": {
+    "version": "v2",
+    "timestamp": "2026-06-18T12:00:00Z",
+    "request_id": "a1b2c3d4e5f6g7h8",
+    "cached": false
+  }
+}
+```
+
+- **成功**：`data` 有值，`error` 为 `null`，HTTP 200（扫描接口 202）
+- **失败**：`data` 为 `null`，`error` 有值，HTTP 状态码反映错误类型（400/403/404/500）
+- `meta.request_id` 便于日志追踪
+- `meta.cached` 标识是否命中服务端缓存
+
+**例外：** `GET /api/v2/latest/{launcher}` 仍返回纯文本版本号（与 v1 一致），不走信封。
+
+### 8.4 性能特性
+
+#### ETag 条件请求
+
+GET 查询接口（`/launchers`、`/latest`、`/stats` 等）返回 `ETag` 弱标签头。客户端可在后续请求中携带 `If-None-Match` 头，若内容未变则服务端返回 `304 Not Modified`（无响应体），大幅减少带宽和解析开销。
+
+```http
+GET /api/v2/launchers
+→ 200 OK
+  ETag: W/"a1b2c3d4e5f6g7h8"
+  Cache-Control: public, max-age=300
+  { "data": ..., "error": null, "meta": {...} }
+
+GET /api/v2/launchers
+If-None-Match: W/"a1b2c3d4e5f6g7h8"
+→ 304 Not Modified
+```
+
+#### gzip 压缩
+
+当客户端发送 `Accept-Encoding: gzip` 且响应体大于 1KB 时，服务端自动 gzip 压缩并返回 `Content-Encoding: gzip` 头。
+
+#### 统一缓存
+
+所有 v2 GET 查询接口返回 `Cache-Control: public, max-age=300`（5 分钟）。
+
+### 8.5 v2 端点清单
+
+| v2 端点 | 方法 | 对应 v1 端点 | 说明 |
+|---------|------|-------------|------|
+| `/api/v2/launchers` | GET | `/api/v1/launchers` | 所有启动器状态 |
+| `/api/v2/launchers/{launcher}` | GET | `/api/v1/launchers/{launcher}` | 单个启动器版本数组 |
+| `/api/v2/latest` | GET | `/api/v1/latest` | 所有最新版本 map |
+| `/api/v2/latest/{launcher}` | GET | `/api/v1/latest/{launcher}` | 纯文本版本号（不走信封） |
+| `/api/v2/stats` | GET | `/api/v1/stats` | 站点统计 |
+| `/api/v2/captcha/config` | GET | `/api/v1/captcha/config` | 验证码配置 |
+| `/api/v2/auth/2fa/status` | GET | `/api/v1/auth/2fa/status` | 2FA 状态 |
+| `/api/v2/auth/login` | POST | `/api/v1/auth/login` | 管理员登录 |
+| `/api/v2/downloads/prepare` | POST | `/api/v1/downloads/prepare` | 准备下载（无验证码） |
+| `/api/v2/downloads/landing` | GET | `/api/v1/downloads/landing` | 下载引导信息 |
+| `/api/v2/downloads/verify` | POST | `/api/v1/downloads/verify` | 验证后生成下载令牌 |
+| `/api/v2/admin/scans` | POST | `/api/v1/admin/scans` | 全量扫描（需 admin） |
+| `/api/v2/admin/scans/launcher` | POST | `/api/v1/admin/scans/launcher` | 单启动器扫描（需 admin） |
+
+请求参数与 v1 完全一致，仅响应格式不同。
+
+### 8.6 v2 响应示例
+
+**成功 — 获取所有启动器状态：**
+
+```json
+{
+  "data": {
+    "fcl": [
+      {
+        "tag_name": "1.3.0.7",
+        "name": "1.3.0.7",
+        "published_at": "2025-01-01T00:00:00Z",
+        "is_latest": true,
+        "assets": [...]
+      }
+    ]
+  },
+  "error": null,
+  "meta": {
+    "version": "v2",
+    "timestamp": "2026-06-18T12:00:00Z",
+    "request_id": "a1b2c3d4e5f6g7h8"
+  }
+}
+```
+
+**失败 — 启动器不存在：**
+
+```json
+{
+  "data": null,
+  "error": {
+    "code": "not_found",
+    "message": "Launcher \"nonexistent\" not found"
+  },
+  "meta": {
+    "version": "v2",
+    "timestamp": "2026-06-18T12:00:00Z",
+    "request_id": "b2c3d4e5f6g7h8i9"
+  }
+}
+```
+
+**下载令牌生成成功：**
+
+```json
+{
+  "data": {
+    "download_token": "a1b2c3d4e5f6...",
+    "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+    "landing_url": "/api/v2/downloads/landing?token=a1b2c3..."
+  },
+  "error": null,
+  "meta": {
+    "version": "v2",
+    "timestamp": "2026-06-18T12:00:00Z",
+    "request_id": "c3d4e5f6g7h8i9j0"
+  }
+}
+```
+
+### 8.7 v2 错误码
+
+v2 错误信封中的 `error.code` 字段使用以下标准化错误码（与 v1 错误码保持兼容，新增部分标注）：
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `not_found` | 404 | 资源不存在（*v2 新增*） |
+| `method_not_allowed` | 405 | 请求方法不正确（*v2 新增*） |
+| `bad_request` | 400 | 请求体解析失败（*v2 新增*） |
+| `internal_error` | 500 | 服务端内部错误（*v2 新增*） |
+| `missing_token` | 400 | 缺少 `token` 参数 |
+| `missing_required_parameters` | 400 | 缺少必填字段 |
+| `expired_token` | 403 | 令牌不存在/过期/已消费 |
+| `invalid_path` | 403 | 文件路径非法 |
+| `file_not_found` | 404 | 文件不存在 |
+| `verification_failed` | 403 | 验证码校验不通过 |
+| `captcha_not_enabled` | 400 | 验证码未启用（*v2 新增*） |
+| `token_generation_failed` | 500 | 令牌生成失败（*v2 新增*） |
+| `invalid_credentials` | 401 | 用户名或密码错误（*v2 新增*） |
+| `account_locked` | 403 | 账号已锁定（*v2 新增*） |
+| `otp_required` | 401 | 需要两步验证码（*v2 新增*） |
+| `invalid_otp` | 401 | 验证码错误（*v2 新增*） |
+| `scan_unavailable` | 501 | 扫描功能不可用（*v2 新增*） |

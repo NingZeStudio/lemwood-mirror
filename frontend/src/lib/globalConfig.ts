@@ -31,13 +31,13 @@ export const globalConfig = {
   },
 
   api: {
-    baseUrl: import.meta.env.VITE_API_BASE_URL || 'https://beta.miawa.cn/api/v1',
+    baseUrl: import.meta.env.VITE_API_BASE_URL || '/api/v1',
     endpoints: {
-      status: '/status',
+      status: '/launchers',
       latest: '/latest',
       stats: '/stats',
       files: '/files',
-      scan: '/scan',
+      scan: '/admin/scans',
       captchaConfig: '/captcha/config',
       downloadVerify: '/download/verify',
       downloadPrepare: '/download/prepare',

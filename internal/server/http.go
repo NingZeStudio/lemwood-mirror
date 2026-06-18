@@ -29,7 +29,8 @@ func StartHTTPWithScan(addr string, s *State, scanFunc func(), launcherScanFunc 
 	mux := http.NewServeMux()
 	s.Routes(mux)
 
-	staticDir := filepath.Join(s.ProjectRoot, "web", "dist")
+	// 主题选择统一委托给 getFrontendThemeDir()，转换为绝对路径供 SPAFallbackMiddleware 使用
+	staticDir := filepath.Join(s.ProjectRoot, s.getFrontendThemeDir())
 	handler := SPAFallbackMiddleware(mux, staticDir)
 
 	handler = SecurityMiddleware(handler)
