@@ -49,8 +49,8 @@ jobs:
       run: pnpm install --frozen-lockfile=false
       working-directory: ./frontend
 
-    - name: Build frontend (v1 + v2 themes)
-      run: pnpm build && pnpm build:v2
+    - name: Build frontend
+      run: pnpm build
       working-directory: ./frontend
 
     - name: Install admin dependencies

@@ -1,0 +1,125 @@
+package stats
+
+import (
+	"lemwood_mirror/internal/config"
+	"lemwood_mirror/internal/db"
+	"testing"
+	"time"
+)
+
+func setupStatsTestDB(t *testing.T) {
+	t.Helper()
+	base := t.TempDir()
+	cfg := &config.Config{}
+	if db.DB != nil {
+		_ = db.DB.Close()
+		db.DB = nil
+	}
+	if err := db.InitDB(base, cfg); err != nil {
+		t.Fatalf("InitDB() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if db.DB != nil {
+			_ = db.DB.Close()
+			db.DB = nil
+		}
+	})
+}
+
+func TestComputeStatsDataTraffic(t *testing.T) {
+	setupStatsTestDB(t)
+
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// 写入 visits 记录，使 DailyStats 包含今日和昨日
+	if _, err := db.DB.Exec("INSERT INTO visits (ip, path) VALUES (?, ?)", "1.1.1.1", "/"); err != nil {
+		t.Fatalf("insert visit error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO visits (ip, path, created_at) VALUES (?, ?, ?)", "3.3.3.3", "/", yesterday+" 12:00:00"); err != nil {
+		t.Fatalf("insert yesterday visit error = %v", err)
+	}
+
+	// 写入普通下载流量
+	if err := db.RecordTraffic("1.1.1.1", 1024); err != nil {
+		t.Fatalf("RecordTraffic() error = %v", err)
+	}
+	if err := db.RecordTraffic("2.2.2.2", 2048); err != nil {
+		t.Fatalf("RecordTraffic() error = %v", err)
+	}
+	// 写入昨日流量（应在 last_30 范围内）——同时写入 IP 级表和聚合表
+	if _, err := db.DB.Exec("INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)", "3.3.3.3", yesterday, 4096); err != nil {
+		t.Fatalf("insert yesterday traffic error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO daily_traffic (date, bytes_downloaded) VALUES (?, ?)", yesterday, 4096); err != nil {
+		t.Fatalf("insert yesterday daily_traffic error = %v", err)
+	}
+
+	// 写入 Repo 流量
+	if err := db.RecordRepoTraffic("1.1.1.1", 512); err != nil {
+		t.Fatalf("RecordRepoTraffic() error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO repo_ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)", "4.4.4.4", yesterday, 1024); err != nil {
+		t.Fatalf("insert yesterday repo traffic error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO daily_repo_traffic (date, bytes_downloaded) VALUES (?, ?)", yesterday, 1024); err != nil {
+		t.Fatalf("insert yesterday daily_repo_traffic error = %v", err)
+	}
+
+	// 清除可能存在的快照缓存
+	snapshotMu.Lock()
+	lastSnapshot = nil
+	lastSnapshotTime = time.Time{}
+	snapshotMu.Unlock()
+	if _, err := db.DB.Exec("DELETE FROM stats_snapshot"); err != nil {
+		t.Fatalf("clear snapshot error = %v", err)
+	}
+
+	data := computeStatsData()
+
+	// 总流量 = 1024 + 2048 + 4096 = 7168
+	if data.TotalTrafficBytes != 7168 {
+		t.Fatalf("TotalTrafficBytes = %d, want 7168", data.TotalTrafficBytes)
+	}
+
+	// 最近30天流量 = 7168（全部在30天内）
+	if data.Last30TrafficBytes != 7168 {
+		t.Fatalf("Last30TrafficBytes = %d, want 7168", data.Last30TrafficBytes)
+	}
+
+	// Repo 总流量 = 512 + 1024 = 1536
+	if data.TotalRepoTrafficBytes != 1536 {
+		t.Fatalf("TotalRepoTrafficBytes = %d, want 1536", data.TotalRepoTrafficBytes)
+	}
+
+	if data.Last30RepoTrafficBytes != 1536 {
+		t.Fatalf("Last30RepoTrafficBytes = %d, want 1536", data.Last30RepoTrafficBytes)
+	}
+
+	// 验证 DailyStats 中今日流量
+	todayTraffic := int64(0)
+	todayRepoTraffic := int64(0)
+	yesterdayTraffic := int64(0)
+	for _, ds := range data.DailyStats {
+		if ds.Date == today {
+			todayTraffic = ds.TrafficBytes
+			todayRepoTraffic = ds.RepoTrafficBytes
+		}
+		if ds.Date == yesterday {
+			yesterdayTraffic = ds.TrafficBytes
+		}
+	}
+
+	// 今日普通流量 = 1024 + 2048 = 3072
+	if todayTraffic != 3072 {
+		t.Fatalf("today traffic = %d, want 3072", todayTraffic)
+	}
+	// 今日 Repo 流量 = 512
+	if todayRepoTraffic != 512 {
+		t.Fatalf("today repo traffic = %d, want 512", todayRepoTraffic)
+	}
+	// 昨日普通流量 = 4096
+	if yesterdayTraffic != 4096 {
+		t.Fatalf("yesterday traffic = %d, want 4096", yesterdayTraffic)
+	}
+}

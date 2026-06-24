@@ -6,7 +6,7 @@ RUN corepack enable && cd frontend && pnpm install --frozen-lockfile
 RUN cd admin-app && pnpm install --frozen-lockfile
 COPY frontend/ ./frontend/
 COPY admin-app/ ./admin-app/
-RUN cd frontend && pnpm build && pnpm build:v2
+RUN cd frontend && pnpm build
 RUN cd admin-app && pnpm build
 
 FROM golang:1.24-alpine AS go-builder
@@ -15,7 +15,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-builder /src/web/default ./web/default
-COPY --from=frontend-builder /src/web/default_v2 ./web/default_v2
 COPY --from=frontend-builder /src/web/admin ./web/admin
 RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /mirror ./cmd/mirror
 

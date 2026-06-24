@@ -11,6 +11,7 @@ import {
   Download,
   Eye,
   Globe,
+  HardDrive,
   MapPin,
   Server,
   TrendingUp
@@ -166,6 +167,8 @@ const trendOption = computed(() => {
   const visits = rawData.map(d => d.visit_count)
   const downloads = rawData.map(d => d.download_count)
   const repoDownloads = rawData.map(d => d.repo_download_count || 0)
+  const traffic = rawData.map(d => d.traffic_bytes || 0)
+  const repoTraffic = rawData.map(d => d.repo_traffic_bytes || 0)
 
   return {
     backgroundColor: 'transparent',
@@ -174,10 +177,18 @@ const trendOption = computed(() => {
       axisPointer: { type: 'line' },
       backgroundColor: isDark.value ? '#18181b' : '#ffffff',
       borderColor: splitLineColor,
-      textStyle: { color: isDark.value ? '#fafafa' : '#09090b' }
+      textStyle: { color: isDark.value ? '#fafafa' : '#09090b' },
+      formatter: (params) => {
+        let html = params[0].axisValue
+        params.forEach(p => {
+          const val = p.seriesName.includes('流量') ? formatBytes(p.value) : p.value
+          html += `<br/>${p.marker} ${p.seriesName}: ${val}`
+        })
+        return html
+      }
     },
     legend: {
-      data: ['访问量', '下载量', 'Repo 拉取量'],
+      data: ['访问量', '下载量', 'Repo 拉取量', '下载流量', 'Repo 流量'],
       textStyle: { color: textColor },
       bottom: 0
     },
@@ -190,12 +201,23 @@ const trendOption = computed(() => {
       axisLine: { lineStyle: { color: splitLineColor } },
       axisLabel: { color: textColor }
     },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { type: 'dashed', color: splitLineColor } },
-      axisLine: { show: false },
-      axisLabel: { color: textColor }
-    },
+    yAxis: [
+      {
+        type: 'value',
+        splitLine: { lineStyle: { type: 'dashed', color: splitLineColor } },
+        axisLine: { show: false },
+        axisLabel: { color: textColor }
+      },
+      {
+        type: 'value',
+        splitLine: { show: false },
+        axisLine: { show: false },
+        axisLabel: {
+          color: textColor,
+          formatter: (v) => formatBytes(v)
+        }
+      }
+    ],
     series: [
       {
         name: '访问量',
@@ -229,6 +251,24 @@ const trendOption = computed(() => {
         symbol: 'none',
         data: repoDownloads,
         itemStyle: { color: '#8b5cf6' }
+      },
+      {
+        name: '下载流量',
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        yAxisIndex: 1,
+        data: traffic,
+        itemStyle: { color: '#10b981' }
+      },
+      {
+        name: 'Repo 流量',
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        yAxisIndex: 1,
+        data: repoTraffic,
+        itemStyle: { color: '#f59e0b' }
       }
     ]
   }
@@ -267,8 +307,8 @@ onMounted(async () => {
     </div>
 
     <div v-if="loading" class="space-y-6">
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <Card v-for="i in 5" :key="i" class="shadow-sm">
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4">
+        <Card v-for="i in 8" :key="i" class="shadow-sm">
           <CardHeader class="pb-2">
             <Skeleton class="h-4 w-20" />
           </CardHeader>
@@ -295,7 +335,7 @@ onMounted(async () => {
     </div>
 
     <template v-else>
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4">
         <Card class="shadow-sm transition-shadow hover:shadow-md">
           <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle class="text-sm font-medium">总访问量</CardTitle>
@@ -384,6 +424,28 @@ onMounted(async () => {
 
         <Card class="shadow-sm transition-shadow hover:shadow-md">
           <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle class="text-sm font-medium">总流量</CardTitle>
+            <HardDrive class="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div class="text-2xl font-bold">{{ formatBytes(stats.total_traffic_bytes) }}</div>
+            <p class="mt-1 text-xs text-muted-foreground">近 30 日 {{ formatBytes(stats.last_30_traffic_bytes) }} 下载流量</p>
+          </CardContent>
+        </Card>
+
+        <Card class="shadow-sm transition-shadow hover:shadow-md">
+          <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle class="text-sm font-medium">Repo 流量</CardTitle>
+            <HardDrive class="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div class="text-2xl font-bold">{{ formatBytes(stats.total_repo_traffic_bytes) }}</div>
+            <p class="mt-1 text-xs text-muted-foreground">近 30 日 {{ formatBytes(stats.last_30_repo_traffic_bytes) }} 拉取流量</p>
+          </CardContent>
+        </Card>
+
+        <Card class="shadow-sm transition-shadow hover:shadow-md">
+          <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle class="text-sm font-medium">运行天数</CardTitle>
             <Activity class="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -440,7 +502,6 @@ onMounted(async () => {
                 </div>
                 <div class="min-w-0 flex-1 space-y-0.5">
                   <p class="truncate text-sm font-medium leading-none">{{ item.launcher }}</p>
-                  <p class="truncate text-xs text-muted-foreground">{{ item.version }}</p>
                 </div>
                 <div class="shrink-0 text-sm font-bold tabular-nums">{{ item.count.toLocaleString() }}</div>
               </div>

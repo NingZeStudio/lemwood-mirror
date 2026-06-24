@@ -1,0 +1,1981 @@
+openapi: 3.0.3
+info:
+  title: Lemwood Mirror API
+  version: 2.0.0
+  description: |
+    OpenAPI specification for all v2 API endpoints of the Lemwood Mirror project.
+
+    ## Conventions
+    - All JSON endpoints (except `GET /api/v2/latest/{launcher}` and binary downloads)
+      return a unified `{data, error, meta}` envelope.
+    - `GET /api/v2/latest/{launcher}` returns plain text (`text/plain`).
+    - `GET /api/v2/admin/files/download` returns a binary stream
+      (`application/octet-stream`).
+    - Admin endpoints require a Bearer token obtained via `POST /api/v2/auth/login`.
+    - ETag conditional requests (`If-None-Match`) and gzip compression are
+      supported on GET query endpoints.
+  contact:
+    name: Lemwood Mirror
+servers:
+  - url: /
+    description: Relative to the deployed site root
+security:
+  - {}
+  - BearerAuth: []
+tags:
+  - name: Public
+    description: Public query endpoints
+  - name: Auth
+    description: Authentication endpoints
+  - name: Downloads
+    description: Download preparation and verification endpoints
+  - name: Admin
+    description: Admin-only endpoints (require Bearer token)
+
+paths:
+  # ============================================================
+  # Public query endpoints
+  # ============================================================
+  /api/v2/launchers:
+    get:
+      tags: [Public]
+      summary: Get all launchers status
+      description: Returns a map of launcher name to its version array, wrapped in the v2 envelope.
+      operationId: getV2Launchers
+      responses:
+        '200':
+          description: All launchers and their versions
+          headers:
+            ETag:
+              description: Weak ETag for conditional requests
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        additionalProperties:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/LauncherVersion'
+                        description: Map of launcher name to version array
+              examples:
+                sample:
+                  value:
+                    data:
+                      fcl:
+                        - tag_name: 1.3.0.7
+                          name: 1.3.0.7
+                          published_at: 2025-01-01T00:00:00Z
+                          is_latest: true
+                          assets:
+                            - name: FCL-release-1.3.0.7-all.apk
+                              url: /download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+                              size: 12345678
+                    error: null
+                    meta:
+                      version: v2
+                      timestamp: 2026-06-18T12:00:00Z
+                      request_id: a1b2c3d4e5f6g7h8
+                      cached: false
+        '304':
+          description: Not Modified (ETag matched)
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/launchers/{launcher}:
+    get:
+      tags: [Public]
+      summary: Get single launcher versions
+      description: Returns the version array for a single launcher, wrapped in the v2 envelope.
+      operationId: getV2Launcher
+      parameters:
+        - $ref: '#/components/parameters/LauncherPath'
+      responses:
+        '200':
+          description: Launcher version array
+          headers:
+            ETag:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/LauncherVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/latest:
+    get:
+      tags: [Public]
+      summary: Get all latest versions map
+      description: Returns a map of launcher name to its latest version string, wrapped in the v2 envelope.
+      operationId: getV2LatestAll
+      responses:
+        '200':
+          description: Latest version map
+          headers:
+            ETag:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+            X-Latest-Versions:
+              description: JSON-encoded latest versions map (compatibility header)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        additionalProperties:
+                          type: string
+                        description: Map of launcher name to latest version string
+        '304':
+          description: Not Modified
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/latest/{launcher}:
+    get:
+      tags: [Public]
+      summary: Get latest version for a launcher (plain text)
+      description: |
+        Returns the latest version number as **plain text** (`text/plain`).
+        This endpoint does NOT use the v2 envelope.
+      operationId: getV2LatestLauncher
+      parameters:
+        - $ref: '#/components/parameters/LauncherPath'
+      responses:
+        '200':
+          description: Latest version as plain text
+          headers:
+            X-Latest-Version:
+              description: The latest version string
+              schema:
+                type: string
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: 1.3.0.7
+        '404':
+          description: Launcher not found (returns v2 error envelope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/stats:
+    get:
+      tags: [Public]
+      summary: Get site statistics
+      description: Returns site statistics including visits, downloads, traffic, and trends, wrapped in the v2 envelope.
+      operationId: getV2Stats
+      responses:
+        '200':
+          description: Site statistics
+          headers:
+            ETag:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/StatsData'
+        '304':
+          description: Not Modified
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/captcha/config:
+    get:
+      tags: [Public]
+      summary: Get captcha configuration
+      description: Returns whether captcha is enabled and the GeeTest app id, wrapped in the v2 envelope.
+      operationId: getV2CaptchaConfig
+      responses:
+        '200':
+          description: Captcha configuration
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CaptchaConfig'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/auth/2fa/status:
+    get:
+      tags: [Public, Auth]
+      summary: Get 2FA status
+      description: Returns whether two-factor authentication (TOTP) is enabled for admin login, wrapped in the v2 envelope.
+      operationId: getV2Auth2FAStatus
+      responses:
+        '200':
+          description: 2FA status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TwoFactorStatus'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Auth endpoints
+  # ============================================================
+  /api/v2/auth/login:
+    post:
+      tags: [Auth]
+      summary: Admin login
+      description: Authenticates an admin user and returns a bearer token, wrapped in the v2 envelope.
+      operationId: postV2AuthLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid credentials or invalid OTP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+              examples:
+                invalid_credentials:
+                  value:
+                    data: null
+                    error:
+                      code: invalid_credentials
+                      message: Invalid credentials
+                    meta:
+                      version: v2
+                      timestamp: 2026-06-18T12:00:00Z
+                      request_id: b2c3d4e5f6g7h8i9
+                otp_required:
+                  value:
+                    data: null
+                    error:
+                      code: otp_required
+                      message: 需要验证码
+                    meta:
+                      version: v2
+                      timestamp: 2026-06-18T12:00:00Z
+                      request_id: b2c3d4e5f6g7h8i9
+                invalid_otp:
+                  value:
+                    data: null
+                    error:
+                      code: invalid_otp
+                      message: 验证码错误
+                    meta:
+                      version: v2
+                      timestamp: 2026-06-18T12:00:00Z
+                      request_id: b2c3d4e5f6g7h8i9
+        '403':
+          description: Account locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+              examples:
+                account_locked:
+                  value:
+                    data: null
+                    error:
+                      code: account_locked
+                      message: 账号已被锁定，请在 5m0s 后重试
+                    meta:
+                      version: v2
+                      timestamp: 2026-06-18T12:00:00Z
+                      request_id: b2c3d4e5f6g7h8i9
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Download endpoints
+  # ============================================================
+  /api/v2/downloads/prepare:
+    post:
+      tags: [Downloads]
+      summary: Prepare download (no captcha)
+      description: |
+        Generates a download token and download URL without captcha verification.
+        Used when captcha is disabled. Response is wrapped in the v2 envelope.
+      operationId: postV2DownloadsPrepare
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadPrepareRequest'
+      responses:
+        '200':
+          description: Download token generated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DownloadTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Invalid file path
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/downloads/landing:
+    get:
+      tags: [Downloads]
+      summary: Get download landing info
+      description: |
+        Returns download landing information for a given token.
+        Uses Peek mode (does not consume the token). Response is wrapped in the v2 envelope.
+      operationId: getV2DownloadsLanding
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: Download token returned by `prepare` or `verify`
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Download landing info
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DownloadLandingInfo'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Expired or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/downloads/verify:
+    post:
+      tags: [Downloads]
+      summary: Verify captcha and generate download token
+      description: |
+        Verifies GeeTest captcha output and, on success, generates a download token.
+        Used when captcha is enabled. Response is wrapped in the v2 envelope.
+      operationId: postV2DownloadsVerify
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadVerifyRequest'
+      responses:
+        '200':
+          description: Captcha verified, download token generated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DownloadTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Captcha verification failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Admin: config
+  # ============================================================
+  /api/v2/admin/config:
+    get:
+      tags: [Admin]
+      summary: Get current configuration
+      description: Returns the current server configuration (admin_password is redacted), wrapped in the v2 envelope.
+      operationId: getV2AdminConfig
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Config'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Admin]
+      summary: Update configuration
+      description: |
+        Updates the server configuration. If `admin_password` is empty, the existing
+        password hash is preserved; otherwise the new password is hashed and stored.
+        Response is wrapped in the v2 envelope.
+      operationId: postV2AdminConfig
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Config'
+      responses:
+        '200':
+          description: Configuration updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Admin: blacklist
+  # ============================================================
+  /api/v2/admin/blacklist:
+    get:
+      tags: [Admin]
+      summary: List blacklist entries
+      description: Returns all IP blacklist entries, wrapped in the v2 envelope.
+      operationId: getV2AdminBlacklist
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Blacklist entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/BlacklistItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Admin]
+      summary: Add IP to blacklist
+      description: Adds an IP address to the blacklist, wrapped in the v2 envelope.
+      operationId: postV2AdminBlacklist
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlacklistRequest'
+      responses:
+        '201':
+          description: IP added to blacklist
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Admin]
+      summary: Remove IP from blacklist
+      description: Removes an IP address from the blacklist, wrapped in the v2 envelope.
+      operationId: deleteV2AdminBlacklist
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          description: IP address to remove
+          schema:
+            type: string
+      responses:
+        '200':
+          description: IP removed from blacklist
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Admin: files
+  # ============================================================
+  /api/v2/admin/files:
+    get:
+      tags: [Admin]
+      summary: List files in a directory
+      description: Returns file entries under the given path (relative to storage_path), wrapped in the v2 envelope.
+      operationId: getV2AdminFiles
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: false
+          description: Directory path relative to storage_path (defaults to root)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/FileEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Admin]
+      summary: Upload a file
+      description: Uploads a file to the given path (relative to storage_path), wrapped in the v2 envelope.
+      operationId: postV2AdminFiles
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Destination path relative to storage_path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Admin]
+      summary: Delete a file or directory
+      description: Deletes a file or directory at the given path (relative to storage_path), wrapped in the v2 envelope.
+      operationId: deleteV2AdminFiles
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Path to delete, relative to storage_path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Path deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/admin/files/download:
+    get:
+      tags: [Admin]
+      summary: Download a file (binary stream)
+      description: |
+        Downloads a file as a binary stream (`application/octet-stream`).
+        This endpoint does NOT use the v2 envelope.
+      operationId: getV2AdminFileDownload
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: File path relative to storage_path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Binary file stream
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="file.apk"
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  # ============================================================
+  # Admin: self-update
+  # ============================================================
+  /api/v2/admin/self-update/status:
+    get:
+      tags: [Admin]
+      summary: Get self-update status
+      description: Returns the current self-update status, wrapped in the v2 envelope.
+      operationId: getV2AdminSelfUpdateStatus
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Self-update status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SelfUpdateStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/admin/self-update/check:
+    post:
+      tags: [Admin]
+      summary: Check for updates
+      description: Triggers a check for available updates from the configured repository, wrapped in the v2 envelope.
+      operationId: postV2AdminSelfUpdateCheck
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Update check result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SelfUpdateStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/admin/self-update/apply:
+    post:
+      tags: [Admin]
+      summary: Apply update
+      description: Applies a previously checked update, wrapped in the v2 envelope.
+      operationId: postV2AdminSelfUpdateApply
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Update applied (returns updated status)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SelfUpdateStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/admin/self-update/restart:
+    post:
+      tags: [Admin]
+      summary: Restart service
+      description: Triggers a service restart, wrapped in the v2 envelope.
+      operationId: postV2AdminSelfUpdateRestart
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Restart triggered
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ============================================================
+  # Admin: scans
+  # ============================================================
+  /api/v2/admin/scans:
+    post:
+      tags: [Admin]
+      summary: Trigger full scan
+      description: |
+        Triggers an asynchronous full scan of all configured launchers.
+        Returns `202 Accepted` immediately. Response is wrapped in the v2 envelope.
+      operationId: postV2AdminScans
+      security:
+        - BearerAuth: []
+      responses:
+        '202':
+          description: Scan triggered
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v2/admin/scans/launcher:
+    post:
+      tags: [Admin]
+      summary: Trigger single launcher scan
+      description: |
+        Triggers an asynchronous scan of a single launcher.
+        Returns `202 Accepted` immediately. Response is wrapped in the v2 envelope.
+      operationId: postV2AdminScansLauncher
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScanLauncherRequest'
+      responses:
+        '202':
+          description: Scan triggered
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  # ============================================================
+  # Security schemes
+  # ============================================================
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Admin bearer token obtained via `POST /api/v2/auth/login`.
+        Send as `Authorization: Bearer <token>`. The token may also be sent
+        via the `admin_token` cookie.
+
+  # ============================================================
+  # Reusable parameters
+  # ============================================================
+  parameters:
+    LauncherPath:
+      name: launcher
+      in: path
+      required: true
+      description: Launcher identifier (must match a configured launcher `name`)
+      schema:
+        type: string
+        example: fcl
+
+  # ============================================================
+  # Reusable responses
+  # ============================================================
+  responses:
+    BadRequest:
+      description: Bad request (malformed body or missing required parameters)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: bad_request
+              message: Bad Request
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    Unauthorized:
+      description: Unauthorized (missing or invalid token)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: unauthorized
+              message: Unauthorized
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    Forbidden:
+      description: Forbidden (admin disabled, invalid path, or access denied)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: admin_disabled
+              message: Admin console is disabled
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: not_found
+              message: Launcher "nonexistent" not found
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    MethodNotAllowed:
+      description: Method not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: method_not_allowed
+              message: Method Not Allowed
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: internal_error
+              message: Failed to fetch stats
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+
+  # ============================================================
+  # Schemas
+  # ============================================================
+  schemas:
+    # ----------------------------------------------------------
+    # Envelope
+    # ----------------------------------------------------------
+    V2Meta:
+      type: object
+      description: Metadata included in every v2 envelope response.
+      properties:
+        version:
+          type: string
+          example: v2
+          description: API version
+        timestamp:
+          type: string
+          format: date-time
+          example: 2026-06-18T12:00:00Z
+          description: Server-side UTC timestamp (RFC 3339)
+        request_id:
+          type: string
+          example: a1b2c3d4e5f6g7h8
+          description: 16-character hex request ID for log tracing
+        cached:
+          type: boolean
+          example: false
+          description: Whether the response was served from server-side cache
+      required: [version, timestamp]
+
+    V2Error:
+      type: object
+      description: Error payload included in the v2 envelope when a request fails.
+      properties:
+        code:
+          type: string
+          example: not_found
+          description: Machine-readable error code
+        message:
+          type: string
+          example: Launcher "nonexistent" not found
+          description: Human-readable error message
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional additional error details
+      required: [code, message]
+
+    V2Envelope:
+      type: object
+      description: |
+        Generic v2 response envelope. On success `data` carries the payload and
+        `error` is null; on failure `data` is null and `error` carries details.
+      properties:
+        data:
+          nullable: true
+          description: |
+            Business payload. Type varies per endpoint; null on error.
+            See each endpoint's response schema for the concrete shape.
+        error:
+          allOf:
+            - $ref: '#/components/schemas/V2Error'
+          nullable: true
+          description: Error payload; null on success.
+        meta:
+          $ref: '#/components/schemas/V2Meta'
+      required: [data, error, meta]
+
+    # ----------------------------------------------------------
+    # Launcher / version
+    # ----------------------------------------------------------
+    LauncherAsset:
+      type: object
+      description: A single release asset attached to a launcher version.
+      properties:
+        name:
+          type: string
+          example: FCL-release-1.3.0.7-all.apk
+        url:
+          type: string
+          example: /download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: Constructed download URL (affected by download_url_base / server_address)
+        size:
+          type: integer
+          format: int64
+          example: 12345678
+          description: Asset size in bytes
+      required: [name, url, size]
+
+    LauncherVersion:
+      type: object
+      description: A single launcher version entry. Mirrors the on-disk index.json shape.
+      properties:
+        tag_name:
+          type: string
+          example: 1.3.0.7
+          description: GitHub Release tag name
+        name:
+          type: string
+          example: 1.3.0.7
+          description: GitHub Release title
+        published_at:
+          type: string
+          example: 2025-01-01T00:00:00Z
+          description: Release publish time (ISO 8601 / RFC 3339)
+        body:
+          type: string
+          description: Optional release notes body
+        clone_url:
+          type: string
+          example: https://beta.miawa.cn/repo/fcl.git
+          description: |
+            Git clone URL. Present only when the launcher's `mode` is `clone` or `all`.
+        assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/LauncherAsset'
+          description: Release assets
+      required: [tag_name]
+
+    # ----------------------------------------------------------
+    # Stats
+    # ----------------------------------------------------------
+    DiskInfo:
+      type: object
+      description: Disk usage of the storage path.
+      properties:
+        total:
+          type: integer
+          format: int64
+          example: 53687091200
+          description: Total disk capacity in bytes
+        free:
+          type: integer
+          format: int64
+          example: 10737418240
+          description: Free space in bytes
+        used:
+          type: integer
+          format: int64
+          example: 42949672960
+          description: Used space in bytes
+      required: [total, free, used]
+
+    DownloadRank:
+      type: object
+      description: Top download rank entry (aggregated by launcher).
+      properties:
+        launcher:
+          type: string
+          example: fcl
+        count:
+          type: integer
+          format: int64
+          example: 120
+      required: [launcher, count]
+
+    RepoDownloadRank:
+      type: object
+      description: Top repo download rank entry.
+      properties:
+        repo_name:
+          type: string
+          example: fcl.git
+        count:
+          type: integer
+          format: int64
+          example: 66
+      required: [repo_name, count]
+
+    GeoStat:
+      type: object
+      description: Geographic distribution entry.
+      properties:
+        country:
+          type: string
+          example: China
+        count:
+          type: integer
+          format: int64
+          example: 300
+      required: [country, count]
+
+    DailyStat:
+      type: object
+      description: Per-day statistics entry.
+      properties:
+        date:
+          type: string
+          example: 2026-05-20
+          description: Date in YYYY-MM-DD format
+        visit_count:
+          type: integer
+          format: int64
+          example: 80
+          description: Visit count for the day
+        download_count:
+          type: integer
+          format: int64
+          example: 22
+          description: Normal download count for the day
+        repo_download_count:
+          type: integer
+          format: int64
+          example: 7
+          description: Repo download count for the day
+        traffic_bytes:
+          type: integer
+          format: int64
+          example: 5368709120
+          description: Normal download traffic in bytes for the day
+        repo_traffic_bytes:
+          type: integer
+          format: int64
+          example: 1073741824
+          description: Repo download traffic in bytes for the day
+      required: [date, visit_count, download_count, repo_download_count, traffic_bytes, repo_traffic_bytes]
+
+    StatsData:
+      type: object
+      description: Site statistics payload.
+      properties:
+        total_visits:
+          type: integer
+          format: int64
+          example: 1500
+          description: Cumulative visit count (all non-download requests)
+        total_downloads:
+          type: integer
+          format: int64
+          example: 450
+          description: Cumulative normal download count (200/206 responses)
+        total_repo_downloads:
+          type: integer
+          format: int64
+          example: 120
+          description: Cumulative repo download count (200/206 responses on /repo/...)
+        total_days:
+          type: integer
+          format: int64
+          example: 15
+          description: Days since first site start
+        last_30_visits:
+          type: integer
+          format: int64
+          example: 300
+          description: Visits in the last 30 days
+        last_30_downloads:
+          type: integer
+          format: int64
+          example: 80
+          description: Normal downloads in the last 30 days
+        last_30_repo_downloads:
+          type: integer
+          format: int64
+          example: 26
+          description: Repo downloads in the last 30 days
+        total_traffic_bytes:
+          type: integer
+          format: int64
+          example: 536870912000
+          description: Cumulative normal download traffic in bytes
+        total_repo_traffic_bytes:
+          type: integer
+          format: int64
+          example: 107374182400
+          description: Cumulative repo download traffic in bytes
+        last_30_traffic_bytes:
+          type: integer
+          format: int64
+          example: 53687091200
+          description: Normal download traffic in bytes over the last 30 days
+        last_30_repo_traffic_bytes:
+          type: integer
+          format: int64
+          example: 10737418240
+          description: Repo download traffic in bytes over the last 30 days
+        disk:
+          allOf:
+            - $ref: '#/components/schemas/DiskInfo'
+          nullable: true
+          description: Disk usage of the storage path (null if unavailable)
+        top_downloads:
+          type: array
+          items:
+            $ref: '#/components/schemas/DownloadRank'
+          description: Top 10 normal downloads ranked by count
+        top_repo_downloads:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepoDownloadRank'
+          description: Top 10 repo downloads ranked by count
+        geo_distribution:
+          type: array
+          items:
+            $ref: '#/components/schemas/GeoStat'
+          description: Top 50 geographic distribution entries (excluding local/blank)
+        daily_stats:
+          type: array
+          items:
+            $ref: '#/components/schemas/DailyStat'
+          description: Per-day statistics for the last 30 days
+        dropped_records:
+          type: integer
+          format: int64
+          example: 0
+          description: Number of stats records dropped due to write queue overflow
+      required:
+        - total_visits
+        - total_downloads
+        - total_repo_downloads
+        - total_days
+        - last_30_visits
+        - last_30_downloads
+        - last_30_repo_downloads
+        - total_traffic_bytes
+        - total_repo_traffic_bytes
+        - last_30_traffic_bytes
+        - last_30_repo_traffic_bytes
+        - top_downloads
+        - top_repo_downloads
+        - geo_distribution
+        - daily_stats
+        - dropped_records
+
+    # ----------------------------------------------------------
+    # Captcha / 2FA
+    # ----------------------------------------------------------
+    CaptchaConfig:
+      type: object
+      description: GeeTest captcha configuration.
+      properties:
+        enabled:
+          type: boolean
+          example: true
+          description: Whether captcha is enabled
+        app_id:
+          type: string
+          example: 9fab8370f958912499555f6ce0cd5c56
+          description: GeeTest App ID for client-side initialization
+      required: [enabled, app_id]
+
+    TwoFactorStatus:
+      type: object
+      description: Two-factor authentication status.
+      properties:
+        enabled:
+          type: boolean
+          example: true
+          description: Whether TOTP 2FA is enabled for admin login
+      required: [enabled]
+
+    # ----------------------------------------------------------
+    # Auth
+    # ----------------------------------------------------------
+    LoginRequest:
+      type: object
+      description: Admin login request body.
+      properties:
+        username:
+          type: string
+          example: admin
+        password:
+          type: string
+          format: password
+          example: secret
+        otp_code:
+          type: string
+          example: "123456"
+          description: TOTP code (required only when 2FA is enabled)
+      required: [username, password]
+
+    LoginResponse:
+      type: object
+      description: Admin login success payload.
+      properties:
+        token:
+          type: string
+          example: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+          description: Bearer token to use for admin endpoints
+      required: [token]
+
+    # ----------------------------------------------------------
+    # Downloads
+    # ----------------------------------------------------------
+    DownloadPrepareRequest:
+      type: object
+      description: Request body for preparing a download without captcha.
+      properties:
+        file_path:
+          type: string
+          example: fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: Target file path relative to storage_path, format `{launcher}/{version}/{filename}`
+        return_url:
+          type: string
+          example: ""
+          description: Optional URL the frontend can redirect to after download
+        source:
+          type: string
+          example: home-latest-download
+          description: Optional source tag for logging/statistics
+      required: [file_path]
+
+    DownloadVerifyRequest:
+      type: object
+      description: Request body for verifying captcha and generating a download token.
+      properties:
+        lot_number:
+          type: string
+          example: e2f0a767a0f74926bbc8daeed22e6f27
+          description: GeeTest SDK callback parameter
+        captcha_output:
+          type: string
+          description: GeeTest SDK callback parameter
+        pass_token:
+          type: string
+          description: GeeTest SDK callback parameter
+        gen_time:
+          type: string
+          example: "1709551234"
+          description: GeeTest SDK callback parameter (timestamp string)
+        file_path:
+          type: string
+          example: fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: Target file path relative to storage_path
+        return_url:
+          type: string
+          description: Optional source page URL
+        source:
+          type: string
+          description: Optional source tag
+      required: [lot_number, captcha_output, pass_token, gen_time, file_path]
+
+    DownloadTokenResponse:
+      type: object
+      description: Download token response returned by `prepare` and `verify`.
+      properties:
+        download_token:
+          type: string
+          example: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+          description: 64-character hex download token
+        download_url:
+          type: string
+          example: /download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: Real download URL (includes token)
+        landing_url:
+          type: string
+          example: /api/v2/downloads/landing?token=a1b2c3...
+          description: Landing page info URL (v2 endpoint)
+      required: [download_token, download_url, landing_url]
+
+    DownloadLandingInfo:
+      type: object
+      description: Download landing info returned by the landing endpoint (Peek mode).
+      properties:
+        download_url:
+          type: string
+          example: /download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: Real download URL (includes token)
+        return_url:
+          type: string
+          example: https://example.com/back
+          description: Source page URL passed in prepare/verify
+        source:
+          type: string
+          example: home-latest-download
+          description: Source tag passed in prepare/verify
+        file_name:
+          type: string
+          example: FCL-release-1.3.0.7-all.apk
+          description: File name extracted from file_path
+        file_path:
+          type: string
+          example: fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
+          description: File path relative to storage_path
+        flow:
+          type: string
+          enum: [prepare, verify]
+          example: prepare
+          description: Token source flow
+      required: [download_url, return_url, source, file_name, file_path, flow]
+
+    # ----------------------------------------------------------
+    # Config
+    # ----------------------------------------------------------
+    LauncherConfig:
+      type: object
+      description: Single launcher configuration entry.
+      properties:
+        name:
+          type: string
+          example: fcl
+          description: Launcher identifier
+        source_url:
+          type: string
+          example: https://github.com/FCL-Team/FoldCraftLauncher
+          description: GitHub source URL
+        repo_selector:
+          type: string
+          description: Optional repo selector
+        mode:
+          type: string
+          enum: [release, clone, all]
+          example: release
+          description: Sync mode
+        include_prerelease:
+          type: boolean
+          example: false
+          description: Whether to include pre-release versions
+        max_versions:
+          type: integer
+          example: 3
+          description: Maximum versions to keep (<=0 defaults to 3)
+      required: [name, source_url, mode, include_prerelease, max_versions]
+
+    Config:
+      type: object
+      description: |
+        Server configuration. Mirrors the `Config` struct in internal/config/config.go.
+        When GET, `admin_password` is redacted (empty string).
+      properties:
+        server_address:
+          type: string
+          example: beta.miawa.cn
+        server_port:
+          type: integer
+          example: 8080
+        check_cron:
+          type: string
+          example: "*/10 * * * *"
+          description: Cron expression for scheduled scans (minute granularity)
+        storage_path:
+          type: string
+          example: download
+          description: Release asset storage directory (relative to project root)
+        github_token:
+          type: string
+          description: GitHub token (can be overridden by GITHUB_TOKEN env var)
+        admin_user:
+          type: string
+          example: admin
+        admin_password:
+          type: string
+          format: password
+          description: |
+            Admin password. On GET this is empty; on POST, empty preserves the
+            existing hash, non-empty is hashed and stored.
+        admin_enabled:
+          type: boolean
+          example: true
+        admin_max_retries:
+          type: integer
+          example: 10
+          description: Max login retries before IP lockout
+        admin_lock_duration:
+          type: integer
+          example: 120
+          description: Lockout duration in minutes
+        proxy_url:
+          type: string
+          description: HTTP proxy URL
+        asset_proxy_url:
+          type: string
+          description: Asset download proxy URL
+        xget_domain:
+          type: string
+          example: https://xget.xi-xu.me
+        xget_enabled:
+          type: boolean
+          example: true
+        download_timeout_minutes:
+          type: integer
+          example: 40
+          description: Per-file download timeout in minutes
+        concurrent_downloads:
+          type: integer
+          example: 3
+        download_url_base:
+          type: string
+          description: External download URL base (falls back to server_address)
+        two_factor_enabled:
+          type: boolean
+          example: false
+        two_factor_secret:
+          type: string
+          description: TOTP secret
+        captcha_enabled:
+          type: boolean
+          example: true
+        captcha_app_id:
+          type: string
+          example: 9fab8370f958912499555f6ce0cd5c56
+        captcha_secret_key:
+          type: string
+          description: GeeTest secret key
+        launchers:
+          type: array
+          items:
+            $ref: '#/components/schemas/LauncherConfig'
+        traffic_limit_gb:
+          type: integer
+          example: 5
+          description: Per-IP daily download traffic limit in GB (0 disables, negative corrected to 5)
+        ban_record_file:
+          type: string
+          example: banned_ips.txt
+        external_blacklist_url:
+          type: string
+          description: External blacklist URL
+        appeal_contact:
+          type: string
+          example: QQ群 https://qm.qq.com/q/FOGt99aayY
+        mysql_host:
+          type: string
+        mysql_port:
+          type: integer
+          example: 3306
+        mysql_user:
+          type: string
+        mysql_password:
+          type: string
+        mysql_database:
+          type: string
+        mysql_migration:
+          type: boolean
+          description: Whether MySQL migration is enabled
+        self_update_enabled:
+          type: boolean
+          example: false
+        self_update_repo_url:
+          type: string
+          description: Self-update repository URL
+        self_update_channel:
+          type: string
+          enum: [notify, release, preview]
+          example: notify
+        self_update_check_cron:
+          type: string
+          description: Cron expression for self-update checks
+        self_update_auto_restart:
+          type: boolean
+          description: Whether to auto-restart after applying an update
+
+    # ----------------------------------------------------------
+    # Blacklist
+    # ----------------------------------------------------------
+    BlacklistItem:
+      type: object
+      description: A single IP blacklist entry.
+      properties:
+        ip:
+          type: string
+          example: 1.2.3.4
+        reason:
+          type: string
+          example: traffic_limit_exceeded
+        source:
+          type: string
+          example: local
+          description: Source of the ban (e.g. local, external)
+        ban_type:
+          type: string
+          example: traffic
+          description: Type of ban
+        created_at:
+          type: string
+          example: 2026-06-18 12:00:00
+          description: Ban creation timestamp
+      required: [ip, reason, source, ban_type, created_at]
+
+    BlacklistRequest:
+      type: object
+      description: Request body for adding an IP to the blacklist.
+      properties:
+        ip:
+          type: string
+          example: 1.2.3.4
+        reason:
+          type: string
+          example: manual ban
+      required: [ip]
+
+    # ----------------------------------------------------------
+    # Files
+    # ----------------------------------------------------------
+    FileEntry:
+      type: object
+      description: A single file/directory entry returned by the files listing endpoint.
+      properties:
+        name:
+          type: string
+          example: FCL-release-1.3.0.7-all.apk
+        is_dir:
+          type: boolean
+          example: false
+          description: Whether the entry is a directory
+        size:
+          type: integer
+          format: int64
+          example: 12345678
+          description: Size in bytes (0 for directories)
+        mod_time:
+          type: string
+          format: date-time
+          example: 2026-06-18T12:00:00Z
+          description: Last modification time
+      required: [name, is_dir, size, mod_time]
+
+    # ----------------------------------------------------------
+    # Self-update
+    # ----------------------------------------------------------
+    SelfUpdateTagInfo:
+      type: object
+      description: A single available update tag.
+      properties:
+        name:
+          type: string
+          example: v1.2.3
+        stable:
+          type: boolean
+          example: true
+        published:
+          type: string
+          format: date-time
+          description: Publish time
+      required: [name, stable, published]
+
+    SelfUpdateStatus:
+      type: object
+      description: Self-update manager status.
+      properties:
+        enabled:
+          type: boolean
+          example: false
+          description: Whether self-update is enabled
+        repo_url:
+          type: string
+          description: Configured repository URL
+        channel:
+          type: string
+          enum: [notify, release, preview]
+          example: notify
+        current_version:
+          type: string
+          example: v1.0.0
+          description: Current running version
+        latest_version:
+          type: string
+          example: v1.2.3
+          description: Latest known version
+        has_update:
+          type: boolean
+          example: false
+          description: Whether a newer version is available
+        can_apply:
+          type: boolean
+          example: false
+          description: Whether an update can be applied
+        pending_restart:
+          type: boolean
+          example: false
+          description: Whether a restart is pending after apply
+        last_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last check time
+        last_applied_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last apply time
+        last_check_error:
+          type: string
+          description: Last check error message (omitted if empty)
+        last_apply_error:
+          type: string
+          description: Last apply error message (omitted if empty)
+        last_apply_message:
+          type: string
+          description: Last apply message (omitted if empty)
+        available_versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SelfUpdateTagInfo'
+          description: Available versions (omitted if empty)
+      required:
+        - enabled
+        - repo_url
+        - channel
+        - current_version
+        - latest_version
+        - has_update
+        - can_apply
+        - pending_restart
+        - last_checked_at
+        - last_applied_at
+
+    # ----------------------------------------------------------
+    # Scans
+    # ----------------------------------------------------------
+    ScanLauncherRequest:
+      type: object
+      description: Request body for triggering a single launcher scan.
+      properties:
+        launcher:
+          type: string
+          example: fcl
+          description: Launcher identifier (must match a configured launcher name)
+      required: [launcher]
+
+    ScanResponse:
+      type: object
+      description: Scan trigger response payload.
+      properties:
+        status:
+          type: string
+          example: accepted
+          description: Status string (always "accepted")
+        message:
+          type: string
+          example: 扫描已触发
+          description: Human-readable message
+      required: [status, message]
+
+    # ----------------------------------------------------------
+    # Generic message
+    # ----------------------------------------------------------
+    MessageResponse:
+      type: object
+      description: Generic message payload.
+      properties:
+        message:
+          type: string
+          example: Config updated
+      required: [message]

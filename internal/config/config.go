@@ -19,9 +19,6 @@ const defaultConfigTemplate = `# 柠枺镜像配置文件
 server_address: {{ yaml .ServerAddress }}
 server_port: {{ .ServerPort }}
 
-# 启用的 API 版本：v1（仅旧版）、v2（仅新版）、both（两者并行，默认）
-api_version: {{ yaml .APIVersion }}
-
 # 定时扫描 cron 表达式（分钟粒度）
 check_cron: {{ yaml .CheckCron }}
 
@@ -158,7 +155,6 @@ func ShouldSyncClone(mode string) bool {
 type Config struct {
 	ServerAddress          string           `json:"server_address" yaml:"server_address"`
 	ServerPort             int              `json:"server_port" yaml:"server_port"`
-	APIVersion             string           `json:"api_version" yaml:"api_version"`
 	CheckCron              string           `json:"check_cron" yaml:"check_cron"`
 	StoragePath            string           `json:"storage_path" yaml:"storage_path"`
 	GitHubToken            string           `json:"github_token" yaml:"github_token"`
@@ -200,7 +196,6 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		ServerPort:             8080,
-		APIVersion:             "both",
 		CheckCron:              "*/10 * * * *",
 		StoragePath:            "download",
 		DownloadTimeoutMinutes: 40,
@@ -325,14 +320,6 @@ func NormalizeConfig(cfg *Config) error {
 	}
 	if cfg.AppealContact == "" {
 		cfg.AppealContact = "QQ群 https://qm.qq.com/q/FOGt99aayY"
-	}
-	switch strings.ToLower(cfg.APIVersion) {
-	case "", "both":
-		cfg.APIVersion = "both"
-	case "v1", "v2":
-		// 合法值，保留
-	default:
-		return fmt.Errorf("无效的 api_version %q，需要 v1、v2 或 both", cfg.APIVersion)
 	}
 	return nil
 }

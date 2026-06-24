@@ -1,28 +1,29 @@
 # 柠枺镜像 API 文档
 
-> 本文档覆盖所有公共查询接口、下载接口和扫描触发接口。
-> 后台管理接口（`/api/v1/admin/*`、`/api/v1/auth/login`）不在本文档范围内。
+> 本文档覆盖所有公共查询接口、下载接口、扫描触发接口以及管理后台接口。
+> 所有 API 端点均以 `/api/v2/` 为前缀。
 
 ## 1. 基础约定
 
 ### 1.1 API 版本
 
-所有 API 端点均以 `/api/v1/` 为前缀，如需升级到新版本可并行启用 `/api/v2/` 而不影响现有调用。
+所有 API 端点均以 `/api/v2/` 为前缀，项目仅保留 v2 一套 API，不存在版本选择开关。
 
 ### 1.2 Base URL
 
-- 站内调用使用相对路径：`/api/v1/...`
-- 外部调用拼接站点域名，例如：`https://beta.miawa.cn/api/v1`
+- 站内调用使用相对路径：`/api/v2/...`
+- 外部调用拼接站点域名，例如：`https://beta.miawa.cn/api/v2`
 
 ### 1.3 内容类型
 
 | 接口 | 返回类型 |
 |------|----------|
-| `GET /api/v1/launchers`、`/api/v1/stats` 等查询接口 | `application/json` |
-| `GET /api/v1/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本） |
+| `GET /api/v2/launchers`、`/api/v2/stats` 等查询接口 | `application/json`（统一信封） |
+| `GET /api/v2/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本，不走信封） |
 | `GET /download/{token}/{file_path}` | `application/octet-stream`（文件流） |
 | `GET /repo/{launcher}.git/...` | Git 仓库静态文件（供 `git clone` / `git fetch` 使用） |
-| `POST /api/v1/admin/scans`、`/api/v1/admin/scans/launcher` | `text/plain` 或 `application/json` |
+| `POST /api/v2/admin/scans`、`/api/v2/admin/scans/launcher` | `application/json`（统一信封） |
+| `GET /api/v2/admin/files/download` | `application/octet-stream`（二进制流，不走信封） |
 
 ### 1.4 CORS
 
@@ -30,7 +31,7 @@
 
 ```
 Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS
 Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 ```
 
@@ -41,21 +42,24 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 | 状态码 | 含义 |
 |--------|------|
 | `200 OK` | 请求成功 |
-| `202 Accepted` | 异步任务已触发（扫描接口） |
+| `201 Created` | 资源创建成功（如黑名单新增） |
+| `202 Accepted` | 异步任务已触发（扫描接口、自更新检查） |
+| `304 Not Modified` | ETag 条件请求命中，内容未变 |
 | `400 Bad Request` | 缺少参数、参数格式错误、或验证码未启用 |
 | `401 Unauthorized` | 后台接口需要登录 token |
-| `403 Forbidden` | 下载令牌无效/过期、验证码校验失败、流量超限、IP 被封禁 |
+| `403 Forbidden` | 下载令牌无效/过期、验证码校验失败、流量超限、IP 被封禁、后台未启用 |
 | `404 Not Found` | 启动器不存在、文件不存在、或路径无效 |
 | `405 Method Not Allowed` | 请求方法不正确（如用 GET 访问扫描接口） |
 | `500 Internal Server Error` | 服务端执行失败 |
-| `501 Not Implemented` | 接口尚未实现（`/api/v1/files`） |
+| `501 Not Implemented` | 接口依赖的功能未配置（如自更新未启用） |
+| `502 Bad Gateway` | 自更新检查/应用时与上游通信失败 |
 
 ### 1.6 下载令牌
 
 - 令牌为 64 字符十六进制随机字符串（32 字节），不包含任何用户信息。
 - 默认有效期 **5 分钟**，超时自动失效。
 - **两种操作模式：**
-  - **`Peek`**：查看令牌对应的下载信息，不消耗令牌。`/api/v1/downloads/landing` 使用此模式。
+  - **`Peek`**：查看令牌对应的下载信息，不消耗令牌。`/api/v2/downloads/landing` 使用此模式。
   - **`Validate`**：验证令牌并立即消费（删除）。`/download/{token}/...` 实际下载时使用此模式，令牌一次性有效。
 - 令牌一旦被 `Validate` 消费，后续的 `Peek` 或再次 `Validate` 都会失败。
 - 后台协程每 1 分钟清理一次过期令牌。
@@ -82,24 +86,86 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 
 ### 1.9 内嵌前端资源
 
-- 用户前端（v1 主题 `web/default`、v2 主题 `web/default_v2`）和后台前端（`web/admin`）会被构建进二进制。
-- 服务启动时会根据 `api_version` 配置选择对应主题目录，并自动释放 `web/default`、`web/default_v2`、`web/admin` 到项目目录。
+- 用户前端（`web/default`）和后台前端（`web/admin`）会被构建进二进制。
+- 服务启动时会自动释放 `web/default`、`web/admin` 到项目目录。
 - 当二进制内嵌资源版本变化时，启动时会自动覆盖更新本地前端文件。
-- 主题选择规则：`v2` → `web/default_v2`；`v1` 或 `both` → `web/default`（回退到 `web/default` 保证可用性）。
+
+### 1.10 统一响应信封
+
+所有 JSON 接口返回统一信封结构，客户端只需一套解析逻辑：
+
+```json
+{
+  "data": "<业务载荷，失败时为 null>",
+  "error": {
+    "code": "error_code",
+    "message": "人类可读说明",
+    "details": {}
+  },
+  "meta": {
+    "version": "v2",
+    "timestamp": "2026-06-18T12:00:00Z",
+    "request_id": "a1b2c3d4e5f6g7h8",
+    "cached": false
+  }
+}
+```
+
+- **成功**：`data` 有值，`error` 为 `null`，HTTP 200（扫描/自更新检查接口 202，黑名单新增 201）
+- **失败**：`data` 为 `null`，`error` 有值，HTTP 状态码反映错误类型（400/401/403/404/405/500/501/502）
+- `meta.request_id` 便于日志追踪
+- `meta.cached` 标识是否命中服务端缓存
+
+**不走信封的例外：**
+
+| 接口 | 返回形式 |
+|------|----------|
+| `GET /api/v2/latest/{launcher}` | 纯文本版本号（`text/plain`） |
+| `GET /api/v2/admin/files/download` | 二进制文件流（`application/octet-stream`） |
+
+> 本文后续章节的响应示例仅展示 `data` 字段内容（业务载荷），错误示例仅展示 `error` 字段内容，完整响应请按上述信封结构包裹。
+
+### 1.11 性能特性
+
+#### ETag 条件请求
+
+GET 查询接口（`/launchers`、`/latest`、`/stats` 等）返回 `ETag` 弱标签头。客户端可在后续请求中携带 `If-None-Match` 头，若内容未变则服务端返回 `304 Not Modified`（无响应体），大幅减少带宽和解析开销。
+
+```http
+GET /api/v2/launchers
+→ 200 OK
+  ETag: W/"a1b2c3d4e5f6g7h8"
+  Cache-Control: public, max-age=300
+  { "data": ..., "error": null, "meta": {...} }
+
+GET /api/v2/launchers
+If-None-Match: W/"a1b2c3d4e5f6g7h8"
+→ 304 Not Modified
+```
+
+#### gzip 压缩
+
+当客户端发送 `Accept-Encoding: gzip` 且响应体大于 1KB 时，服务端自动 gzip 压缩并返回 `Content-Encoding: gzip` 头。
+
+#### 统一缓存
+
+所有 GET 查询接口返回 `Cache-Control: public, max-age=300`（5 分钟），服务端内部对 `/stats` 有同 TTL 的内存缓存。
 
 ---
 
 ## 2. 公共查询接口
 
+> 本节所有 JSON 响应均使用 1.10 节定义的统一信封包裹，以下示例仅展示 `data` 字段内容。
+
 ### 2.1 获取所有启动器状态
 
 ```
-GET /api/v1/launchers
+GET /api/v2/launchers
 ```
 
 返回所有启动器的全部版本列表，每个启动器按版本从新到旧排序。
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 {
@@ -144,7 +210,7 @@ GET /api/v1/launchers
 ### 2.2 获取指定启动器状态
 
 ```
-GET /api/v1/launchers/{launcher}
+GET /api/v2/launchers/{launcher}
 ```
 
 **路径参数：**
@@ -155,7 +221,7 @@ GET /api/v1/launchers/{launcher}
 
 返回单个启动器的版本数组。
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 [
@@ -178,19 +244,19 @@ GET /api/v1/launchers/{launcher}
 
 **错误场景：**
 
-- `404 Not Found`：`launcher` 不存在（在配置中未定义或无已扫描版本）
+- `404 Not Found`（`error.code = not_found`）：`launcher` 不存在（在配置中未定义或无已扫描版本）
 
 ### 2.3 获取所有启动器最新版本
 
 ```
-GET /api/v1/latest
+GET /api/v2/latest
 ```
 
 返回每个启动器的最新版本号。**结果同时以 JSON 响应体和自定义响应头两种形式返回**，方便不同场景读取。
 
 **响应头：** `X-Latest-Versions: {"fcl":"1.3.0.7","zl":"141400","zl2":"2.4.4"}`
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 {
@@ -208,7 +274,7 @@ GET /api/v1/latest
 ### 2.4 获取指定启动器最新版本
 
 ```
-GET /api/v1/latest/{launcher}
+GET /api/v2/latest/{launcher}
 ```
 
 **路径参数：**
@@ -217,7 +283,7 @@ GET /api/v1/latest/{launcher}
 |------|------|
 | `launcher` | 启动器标识 |
 
-返回**纯文本**版本号，非 JSON。
+返回**纯文本**版本号，非 JSON，**不走统一信封**。
 
 **响应头：** `X-Latest-Version: 1.3.0.7`
 
@@ -229,19 +295,19 @@ GET /api/v1/latest/{launcher}
 
 **错误场景：**
 
-- `404 Not Found`：`launcher` 不存在
+- `404 Not Found`（`error.code = not_found`）：`launcher` 不存在（错误响应仍走信封）
 
 ### 2.5 获取站点统计信息
 
 ```
-GET /api/v1/stats
+GET /api/v2/stats
 ```
 
-返回访问量、下载量、Repo 拉取量、磁盘占用、热门资源和趋势数据。
+返回访问量、下载量、Repo 拉取量、流量统计、磁盘占用、热门资源和趋势数据。
 
-**缓存：** 响应头 `Cache-Control: public, max-age=300`（5 分钟），服务端内部有同 TTL 的内存缓存。
+**缓存：** 响应头 `Cache-Control: public, max-age=300`（5 分钟），服务端内部有同 TTL 的内存缓存，命中时 `meta.cached = true`。
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 {
@@ -252,6 +318,10 @@ GET /api/v1/stats
   "last_30_visits": 300,
   "last_30_downloads": 80,
   "last_30_repo_downloads": 26,
+  "total_traffic_bytes": 5368709120,
+  "total_repo_traffic_bytes": 1073741824,
+  "last_30_traffic_bytes": 805306368,
+  "last_30_repo_traffic_bytes": 268435456,
   "disk": {
     "total": 53687091200,
     "free": 10737418240,
@@ -260,7 +330,6 @@ GET /api/v1/stats
   "top_downloads": [
     {
       "launcher": "fcl",
-      "version": "1.3.0.7",
       "count": 120
     }
   ],
@@ -281,7 +350,9 @@ GET /api/v1/stats
       "date": "2026-05-20",
       "visit_count": 80,
       "download_count": 22,
-      "repo_download_count": 7
+      "repo_download_count": 7,
+      "traffic_bytes": 83886080,
+      "repo_traffic_bytes": 10485760
     }
   ]
 }
@@ -298,12 +369,15 @@ GET /api/v1/stats
 | `last_30_visits` | int | 最近 30 天访问量 |
 | `last_30_downloads` | int | 最近 30 天普通下载量 |
 | `last_30_repo_downloads` | int | 最近 30 天 Repo 拉取量 |
+| `total_traffic_bytes` | int | 累计普通下载流量（字节） |
+| `total_repo_traffic_bytes` | int | 累计 Repo 拉取流量（字节） |
+| `last_30_traffic_bytes` | int | 最近 30 天普通下载流量（字节） |
+| `last_30_repo_traffic_bytes` | int | 最近 30 天 Repo 拉取流量（字节） |
 | `disk.total` | int | 存储路径所在磁盘总容量（字节） |
 | `disk.free` | int | 剩余可用空间（字节） |
 | `disk.used` | int | 已用空间（字节） |
-| `top_downloads` | array | 普通下载排行 Top 10，按下载次数降序 |
+| `top_downloads` | array | 普通下载排行 Top 10，按启动器聚合，下载次数降序 |
 | `top_downloads[].launcher` | string | 启动器标识 |
-| `top_downloads[].version` | string | 版本号 |
 | `top_downloads[].count` | int | 下载次数 |
 | `top_repo_downloads` | array | Repo 拉取排行 Top 10，按拉取次数降序 |
 | `top_repo_downloads[].repo_name` | string | 仓库名（如 `fcl.git`） |
@@ -316,16 +390,18 @@ GET /api/v1/stats
 | `daily_stats[].visit_count` | int | 当日访问量 |
 | `daily_stats[].download_count` | int | 当日普通下载量 |
 | `daily_stats[].repo_download_count` | int | 当日 Repo 拉取量 |
+| `daily_stats[].traffic_bytes` | int | 当日普通下载流量（字节） |
+| `daily_stats[].repo_traffic_bytes` | int | 当日 Repo 拉取流量（字节） |
 
 ### 2.6 获取验证码配置
 
 ```
-GET /api/v1/captcha/config
+GET /api/v2/captcha/config
 ```
 
 前端发起浏览器下载前可先读取验证码配置，判断是否需要走验证流程。
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 {
@@ -344,12 +420,12 @@ GET /api/v1/captcha/config
 ### 2.7 获取两步验证状态
 
 ```
-GET /api/v1/auth/2fa/status
+GET /api/v2/auth/2fa/status
 ```
 
 返回当前是否启用管理员两步验证（TOTP）。
 
-**响应示例：**
+**响应示例（`data` 字段）：**
 
 ```json
 {
@@ -366,27 +442,31 @@ GET /api/v1/auth/2fa/status
 ### 2.8 触发全量扫描
 
 ```
-POST /api/v1/admin/scans
+POST /api/v2/admin/scans
 ```
 
-触发对所有已配置启动器的全量扫描。扫描为**异步**执行，接口立即返回。
+触发对所有已配置启动器的全量扫描。扫描为**异步**执行，接口立即返回。**需要 Admin 认证。**
 
-**响应：**
+**响应（`data` 字段）：**
 
-```text
-Scan triggered
+```json
+{
+  "status": "accepted",
+  "message": "Scan triggered"
+}
 ```
 
 - 状态码：`202 Accepted`
 - 说明：同一时间只允许一个全量扫描运行（内部互斥锁），若已有扫描在进行中，新的触发会被忽略。
+- 若扫描功能不可用（`scanAllFunc` 未注入），返回 `501 Not Implemented`（`error.code = scan_unavailable`）。
 
 ### 2.9 触发单个启动器扫描
 
 ```
-POST /api/v1/admin/scans/launcher
+POST /api/v2/admin/scans/launcher
 ```
 
-触发对指定启动器的扫描。扫描为**异步**执行。
+触发对指定启动器的扫描。扫描为**异步**执行。**需要 Admin 认证。**
 
 **请求体：**
 
@@ -402,7 +482,7 @@ POST /api/v1/admin/scans/launcher
 |------|------|------|------|
 | `launcher` | string | 是 | 启动器标识，必须与配置中的 `name` 一致 |
 
-**成功响应：**
+**成功响应（`data` 字段）：**
 
 ```json
 {
@@ -415,17 +495,20 @@ POST /api/v1/admin/scans/launcher
 
 **错误场景：**
 
-- `400 Bad Request`：请求体解析失败，或 `launcher` 为空
-- `405 Method Not Allowed`：使用了 GET 等非 POST 方法
+- `400 Bad Request`（`bad_request` / `missing_required_parameters`）：请求体解析失败，或 `launcher` 为空
+- `405 Method Not Allowed`（`method_not_allowed`）：使用了 GET 等非 POST 方法
+- `501 Not Implemented`（`scan_unavailable`）：扫描功能不可用
 
 ---
 
 ## 3. 下载相关接口
 
+> 本节成功响应使用统一信封包裹，以下示例仅展示 `data` 字段内容；错误示例仅展示 `error` 字段内容。
+
 ### 3.1 准备下载（无验证码）
 
 ```
-POST /api/v1/downloads/prepare
+POST /api/v2/downloads/prepare
 ```
 
 在验证码**关闭**时，前端调用此接口生成下载令牌和下载地址。
@@ -448,26 +531,27 @@ POST /api/v1/downloads/prepare
 | `return_url` | string | 否 | 下载完成后前端可用于跳转回来源页面 |
 | `source` | string | 否 | 自定义来源标记，用于日志/统计 |
 
-**成功响应：**
+**成功响应（`data` 字段）：**
 
 ```json
 {
   "download_token": "a1b2c3d4e5f6...（64字符十六进制字符串）",
   "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
-  "landing_url": "/api/v1/downloads/landing?token=a1b2c3..."
+  "landing_url": "/api/v2/downloads/landing?token=a1b2c3..."
 }
 ```
 
 **错误场景：**
 
-- `400 Bad Request`：缺少 `file_path`
-- `403 Forbidden`：文件路径包含 `..` 等非法字符，或路径不在 `storage_path` 范围内
-- `404 Not Found`：`file_path` 对应的文件在磁盘上不存在
+- `400 Bad Request`（`missing_required_parameters`）：缺少 `file_path`
+- `403 Forbidden`（`invalid_path`）：文件路径包含 `..` 等非法字符，或路径不在 `storage_path` 范围内
+- `404 Not Found`（`file_not_found`）：`file_path` 对应的文件在磁盘上不存在
+- `500 Internal Server Error`（`token_generation_failed`）：令牌生成失败
 
 ### 3.2 获取下载引导信息
 
 ```
-GET /api/v1/downloads/landing?token={token}
+GET /api/v2/downloads/landing?token={token}
 ```
 
 **Query 参数：**
@@ -478,7 +562,7 @@ GET /api/v1/downloads/landing?token={token}
 
 前端下载引导页使用此接口读取下载地址、来源信息和文件详情。**此接口使用 `Peek` 模式读取令牌，不消耗令牌。**
 
-**成功响应：**
+**成功响应（`data` 字段）：**
 
 ```json
 {
@@ -504,20 +588,20 @@ GET /api/v1/downloads/landing?token={token}
 
 **错误场景：**
 
-- `400 Bad Request` — 缺少 `token`
+- `400 Bad Request` — 缺少 `token`（`error` 字段）：
 
 ```json
 {
-  "error": "missing_token",
+  "code": "missing_token",
   "message": "Missing token"
 }
 ```
 
-- `403 Forbidden` — 令牌不存在、已过期、或已被下载消费
+- `403 Forbidden` — 令牌不存在、已过期、或已被下载消费：
 
 ```json
 {
-  "error": "expired_token",
+  "code": "expired_token",
   "message": "Download token is invalid or expired"
 }
 ```
@@ -525,7 +609,7 @@ GET /api/v1/downloads/landing?token={token}
 ### 3.3 验证后生成下载令牌
 
 ```
-POST /api/v1/downloads/verify
+POST /api/v2/downloads/verify
 ```
 
 在验证码**开启**时，前端完成极验验证后调用此接口获取下载令牌。
@@ -556,37 +640,37 @@ POST /api/v1/downloads/verify
 | `return_url` | string | 否 | 来源页面地址 |
 | `source` | string | 否 | 来源标记 |
 
-**成功响应：** 与 `prepare` 接口一致
+**成功响应（`data` 字段）：** 与 `prepare` 接口一致
 
 ```json
 {
   "download_token": "a1b2c3d4e5f6...",
   "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
-  "landing_url": "/api/v1/downloads/landing?token=a1b2c3..."
+  "landing_url": "/api/v2/downloads/landing?token=a1b2c3..."
 }
 ```
 
 **错误场景：**
 
 - `400 Bad Request`
-  - 验证码未启用（`captcha_enabled` 为 `false`）
-  - 任一极验参数（`lot_number`、`captcha_output`、`pass_token`、`gen_time`）为空
-  - 缺少 `file_path`
-- `403 Forbidden` — 极验服务端验证不通过
+  - 验证码未启用（`captcha_not_enabled`）
+  - 任一极验参数（`lot_number`、`captcha_output`、`pass_token`、`gen_time`）或 `file_path` 为空（`missing_required_parameters`）
+  - 请求体解析失败（`bad_request`）
+- `403 Forbidden` — 极验服务端验证不通过（`verification_failed`）：
 
 ```json
 {
-  "error": "verification_failed",
+  "code": "verification_failed",
   "message": "极验返回的拒绝原因"
 }
 ```
 
-- `404 Not Found` — `file_path` 对应文件不存在
-- `500 Internal Server Error` — 与极验服务端通信失败
+- `404 Not Found`（`file_not_found`）— `file_path` 对应文件不存在
+- `500 Internal Server Error`（`verification_failed` / `token_generation_failed`）— 与极验服务端通信失败或令牌生成失败
 
 ```json
 {
-  "error": "verification_failed",
+  "code": "verification_failed",
   "message": "Failed to verify captcha"
 }
 ```
@@ -599,7 +683,7 @@ GET /download/{token}/{file_path}
 
 返回真实文件流。token 也可以放在 Query 参数中：`GET /download/{file_path}?token={token}`。
 
-此接口使用 `Validate` 模式消费令牌——**每个令牌仅允许一次成功下载**。
+此接口使用 `Validate` 模式消费令牌——**每个令牌仅允许一次成功下载**。该接口直接返回文件流，不走统一信封。
 
 **在验证码关闭时：**
 - 无 token 的请求仍然可以访问 `/download/...`，但建议走 `prepare → landing → download` 标准流程以进行流量统计和来源追踪。
@@ -656,6 +740,8 @@ GET /download/{token}/{file_path}
 }
 ```
 
+> 注：`/download/...` 的错误响应为兼容浏览器下载场景，使用扁平 `{error, message, ...}` 结构，不走 v2 统一信封。
+
 **支持的 HTTP 特性：**
 - `Range` 请求（断点续传）：响应 `206 Partial Content`
 - 流量预估：根据 `Range` 头计算预估传输字节数，用于流量限制预检
@@ -669,7 +755,7 @@ GET /download/{token}/{file_path}
 ```
 前端                      服务端
  │                          │
- │  POST /api/v1/downloads/prepare
+ │  POST /api/v2/downloads/prepare
  │  { file_path, ... }      │
  │ ─────────────────────────>
  │                          │  生成 token（Flow: "prepare"）
@@ -678,7 +764,7 @@ GET /download/{token}/{file_path}
  │    landing_url }         │
  │ <─────────────────────────
  │                          │
- │  GET /api/v1/downloads/landing?token=...
+ │  GET /api/v2/downloads/landing?token=...
  │ ─────────────────────────>
  │                          │  Peek token（不消费）
  │  { download_url,         │
@@ -699,7 +785,7 @@ GET /download/{token}/{file_path}
 ```
 前端                      服务端                      极验
  │                          │                          │
- │  GET /api/v1/captcha/config
+ │  GET /api/v2/captcha/config
  │ ─────────────────────────>
  │  { enabled, app_id }     │
  │ <─────────────────────────
@@ -708,7 +794,7 @@ GET /download/{token}/{file_path}
  │ ────────────────────────────────────────────────────>
  │ <────────── lot_number, captcha_output, pass_token, gen_time
  │                          │
- │  POST /api/v1/downloads/verify
+ │  POST /api/v2/downloads/verify
  │  { lot_number, ... }     │
  │ ─────────────────────────>
  │                          │  ── POST /api/v2/validate
@@ -720,7 +806,7 @@ GET /download/{token}/{file_path}
  │    landing_url }         │
  │ <─────────────────────────
  │                          │
- │  GET /api/v1/downloads/landing?token=...
+ │  GET /api/v2/downloads/landing?token=...
  │ ─────────────────────────>
  │                          │  Peek token（不消费）
  │  { download_url, ... }   │
@@ -737,17 +823,42 @@ GET /download/{token}/{file_path}
 
 ## 5. 错误码速查
 
+统一信封中 `error.code` 字段使用以下标准化错误码：
+
 | 错误码 | HTTP 状态码 | 含义 |
 |--------|------------|------|
+| `bad_request` | 400 | 请求体解析失败 |
 | `missing_token` | 400 | 缺少 `token` 参数 |
 | `missing_required_parameters` | 400 | 缺少必填字段（`file_path` 等） |
-| `expired_token` | 403 | 令牌不存在、已过期、或已被消费 |
-| `invalid_token` | 403 | 令牌无效（同 `expired_token`，用于下载接口） |
+| `missing_param` | 400 | 缺少查询参数（如 `ip`、`path`） |
+| `captcha_not_enabled` | 400 | 验证码未启用 |
+| `invalid_config` | 400 | 配置校验不通过 |
+| `unauthorized` | 401 | 未提供或提供了无效的管理员 token |
+| `invalid_credentials` | 401 | 用户名或密码错误 |
+| `otp_required` | 401 | 需要两步验证码 |
+| `invalid_otp` | 401 | 两步验证码错误 |
+| `expired_token` | 403 | 下载令牌不存在、已过期、或已被消费 |
+| `invalid_token` | 403 | 令牌无效（下载接口，扁平错误体） |
 | `token_mismatch` | 403 | 令牌绑定的文件与当前请求路径不一致 |
-| `verification_required` | 403 | 需要先完成验证码，无有效令牌 |
+| `verification_required` | 403 | 需要先完成验证码，无有效令牌（下载接口，扁平错误体） |
 | `verification_failed` | 403 | 极验服务端验证不通过 |
+| `invalid_path` | 403 | 文件路径包含非法字符（如 `..`）或超出存储目录 |
+| `forbidden` | 403 | 路径越界或无权限访问 |
+| `admin_disabled` | 403 | 管理后台未启用 |
+| `account_locked` | 403 | 登录失败次数过多，账号已锁定 |
 | `file_not_found` | 404 | 请求的文件在磁盘上不存在 |
-| `invalid_path` | 403/404 | 文件路径包含非法字符（如 `..`）或超出存储目录 |
+| `not_found` | 404 | 资源不存在（启动器、目录等） |
+| `method_not_allowed` | 405 | 请求方法不正确 |
+| `internal_error` | 500 | 服务端内部错误 |
+| `token_generation_failed` | 500 | 下载令牌生成失败 |
+| `hash_failed` | 500 | 密码哈希失败 |
+| `save_failed` | 500 | 配置保存失败 |
+| `restart_failed` | 500 | 进程重启失败 |
+| `admin_not_configured` | 500 | 管理员账号未配置 |
+| `scan_unavailable` | 501 | 扫描功能不可用 |
+| `not_configured` | 501 | 自更新/重启功能未配置 |
+| `check_failed` | 502 | 自更新检查失败 |
+| `apply_failed` | 502 | 自更新应用失败（`error.details.status` 携带最新状态） |
 
 ---
 
@@ -768,10 +879,10 @@ GET /download/{token}/{file_path}
 
 ### 6.2 手动扫描
 
-- `POST /api/v1/admin/scans`：全量扫描所有启动器
-- `POST /api/v1/admin/scans/launcher`：扫描指定启动器
+- `POST /api/v2/admin/scans`：全量扫描所有启动器
+- `POST /api/v2/admin/scans/launcher`：扫描指定启动器
 
-两者均为异步执行，立即返回 `202 Accepted`。同一时间只允许一个全量扫描运行（互斥锁保护）。手动扫描同样遵循 launcher 的 `mode` 配置。
+两者均为异步执行，立即返回 `202 Accepted`。同一时间只允许一个全量扫描运行（互斥锁保护）。手动扫描同样遵循 launcher 的 `mode` 配置。两个接口均需要 Admin 认证。
 
 ### 6.3 版本保留规则
 
@@ -785,201 +896,357 @@ GET /download/{token}/{file_path}
 
 ## 7. 注意事项
 
-- **`GET /api/v1/latest/{launcher}` 返回纯文本**，不是 JSON。解析时不要调用 `JSON.parse()`，直接读取响应文本。
+- **`GET /api/v2/latest/{launcher}` 返回纯文本**，不是 JSON，不走统一信封。解析时不要调用 `JSON.parse()`，直接读取响应文本。
+- **所有其它 JSON 接口均使用 `{data, error, meta}` 统一信封**，解析时先判断 `error` 是否为 `null`。
 - **`/download/...` 接口对 token 的两种操作不同：**
   - `landing` 用 `Peek`（不消费，可多次调用）
   - 实际下载用 `Validate`（消费，一次性，用完即删）
+- **`/download/...` 的错误响应使用扁平 `{error, message, ...}` 结构**，不走统一信封，以兼容浏览器下载场景。
 - **流量限制在下载前做预估**（基于 `Range` 头），下载后按实际字节数精确记录。预估超限和实际超限都会导致封禁。
 - **`return_url` 和 `source` 完全由调用方传入**，服务端不会自动推断来源站点。
 - **`download_url_base` 为空时**，服务端会自动尝试使用 `server_address`，若也为空则通过 `ifconfig.me/ip` 获取公网 IP 作为下载地址 host。
 - **`max_versions = 0` 等价于 `max_versions = 3`**（由 `NormalizeMaxVersions` 函数统一处理，≤0 均修正为 3）。
 - **`traffic_limit_gb` 负值会自动修正为 5** GB，`0` 表示完全禁用。
-- **扫描接口需要 Admin 认证**，调用前需先通过 `/api/v1/auth/login` 登录获取 token。
+- **扫描接口与管理后台接口需要 Admin 认证**，调用前需先通过 `/api/v2/auth/login` 登录获取 token。
 - 站内 API 速查页（`/api`）用于快速浏览与复制示例，**正式接入请以本文档为准**。
 
 ---
 
-## 8. v2 API
+## 8. 管理后台接口
 
-### 8.1 设计目标
+> 本节所有 JSON 响应均使用 1.10 节定义的统一信封包裹，以下示例仅展示 `data` 字段内容；错误示例仅展示 `error` 字段内容。
 
-v2 API 在 v1 基础上优化**可读性**与**性能**，与 v1 并行运行、互不影响：
+### 8.1 认证说明
 
-- **可读性** — 所有 JSON 接口统一 `{data, error, meta}` 信封结构，客户端只需一套解析逻辑
-- **性能** — ETag 条件请求（304 Not Modified）、统一 Cache-Control 缓存头、gzip 压缩
+所有 `/api/v2/admin/*` 接口（以及 `/api/v2/admin/scans*` 扫描接口）均需通过 Admin 认证，认证流程如下：
 
-### 8.2 配置
+1. **登录获取 token：**
 
-在 `config.yaml` 中通过 `api_version` 控制启用的 API 版本：
-
-```yaml
-# 启用的 API 版本：v1（仅旧版）、v2（仅新版）、both（两者并行，默认）
-api_version: both
+```
+POST /api/v2/auth/login
 ```
 
-| 取值 | 行为 |
-|------|------|
-| `v1` | 仅注册 `/api/v1/*` 路由，v2 端点返回 404 |
-| `v2` | 仅注册 `/api/v2/*` 路由，v1 端点返回 404 |
-| `both`（默认/空） | v1 与 v2 路由并行注册 |
-
-非法值（如 `v3`）会导致启动报错。
-
-### 8.3 统一响应信封
-
-所有 v2 JSON 接口返回统一信封：
+**请求体：**
 
 ```json
 {
-  "data": "<业务载荷，失败时为 null>",
-  "error": {
-    "code": "error_code",
-    "message": "人类可读说明",
-    "details": {}
-  },
-  "meta": {
-    "version": "v2",
-    "timestamp": "2026-06-18T12:00:00Z",
-    "request_id": "a1b2c3d4e5f6g7h8",
-    "cached": false
-  }
+  "username": "admin",
+  "password": "your_password",
+  "otp_code": "123456"
 }
 ```
 
-- **成功**：`data` 有值，`error` 为 `null`，HTTP 200（扫描接口 202）
-- **失败**：`data` 为 `null`，`error` 有值，HTTP 状态码反映错误类型（400/403/404/500）
-- `meta.request_id` 便于日志追踪
-- `meta.cached` 标识是否命中服务端缓存
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `username` | string | 是 | 管理员用户名 |
+| `password` | string | 是 | 管理员密码 |
+| `otp_code` | string | 否 | 两步验证码（启用 2FA 时必填） |
 
-**例外：** `GET /api/v2/latest/{launcher}` 仍返回纯文本版本号（与 v1 一致），不走信封。
-
-### 8.4 性能特性
-
-#### ETag 条件请求
-
-GET 查询接口（`/launchers`、`/latest`、`/stats` 等）返回 `ETag` 弱标签头。客户端可在后续请求中携带 `If-None-Match` 头，若内容未变则服务端返回 `304 Not Modified`（无响应体），大幅减少带宽和解析开销。
-
-```http
-GET /api/v2/launchers
-→ 200 OK
-  ETag: W/"a1b2c3d4e5f6g7h8"
-  Cache-Control: public, max-age=300
-  { "data": ..., "error": null, "meta": {...} }
-
-GET /api/v2/launchers
-If-None-Match: W/"a1b2c3d4e5f6g7h8"
-→ 304 Not Modified
-```
-
-#### gzip 压缩
-
-当客户端发送 `Accept-Encoding: gzip` 且响应体大于 1KB 时，服务端自动 gzip 压缩并返回 `Content-Encoding: gzip` 头。
-
-#### 统一缓存
-
-所有 v2 GET 查询接口返回 `Cache-Control: public, max-age=300`（5 分钟）。
-
-### 8.5 v2 端点清单
-
-| v2 端点 | 方法 | 对应 v1 端点 | 说明 |
-|---------|------|-------------|------|
-| `/api/v2/launchers` | GET | `/api/v1/launchers` | 所有启动器状态 |
-| `/api/v2/launchers/{launcher}` | GET | `/api/v1/launchers/{launcher}` | 单个启动器版本数组 |
-| `/api/v2/latest` | GET | `/api/v1/latest` | 所有最新版本 map |
-| `/api/v2/latest/{launcher}` | GET | `/api/v1/latest/{launcher}` | 纯文本版本号（不走信封） |
-| `/api/v2/stats` | GET | `/api/v1/stats` | 站点统计 |
-| `/api/v2/captcha/config` | GET | `/api/v1/captcha/config` | 验证码配置 |
-| `/api/v2/auth/2fa/status` | GET | `/api/v1/auth/2fa/status` | 2FA 状态 |
-| `/api/v2/auth/login` | POST | `/api/v1/auth/login` | 管理员登录 |
-| `/api/v2/downloads/prepare` | POST | `/api/v1/downloads/prepare` | 准备下载（无验证码） |
-| `/api/v2/downloads/landing` | GET | `/api/v1/downloads/landing` | 下载引导信息 |
-| `/api/v2/downloads/verify` | POST | `/api/v1/downloads/verify` | 验证后生成下载令牌 |
-| `/api/v2/admin/scans` | POST | `/api/v1/admin/scans` | 全量扫描（需 admin） |
-| `/api/v2/admin/scans/launcher` | POST | `/api/v1/admin/scans/launcher` | 单启动器扫描（需 admin） |
-
-请求参数与 v1 完全一致，仅响应格式不同。
-
-### 8.6 v2 响应示例
-
-**成功 — 获取所有启动器状态：**
+**成功响应（`data` 字段）：**
 
 ```json
 {
-  "data": {
-    "fcl": [
-      {
-        "tag_name": "1.3.0.7",
-        "name": "1.3.0.7",
-        "published_at": "2025-01-01T00:00:00Z",
-        "is_latest": true,
-        "assets": [...]
-      }
-    ]
-  },
-  "error": null,
-  "meta": {
-    "version": "v2",
-    "timestamp": "2026-06-18T12:00:00Z",
-    "request_id": "a1b2c3d4e5f6g7h8"
-  }
+  "token": "a1b2c3d4e5f6...（管理员 token）"
 }
 ```
 
-**失败 — 启动器不存在：**
-
-```json
-{
-  "data": null,
-  "error": {
-    "code": "not_found",
-    "message": "Launcher \"nonexistent\" not found"
-  },
-  "meta": {
-    "version": "v2",
-    "timestamp": "2026-06-18T12:00:00Z",
-    "request_id": "b2c3d4e5f6g7h8i9"
-  }
-}
-```
-
-**下载令牌生成成功：**
-
-```json
-{
-  "data": {
-    "download_token": "a1b2c3d4e5f6...",
-    "download_url": "/download/a1b2c3.../fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
-    "landing_url": "/api/v2/downloads/landing?token=a1b2c3..."
-  },
-  "error": null,
-  "meta": {
-    "version": "v2",
-    "timestamp": "2026-06-18T12:00:00Z",
-    "request_id": "c3d4e5f6g7h8i9j0"
-  }
-}
-```
-
-### 8.7 v2 错误码
-
-v2 错误信封中的 `error.code` 字段使用以下标准化错误码（与 v1 错误码保持兼容，新增部分标注）：
+**错误场景：**
 
 | 错误码 | HTTP 状态码 | 含义 |
 |--------|------------|------|
-| `not_found` | 404 | 资源不存在（*v2 新增*） |
-| `method_not_allowed` | 405 | 请求方法不正确（*v2 新增*） |
-| `bad_request` | 400 | 请求体解析失败（*v2 新增*） |
-| `internal_error` | 500 | 服务端内部错误（*v2 新增*） |
-| `missing_token` | 400 | 缺少 `token` 参数 |
-| `missing_required_parameters` | 400 | 缺少必填字段 |
-| `expired_token` | 403 | 令牌不存在/过期/已消费 |
-| `invalid_path` | 403 | 文件路径非法 |
-| `file_not_found` | 404 | 文件不存在 |
-| `verification_failed` | 403 | 验证码校验不通过 |
-| `captcha_not_enabled` | 400 | 验证码未启用（*v2 新增*） |
-| `token_generation_failed` | 500 | 令牌生成失败（*v2 新增*） |
-| `invalid_credentials` | 401 | 用户名或密码错误（*v2 新增*） |
-| `account_locked` | 403 | 账号已锁定（*v2 新增*） |
-| `otp_required` | 401 | 需要两步验证码（*v2 新增*） |
-| `invalid_otp` | 401 | 验证码错误（*v2 新增*） |
-| `scan_unavailable` | 501 | 扫描功能不可用（*v2 新增*） |
+| `bad_request` | 400 | 请求体解析失败 |
+| `invalid_credentials` | 401 | 用户名或密码错误 |
+| `otp_required` | 401 | 启用了 2FA 但未提供 `otp_code` |
+| `invalid_otp` | 401 | 两步验证码错误 |
+| `account_locked` | 403 | 登录失败次数过多，账号已锁定（锁定时长由 `admin_lock_duration` 控制） |
+| `admin_not_configured` | 500 | 管理员账号未配置 |
+| `token_generation_failed` | 500 | token 生成失败 |
+
+2. **携带 token 访问后台接口：** 后续请求通过以下任一方式携带 token：
+   - 请求头：`Authorization: Bearer <token>`（或直接 `Authorization: <token>`）
+   - Cookie：`admin_token=<token>`
+
+   token 无效或缺失时返回 `401 Unauthorized`（`error.code = unauthorized`）。
+
+3. **后台开关：** 若配置 `admin_enabled = false`，所有后台接口（含登录）返回 `403 Forbidden`（`error.code = admin_disabled`）。
+
+### 8.2 配置管理
+
+```
+GET  /api/v2/admin/config     # 获取当前配置
+POST /api/v2/admin/config     # 更新配置
+```
+
+**GET 响应（`data` 字段）：** 返回完整配置对象（结构与 `config.yaml` 一致），其中 `admin_password` 字段始终为空字符串（不返回密码哈希）。
+
+**POST 请求体：** 完整配置对象（结构与 `config.yaml` 一致）。
+
+- 若 `admin_password` 为空，保持原密码不变；
+- 若 `admin_password` 非空，则视为新密码，服务端会自动哈希后保存；
+- 配置会经过 `NormalizeConfig` 校验与归一化，保存到 `config.yaml` 并热更新到运行时（含自更新模块配置）。
+
+**POST 成功响应（`data` 字段）：**
+
+```json
+{
+  "message": "Config updated"
+}
+```
+
+**错误场景：**
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `bad_request` | 400 | 请求体解析失败 |
+| `invalid_config` | 400 | 配置校验不通过（`error.message` 含具体原因） |
+| `hash_failed` | 500 | 密码哈希失败 |
+| `save_failed` | 500 | 配置保存失败 |
+| `method_not_allowed` | 405 | 非 GET/POST 方法 |
+
+### 8.3 黑名单管理
+
+```
+GET    /api/v2/admin/blacklist           # 获取黑名单列表
+POST   /api/v2/admin/blacklist           # 新增黑名单条目
+DELETE /api/v2/admin/blacklist?ip={ip}   # 移除黑名单条目
+```
+
+**GET 响应（`data` 字段）：** 黑名单数组，按 `created_at` 降序。
+
+```json
+[
+  {
+    "ip": "1.2.3.4",
+    "reason": "流量超限",
+    "source": "traffic",
+    "ban_type": "local",
+    "created_at": "2026-06-18 12:00:00"
+  }
+]
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `ip` | string | 被封禁的 IP |
+| `reason` | string | 封禁原因 |
+| `source` | string | 来源（如 `traffic`、`manual`、`external`） |
+| `ban_type` | string | 封禁类型 |
+| `created_at` | string | 封禁时间 |
+
+**POST 请求体：**
+
+```json
+{
+  "ip": "1.2.3.4",
+  "reason": "手动封禁"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ip` | string | 是 | 待封禁的 IP |
+| `reason` | string | 否 | 封禁原因 |
+
+**POST 成功响应（`data` 字段）：** 状态码 `201 Created`，并同步封禁记录到内存。
+
+```json
+{
+  "message": "added"
+}
+```
+
+**DELETE：** 通过 Query 参数 `ip` 指定待移除的 IP，成功后同步解封记录。
+
+**DELETE 成功响应（`data` 字段）：**
+
+```json
+{
+  "message": "removed"
+}
+```
+
+**错误场景：**
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `bad_request` | 400 | 请求体解析失败（POST） |
+| `missing_param` | 400 | DELETE 缺少 `ip` 参数 |
+| `internal_error` | 500 | 数据库操作失败 |
+| `method_not_allowed` | 405 | 非 GET/POST/DELETE 方法 |
+
+### 8.4 文件管理
+
+```
+GET    /api/v2/admin/files?path={path}   # 列出目录内容
+POST   /api/v2/admin/files?path={path}   # 上传文件
+DELETE /api/v2/admin/files?path={path}   # 删除文件/目录
+```
+
+`path` 为相对于 `storage_path` 的相对路径。服务端会校验解析后的绝对路径必须位于 `storage_path` 之下，禁止路径穿越。
+
+**GET 响应（`data` 字段）：** 指定目录下的条目数组。
+
+```json
+[
+  {
+    "name": "fcl",
+    "is_dir": true,
+    "size": 0,
+    "mod_time": "2026-06-18T12:00:00Z"
+  },
+  {
+    "name": "FCL-release-1.3.0.7-all.apk",
+    "is_dir": false,
+    "size": 12345678,
+    "mod_time": "2026-06-18T12:00:00Z"
+  }
+]
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 条目名称 |
+| `is_dir` | bool | 是否为目录 |
+| `size` | int | 字节数（目录通常为 0） |
+| `mod_time` | string | 最后修改时间（RFC 3339） |
+
+**POST：** 以 `multipart/form-data` 上传，表单字段名为 `file`。`path` 指定上传目标完整路径（含文件名），服务端会自动创建所需父目录。
+
+**POST 成功响应（`data` 字段）：**
+
+```json
+{
+  "message": "File uploaded"
+}
+```
+
+**DELETE：** 删除 `path` 指定的文件或目录（递归删除）。
+
+**DELETE 成功响应（`data` 字段）：**
+
+```json
+{
+  "message": "deleted"
+}
+```
+
+**错误场景：**
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `missing_param` | 400 | 缺少 `path` 参数 |
+| `bad_request` | 400 | 上传时获取文件失败 |
+| `forbidden` | 403 | 路径越界（不在 `storage_path` 下） |
+| `not_found` | 404 | 目录不存在（GET） |
+| `internal_error` | 500 | 文件系统操作失败 |
+| `method_not_allowed` | 405 | 非 GET/POST/DELETE 方法 |
+
+### 8.5 文件下载
+
+```
+GET /api/v2/admin/files/download?path={path}
+```
+
+下载 `storage_path` 下的指定文件，**返回二进制流，不走统一信封**。
+
+- 响应头：`Content-Type: application/octet-stream`、`Content-Disposition: attachment; filename="<文件名>"`
+- 支持 `Range` 请求（断点续传）
+- `path` 必须指向文件（非目录），且解析后绝对路径必须位于 `storage_path` 之下
+
+**错误场景（错误响应走统一信封）：**
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `missing_param` | 400 | 缺少 `path` 参数 |
+| `forbidden` | 403 | 路径越界 |
+| `not_found` | 404 | 文件不存在或为目录 |
+| `method_not_allowed` | 405 | 非 GET 方法 |
+
+### 8.6 自更新管理
+
+```
+GET  /api/v2/admin/self-update/status    # 查询自更新状态
+POST /api/v2/admin/self-update/check     # 检查是否有可用更新
+POST /api/v2/admin/self-update/apply     # 应用已下载的更新
+POST /api/v2/admin/self-update/restart   # 重启进程以应用更新
+POST /api/v2/admin/self-update           # 触发异步更新检查（后台运行）
+```
+
+**GET status 响应（`data` 字段）：**
+
+```json
+{
+  "enabled": true,
+  "repo_url": "https://github.com/owner/repo",
+  "channel": "stable",
+  "current_version": "1.0.0",
+  "latest_version": "1.1.0",
+  "has_update": true,
+  "can_apply": true,
+  "pending_restart": false,
+  "last_checked_at": "2026-06-18T12:00:00Z",
+  "last_applied_at": "2026-06-18T11:00:00Z",
+  "last_check_error": "",
+  "last_apply_error": "",
+  "last_apply_message": "",
+  "available_versions": [
+    {
+      "name": "v1.1.0",
+      "stable": true,
+      "published": "2026-06-17T00:00:00Z"
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `enabled` | bool | 是否启用自更新 |
+| `repo_url` | string | 更新源仓库地址 |
+| `channel` | string | 更新通道（如 `stable`、`beta`） |
+| `current_version` | string | 当前运行版本 |
+| `latest_version` | string | 最新可用版本 |
+| `has_update` | bool | 是否存在可用更新 |
+| `can_apply` | bool | 是否可以应用更新（已下载完毕） |
+| `pending_restart` | bool | 是否等待重启以生效 |
+| `last_checked_at` | string | 上次检查时间 |
+| `last_applied_at` | string | 上次应用时间 |
+| `last_check_error` | string | 上次检查错误信息（无则省略） |
+| `last_apply_error` | string | 上次应用错误信息（无则省略） |
+| `last_apply_message` | string | 上次应用附加信息（无则省略） |
+| `available_versions` | array | 可用版本列表（无则省略） |
+| `available_versions[].name` | string | 版本标签 |
+| `available_versions[].stable` | bool | 是否为稳定版 |
+| `available_versions[].published` | string | 发布时间 |
+
+**POST check：** 同步检查上游是否有新版本，返回最新的 `status` 对象。
+
+**POST apply：** 应用已下载的更新包，返回最新的 `status` 对象。
+
+**POST restart：** 重启当前进程以使更新生效。
+
+```json
+{
+  "status": "accepted",
+  "message": "重启请求已触发"
+}
+```
+
+**POST /api/v2/admin/self-update：** 异步触发一次更新检查，立即返回 `202 Accepted`。
+
+```json
+{
+  "status": "accepted",
+  "message": "Self update check triggered"
+}
+```
+
+**错误场景：**
+
+| 错误码 | HTTP 状态码 | 含义 |
+|--------|------------|------|
+| `method_not_allowed` | 405 | 请求方法不正确（status 仅 GET，其余仅 POST） |
+| `not_configured` | 501 | 自更新/重启功能未配置（`selfUpdate` 为空） |
+| `check_failed` | 502 | 检查更新失败（`error.message` 含原因） |
+| `apply_failed` | 502 | 应用更新失败（`error.details.status` 携带最新状态） |
+| `restart_failed` | 500 | 重启进程失败 |

@@ -31,7 +31,7 @@ export const globalConfig = {
   },
 
   api: {
-    baseUrl: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+    baseUrl: import.meta.env.VITE_API_BASE_URL || '/api/v2',
     endpoints: {
       status: '/launchers',
       latest: '/latest',

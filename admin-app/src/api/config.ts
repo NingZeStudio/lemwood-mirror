@@ -11,7 +11,7 @@ export async function updateConfig(data: ConfigUpdateRequest): Promise<void> {
 }
 
 export async function triggerLauncherScan(launcher: string): Promise<void> {
-  await api.post('/scan/launcher', { launcher })
+  await api.post('/admin/scans/launcher', { launcher })
 }
 
 export async function getSelfUpdateStatus(): Promise<SelfUpdateStatus> {

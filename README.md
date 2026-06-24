@@ -73,7 +73,7 @@ Windows 下生成 `mirror.exe`。CI 自动构建 Windows/Linux 的 amd64/arm64/x
 go run ./cmd/mirror
 ```
 
-启动时二进制会自动检查并释放内嵌的用户前端（`web/default`、`web/default_v2`）和后台前端（`web/admin`）。服务根据 `api_version` 配置选择对应主题目录（`v2` → `web/default_v2`，其余 → `web/default`）。当二进制内嵌资源版本变化时，会自动覆盖更新本地静态资源。
+启动时二进制会自动检查并释放内嵌的用户前端（`web/default`）和后台前端（`web/admin`）到项目目录。当二进制内嵌资源版本变化时，会自动覆盖更新本地静态资源。
 
 ## 配置说明
 

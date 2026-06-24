@@ -6,11 +6,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/config"
+	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/netutil"
+	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/stats"
+	"lemwood_mirror/internal/traffic"
 	"lemwood_mirror/internal/version"
 	"log"
 	"net/http"
@@ -660,4 +665,330 @@ func buildVersionList(versions map[string]string, infoCache map[string]map[strin
 		return version.Compare(v1, v2) > 0
 	})
 	return list
+}
+
+// ============================================================
+// v2 管理后台 Handler（补全：config/blacklist/files/self-update）
+// ============================================================
+
+// handleV2AdminConfig 管理后台配置读写（信封包裹）。
+func (s *State) handleV2AdminConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		cfgCopy := *s.Config
+		cfgCopy.AdminPassword = "" // 不返回密码哈希
+		writeV2Success(w, r, cfgCopy, false)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+		var newCfg config.Config
+		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+			writeV2Error(w, r, http.StatusBadRequest, "bad_request", "Bad Request", nil)
+			return
+		}
+
+		// 保持密码不变，除非提供了新密码
+		if newCfg.AdminPassword == "" {
+			newCfg.AdminPassword = s.Config.AdminPassword
+		} else {
+			hashed, err := auth.HashPassword(newCfg.AdminPassword)
+			if err != nil {
+				writeV2Error(w, r, http.StatusInternalServerError, "hash_failed", "Failed to hash password", nil)
+				return
+			}
+			newCfg.AdminPassword = hashed
+		}
+
+		if err := config.NormalizeConfig(&newCfg); err != nil {
+			writeV2Error(w, r, http.StatusBadRequest, "invalid_config", fmt.Sprintf("Invalid config: %v", err), nil)
+			return
+		}
+
+		if err := newCfg.Save(s.ProjectRoot); err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "save_failed", "Failed to save config", nil)
+			return
+		}
+
+		s.mu.Lock()
+		s.Config = &newCfg
+		manager := s.selfUpdate
+		s.mu.Unlock()
+
+		if manager != nil {
+			manager.UpdateConfig(selfupdate.Config{
+				Enabled:       newCfg.SelfUpdateEnabled,
+				RepoURL:       newCfg.SelfUpdateRepoURL,
+				Channel:       newCfg.SelfUpdateChannel,
+				AutoRestart:   newCfg.SelfUpdateAutoRestart,
+				ProxyURL:      newCfg.ProxyURL,
+				AssetProxyURL: newCfg.AssetProxyURL,
+			})
+		}
+
+		writeV2Success(w, r, map[string]string{"message": "Config updated"}, false)
+		return
+	}
+
+	writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+}
+
+// handleV2AdminBlacklist 黑名单管理（信封包裹）。
+func (s *State) handleV2AdminBlacklist(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := db.GetIPBlacklist()
+		if err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+			return
+		}
+		writeV2Success(w, r, list, false)
+	case http.MethodPost:
+		var req struct {
+			IP     string `json:"ip"`
+			Reason string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeV2Error(w, r, http.StatusBadRequest, "bad_request", "Bad Request", nil)
+			return
+		}
+		if err := db.AddIPToBlacklist(req.IP, req.Reason); err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+			return
+		}
+		traffic.SyncBanRecord()
+		writeV2Success(w, r, map[string]string{"message": "added"}, false, http.StatusCreated)
+	case http.MethodDelete:
+		ip := r.URL.Query().Get("ip")
+		if ip == "" {
+			writeV2Error(w, r, http.StatusBadRequest, "missing_param", "Missing ip parameter", nil)
+			return
+		}
+		if err := db.RemoveIPFromBlacklist(ip); err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+			return
+		}
+		traffic.SyncBanRecord()
+		writeV2Success(w, r, map[string]string{"message": "removed"}, false)
+	default:
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+	}
+}
+
+// handleV2AdminFiles 文件管理（信封包裹，下载除外）。
+func (s *State) handleV2AdminFiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		path := r.URL.Query().Get("path")
+		fullPath := filepath.Join(s.BasePath, path)
+
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(fullPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			writeV2Error(w, r, http.StatusForbidden, "forbidden", "Forbidden", nil)
+			return
+		}
+
+		entries, err := os.ReadDir(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				writeV2Error(w, r, http.StatusNotFound, "not_found", "Directory not found", nil)
+				return
+			}
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+			return
+		}
+
+		var result []map[string]interface{}
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			result = append(result, map[string]interface{}{
+				"name":     e.Name(),
+				"is_dir":   e.IsDir(),
+				"size":     info.Size(),
+				"mod_time": info.ModTime(),
+			})
+		}
+		writeV2Success(w, r, result, false)
+
+	case http.MethodDelete:
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeV2Error(w, r, http.StatusBadRequest, "missing_param", "Missing path", nil)
+			return
+		}
+		fullPath := filepath.Join(s.BasePath, path)
+		if err := removePathUnderBase(s.BasePath, fullPath); err != nil {
+			if errors.Is(err, errForbiddenPath) {
+				writeV2Error(w, r, http.StatusForbidden, "forbidden", "Forbidden", nil)
+				return
+			}
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", err.Error(), nil)
+			return
+		}
+		writeV2Success(w, r, map[string]string{"message": "deleted"}, false)
+
+	case http.MethodPost:
+		// 文件上传
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			writeV2Error(w, r, http.StatusBadRequest, "missing_param", "Missing path", nil)
+			return
+		}
+		fullPath := filepath.Join(s.BasePath, path)
+
+		absBase, _ := filepath.Abs(s.BasePath)
+		absPath, _ := filepath.Abs(fullPath)
+		if !strings.HasPrefix(absPath, absBase) {
+			writeV2Error(w, r, http.StatusForbidden, "forbidden", "Forbidden", nil)
+			return
+		}
+
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			writeV2Error(w, r, http.StatusBadRequest, "bad_request", "Failed to get file: "+err.Error(), nil)
+			return
+		}
+		defer file.Close()
+
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "Failed to create directory", nil)
+			return
+		}
+
+		dst, err := os.Create(fullPath)
+		if err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "Failed to create file: "+err.Error(), nil)
+			return
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, file); err != nil {
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "Failed to save file", nil)
+			return
+		}
+
+		writeV2Success(w, r, map[string]string{"message": "File uploaded"}, false)
+
+	default:
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+	}
+}
+
+// handleV2AdminFileDownload 文件下载（二进制流，不走信封）。
+func (s *State) handleV2AdminFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeV2Error(w, r, http.StatusBadRequest, "missing_param", "Missing path", nil)
+		return
+	}
+	fullPath := filepath.Join(s.BasePath, path)
+
+	absBase, _ := filepath.Abs(s.BasePath)
+	absPath, _ := filepath.Abs(fullPath)
+	if !strings.HasPrefix(absPath, absBase) {
+		writeV2Error(w, r, http.StatusForbidden, "forbidden", "Forbidden", nil)
+		return
+	}
+
+	info, err := os.Stat(fullPath)
+	if err != nil || info.IsDir() {
+		writeV2Error(w, r, http.StatusNotFound, "not_found", "File not found", nil)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(fullPath)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeFile(w, r, fullPath)
+}
+
+// handleV2AdminSelfUpdateStatus 自更新状态（信封包裹）。
+func (s *State) handleV2AdminSelfUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.selfUpdate == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "not_configured", "Self update not configured", nil)
+		return
+	}
+	writeV2Success(w, r, s.selfUpdate.Status(), false)
+}
+
+// handleV2AdminSelfUpdateCheck 检查更新（信封包裹）。
+func (s *State) handleV2AdminSelfUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.selfUpdate == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "not_configured", "Self update not configured", nil)
+		return
+	}
+	status, err := s.selfUpdate.Check(r.Context())
+	if err != nil {
+		writeV2Error(w, r, http.StatusBadGateway, "check_failed", err.Error(), nil)
+		return
+	}
+	writeV2Success(w, r, status, false)
+}
+
+// handleV2AdminSelfUpdateApply 应用更新（信封包裹）。
+func (s *State) handleV2AdminSelfUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.selfUpdate == nil || s.applySelfUpdate == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "not_configured", "Self update apply is not available", nil)
+		return
+	}
+	if err := s.applySelfUpdate(r.Context()); err != nil {
+		status := s.selfUpdate.SetApplyError(err)
+		writeV2Error(w, r, http.StatusBadGateway, "apply_failed", err.Error(), map[string]any{"status": status})
+		return
+	}
+	writeV2Success(w, r, s.selfUpdate.Status(), false)
+}
+
+// handleV2AdminSelfUpdateRestart 重启进程（信封包裹）。
+func (s *State) handleV2AdminSelfUpdateRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.restartProcess == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "not_configured", "Restart is not available", nil)
+		return
+	}
+	if err := s.restartProcess(); err != nil {
+		writeV2Error(w, r, http.StatusInternalServerError, "restart_failed", err.Error(), nil)
+		return
+	}
+	writeV2Success(w, r, map[string]string{
+		"status":  "accepted",
+		"message": "重启请求已触发",
+	}, false)
+}
+
+// handleV2SelfUpdateCheckEndpoint 触发自更新检查（信封包裹）。
+func (s *State) handleV2SelfUpdateCheckEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.selfUpdateCheckFunc == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "not_configured", "Self update check not available", nil)
+		return
+	}
+	go s.selfUpdateCheckFunc()
+	writeV2Success(w, r, map[string]string{"status": "accepted", "message": "Self update check triggered"}, false, http.StatusAccepted)
 }

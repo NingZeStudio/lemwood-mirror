@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"io"
 	"io/fs"
-	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/blacklist"
 	"lemwood_mirror/internal/captcha"
 	"lemwood_mirror/internal/config"
@@ -293,24 +291,6 @@ func (s *State) clearLatestFlag(infoPath string) error {
 	return nil
 }
 
-func (s *State) AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token == "" {
-			// 也可以尝试从 Cookie 获取
-			if cookie, err := r.Cookie("admin_token"); err == nil {
-				token = cookie.Value
-			}
-		}
-
-		if token == "" || !auth.ValidateToken(token) {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	}
-}
-
 func (s *State) AdminSwitchMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.Config.AdminEnabled {
@@ -325,456 +305,14 @@ func (s *State) AdminSwitchMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *State) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// 获取 IP
-	ip := netutil.ExtractClientIP(r)
-
-	// 检查锁定状态
-	s.loginAttemptsMu.Lock()
-	if unlockTime, locked := s.loginLocks[ip]; locked {
-		if time.Now().Before(unlockTime) {
-			s.loginAttemptsMu.Unlock()
-			diff := time.Until(unlockTime).Round(time.Second)
-			http.Error(w, fmt.Sprintf("账号已被锁定，请在 %v 后重试", diff), http.StatusForbidden)
-			return
-		}
-		// 锁定已过期
-		delete(s.loginLocks, ip)
-		delete(s.loginAttempts, ip)
-	}
-	s.loginAttemptsMu.Unlock()
-
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		OTPCode  string `json:"otp_code"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	// 检查配置中的用户名和密码
-	if s.Config.AdminUser == "" || s.Config.AdminPassword == "" {
-		http.Error(w, "Admin account not configured", http.StatusInternalServerError)
-		return
-	}
-
-	// 验证用户名密码
-	if req.Username != s.Config.AdminUser || !auth.CheckPasswordHash(req.Password, s.Config.AdminPassword) {
-		// 记录失败
-		s.loginAttemptsMu.Lock()
-		s.loginAttempts[ip]++
-		attempts := s.loginAttempts[ip]
-		if attempts >= s.Config.AdminMaxRetries {
-			lockUntil := time.Now().Add(time.Duration(s.Config.AdminLockDuration) * time.Minute)
-			s.loginLocks[ip] = lockUntil
-			log.Printf("IP %s 登录失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
-			s.loginAttemptsMu.Unlock()
-			http.Error(w, fmt.Sprintf("登录失败次数过多，账号已锁定 %d 小时", s.Config.AdminLockDuration/60), http.StatusForbidden)
-		} else {
-			log.Printf("IP %s 登录失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
-			s.loginAttemptsMu.Unlock()
-			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-		}
-		return
-	}
-
-	// 验证 2FA
-	if s.Config.TwoFactorEnabled {
-		if req.OTPCode == "" {
-			http.Error(w, "需要验证码", http.StatusUnauthorized)
-			return
-		}
-		if !auth.ValidateTOTP(req.OTPCode, s.Config.TwoFactorSecret) {
-			s.loginAttemptsMu.Lock()
-			s.loginAttempts[ip]++
-			attempts := s.loginAttempts[ip]
-			if attempts >= s.Config.AdminMaxRetries {
-				lockUntil := time.Now().Add(time.Duration(s.Config.AdminLockDuration) * time.Minute)
-				s.loginLocks[ip] = lockUntil
-				log.Printf("IP %s 2FA 验证失败次数达到上限 (%d)，已锁定至 %v", ip, attempts, lockUntil.Format("2006-01-02 15:04:05"))
-				s.loginAttemptsMu.Unlock()
-				http.Error(w, fmt.Sprintf("登录失败次数过多，账号已锁定 %d 小时", s.Config.AdminLockDuration/60), http.StatusForbidden)
-			} else {
-				log.Printf("IP %s 2FA 验证失败 (%d/%d)", ip, attempts, s.Config.AdminMaxRetries)
-				s.loginAttemptsMu.Unlock()
-				http.Error(w, "验证码错误", http.StatusUnauthorized)
-			}
-			return
-		}
-	}
-
-	// 登录成功，重置计数
-	s.loginAttemptsMu.Lock()
-	delete(s.loginAttempts, ip)
-	delete(s.loginLocks, ip)
-	s.loginAttemptsMu.Unlock()
-
-	token, err := auth.GenerateToken()
-	if err != nil {
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]string{
-		"token": token,
-	})
-}
-
-func (s *State) handle2FAStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{
-		"enabled": s.Config.TwoFactorEnabled,
-	})
-}
-
-func (s *State) handleAdminConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		// 返回脱敏后的配置
-		cfgCopy := *s.Config
-		cfgCopy.AdminPassword = "" // 不返回密码哈希
-		json.NewEncoder(w).Encode(cfgCopy)
-		return
-	}
-
-	if r.Method == http.MethodPost {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
-		var newCfg config.Config
-		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
-			http.Error(w, "Bad Request", http.StatusBadRequest)
-			return
-		}
-
-		// 保持密码不变，除非提供了新密码
-		if newCfg.AdminPassword == "" {
-			newCfg.AdminPassword = s.Config.AdminPassword
-		} else {
-			hashed, err := auth.HashPassword(newCfg.AdminPassword)
-			if err != nil {
-				http.Error(w, "Failed to hash password", http.StatusInternalServerError)
-				return
-			}
-			newCfg.AdminPassword = hashed
-		}
-
-		if err := config.NormalizeConfig(&newCfg); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
-			return
-		}
-
-		if err := newCfg.Save(s.ProjectRoot); err != nil {
-			http.Error(w, "Failed to save config", http.StatusInternalServerError)
-			return
-		}
-
-		s.mu.Lock()
-		s.Config = &newCfg
-		manager := s.selfUpdate
-		s.mu.Unlock()
-
-		if manager != nil {
-			manager.UpdateConfig(selfupdate.Config{
-				Enabled:       newCfg.SelfUpdateEnabled,
-				RepoURL:       newCfg.SelfUpdateRepoURL,
-				Channel:       newCfg.SelfUpdateChannel,
-				AutoRestart:   newCfg.SelfUpdateAutoRestart,
-				ProxyURL:      newCfg.ProxyURL,
-				AssetProxyURL: newCfg.AssetProxyURL,
-			})
-		}
-
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "Config updated")
-		return
-	}
-
-	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-}
-
-func (s *State) handleAdminSelfUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.selfUpdate == nil {
-		http.Error(w, "Self update not configured", http.StatusNotImplemented)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.selfUpdate.Status())
-}
-
-func (s *State) handleAdminSelfUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.selfUpdate == nil {
-		http.Error(w, "Self update not configured", http.StatusNotImplemented)
-		return
-	}
-	status, err := s.selfUpdate.Check(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-}
-
-func (s *State) handleAdminSelfUpdateApply(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.selfUpdate == nil || s.applySelfUpdate == nil {
-		http.Error(w, "Self update apply is not available", http.StatusNotImplemented)
-		return
-	}
-	if err := s.applySelfUpdate(r.Context()); err != nil {
-		status := s.selfUpdate.SetApplyError(err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(status)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.selfUpdate.Status())
-}
-
-func (s *State) handleAdminSelfUpdateRestart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.restartProcess == nil {
-		http.Error(w, "Restart is not available", http.StatusNotImplemented)
-		return
-	}
-	if err := s.restartProcess(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "accepted",
-		"message": "重启请求已触发",
-	})
-}
-
-func (s *State) handleAdminBlacklist(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		list, err := db.GetIPBlacklist()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(list)
-	case http.MethodPost:
-		var req struct {
-			IP     string `json:"ip"`
-			Reason string `json:"reason"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Bad Request", http.StatusBadRequest)
-			return
-		}
-		if err := db.AddIPToBlacklist(req.IP, req.Reason); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// 同步封禁记录文件
-		traffic.SyncBanRecord()
-		w.WriteHeader(http.StatusCreated)
-	case http.MethodDelete:
-		ip := r.URL.Query().Get("ip")
-		if ip == "" {
-			http.Error(w, "Missing ip parameter", http.StatusBadRequest)
-			return
-		}
-		if err := db.RemoveIPFromBlacklist(ip); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// 同步封禁记录文件
-		traffic.SyncBanRecord()
-		w.WriteHeader(http.StatusOK)
-	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *State) handleAdminFiles(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		path := r.URL.Query().Get("path")
-		fullPath := filepath.Join(s.BasePath, path)
-
-		// 安全检查
-		absBase, _ := filepath.Abs(s.BasePath)
-		absPath, _ := filepath.Abs(fullPath)
-		if !strings.HasPrefix(absPath, absBase) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		entries, err := os.ReadDir(fullPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				http.Error(w, "Directory not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		var result []map[string]interface{}
-		for _, e := range entries {
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			result = append(result, map[string]interface{}{
-				"name":     e.Name(),
-				"is_dir":   e.IsDir(),
-				"size":     info.Size(),
-				"mod_time": info.ModTime(),
-			})
-		}
-		json.NewEncoder(w).Encode(result)
-
-	case http.MethodDelete:
-		path := r.URL.Query().Get("path")
-		if path == "" {
-			http.Error(w, "Missing path", http.StatusBadRequest)
-			return
-		}
-		fullPath := filepath.Join(s.BasePath, path)
-
-		if err := removePathUnderBase(s.BasePath, fullPath); err != nil {
-			if errors.Is(err, errForbiddenPath) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		return
-
-	case http.MethodPost:
-		// 文件上传
-		path := r.URL.Query().Get("path")
-		if path == "" {
-			http.Error(w, "Missing path", http.StatusBadRequest)
-			return
-		}
-		fullPath := filepath.Join(s.BasePath, path)
-
-		// 安全检查
-		absBase, _ := filepath.Abs(s.BasePath)
-		absPath, _ := filepath.Abs(fullPath)
-		if !strings.HasPrefix(absPath, absBase) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		// 获取上传的文件
-		file, _, err := r.FormFile("file")
-		if err != nil {
-			http.Error(w, "Failed to get file: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		// 确保目录存在
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			http.Error(w, "Failed to create directory", http.StatusInternalServerError)
-			return
-		}
-
-		// 创建文件（自动替换）
-		dst, err := os.Create(fullPath)
-		if err != nil {
-			http.Error(w, "Failed to create file: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer dst.Close()
-
-		if _, err := io.Copy(dst, file); err != nil {
-			http.Error(w, "Failed to save file", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "File uploaded")
-		return
-
-	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *State) handleAdminFileDownload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		http.Error(w, "Missing path", http.StatusBadRequest)
-		return
-	}
-	fullPath := filepath.Join(s.BasePath, path)
-
-	// 安全检查
-	absBase, _ := filepath.Abs(s.BasePath)
-	absPath, _ := filepath.Abs(fullPath)
-	if !strings.HasPrefix(absPath, absBase) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
-
-	// 检查是否是文件
-	info, err := os.Stat(fullPath)
-	if err != nil || info.IsDir() {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return
-	}
-
-	// 设置下载响应头
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(fullPath)))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeFile(w, r, fullPath)
-}
-
-// getFrontendThemeDir 根据 APIVersion 返回前端主题目录（相对路径）。
-// 主题选择规则：
-//   - v2 模式 → web/default_v2
-//   - v1 模式 → web/default
-//   - both 模式 → web/default（v1 前端，兼容性优先）
-// 若选定目录不存在 index.html，回退到 web/default。
+// getFrontendThemeDir 返回前端主题目录（相对路径）。
+// v1 已移除，始终使用 web/default 主题。
 func (s *State) getFrontendThemeDir() string {
-	preferred := filepath.Join("web", "default")
-	if s.Config != nil && s.Config.APIVersion == "v2" {
-		preferred = filepath.Join("web", "default_v2")
-	}
-	if _, err := os.Stat(filepath.Join(preferred, "index.html")); err == nil {
-		return preferred
-	}
 	return filepath.Join("web", "default")
 }
 
 func (s *State) Routes(mux *http.ServeMux) {
-	// 静态 UI — 根据 APIVersion 选择主题目录
+	// 静态 UI — 使用 v2 主题目录
 	staticDir := s.getFrontendThemeDir()
 	adminStaticDir := filepath.Join("web", "admin")
 	repoDir := filepath.Join(s.ProjectRoot, "repo")
@@ -1120,69 +658,37 @@ func (s *State) Routes(mux *http.ServeMux) {
 	})
 
 	// ============================================================
-	// 公共查询 API 端点 (/api/v1/)
+	// v2 API 端点 (/api/v2/) — 唯一 API 版本，始终注册
 	// ============================================================
-	mux.HandleFunc("/api/v1/launchers", s.handleStatus)
-	mux.HandleFunc("/api/v1/launchers/", s.handleLauncherStatus)
-	mux.HandleFunc("/api/v1/latest", s.handleLatestAll)
-	mux.HandleFunc("/api/v1/latest/", s.handleLatestLauncher)
-	mux.HandleFunc("/api/v1/stats", s.handleStats)
-	mux.HandleFunc("/api/v1/files", s.handleFiles)
-	mux.HandleFunc("/api/v1/captcha/config", s.handleCaptchaConfig)
-	mux.HandleFunc("/api/v1/auth/2fa/status", s.handle2FAStatus)
+	// 公共查询
+	mux.HandleFunc("/api/v2/launchers", s.handleV2Status)
+	mux.HandleFunc("/api/v2/launchers/", s.handleV2LauncherStatus)
+	mux.HandleFunc("/api/v2/latest", s.handleV2LatestAll)
+	mux.HandleFunc("/api/v2/latest/", s.handleV2LatestLauncher)
+	mux.HandleFunc("/api/v2/stats", s.handleV2Stats)
+	mux.HandleFunc("/api/v2/captcha/config", s.handleV2CaptchaConfig)
+	mux.HandleFunc("/api/v2/auth/2fa/status", s.handleV2Auth2FAStatus)
 
-	// 下载 API 端点 (/api/v1/downloads/)
-	mux.HandleFunc("/api/v1/downloads/prepare", s.handleDownloadPrepare)
-	mux.HandleFunc("/api/v1/downloads/landing", s.handleDownloadLanding)
-	mux.HandleFunc("/api/v1/downloads/verify", s.handleDownloadVerify)
+	// 下载
+	mux.HandleFunc("/api/v2/downloads/prepare", s.handleV2DownloadPrepare)
+	mux.HandleFunc("/api/v2/downloads/landing", s.handleV2DownloadLanding)
+	mux.HandleFunc("/api/v2/downloads/verify", s.handleV2DownloadVerify)
 
-	// ============================================================
-	// 管理后台 API 端点 (/api/v1/admin/)
-	// ============================================================
+	// 认证 + 扫描（v2 admin 中间件，返回信封格式错误）
+	mux.Handle("/api/v2/auth/login", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.handleV2Login)))
+	mux.Handle("/api/v2/admin/scans", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanAll))))
+	mux.Handle("/api/v2/admin/scans/launcher", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanLauncher))))
 
-	// 认证
-	mux.Handle("/api/v1/auth/login", s.AdminSwitchMiddleware(http.HandlerFunc(s.handleLogin)))
-
-	// 配置 & 黑名单 & 文件管理
-	mux.Handle("/api/v1/admin/config", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminConfig))))
-	mux.Handle("/api/v1/admin/blacklist", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminBlacklist))))
-	mux.Handle("/api/v1/admin/files", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFiles))))
-	mux.Handle("/api/v1/admin/files/download", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminFileDownload))))
-
-	// 自更新
-	mux.Handle("/api/v1/admin/self-update/status", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateStatus))))
-	mux.Handle("/api/v1/admin/self-update/check", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateCheck))))
-	mux.Handle("/api/v1/admin/self-update/apply", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateApply))))
-	mux.Handle("/api/v1/admin/self-update/restart", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleAdminSelfUpdateRestart))))
-
-	// 扫描
-	mux.Handle("/api/v1/admin/scans", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanAll))))
-	mux.Handle("/api/v1/admin/scans/launcher", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleScanLauncher))))
-	mux.Handle("/api/v1/admin/self-update", s.AdminSwitchMiddleware(http.HandlerFunc(s.AdminMiddleware(s.handleSelfUpdateCheckEndpoint))))
-
-	// ============================================================
-	// v2 API 端点 (/api/v2/) — 受 api_version 配置控制
-	// ============================================================
-	if s.Config != nil && (s.Config.APIVersion == "v2" || s.Config.APIVersion == "both") {
-		// 公共查询
-		mux.HandleFunc("/api/v2/launchers", s.handleV2Status)
-		mux.HandleFunc("/api/v2/launchers/", s.handleV2LauncherStatus)
-		mux.HandleFunc("/api/v2/latest", s.handleV2LatestAll)
-		mux.HandleFunc("/api/v2/latest/", s.handleV2LatestLauncher)
-		mux.HandleFunc("/api/v2/stats", s.handleV2Stats)
-		mux.HandleFunc("/api/v2/captcha/config", s.handleV2CaptchaConfig)
-		mux.HandleFunc("/api/v2/auth/2fa/status", s.handleV2Auth2FAStatus)
-
-		// 下载
-		mux.HandleFunc("/api/v2/downloads/prepare", s.handleV2DownloadPrepare)
-		mux.HandleFunc("/api/v2/downloads/landing", s.handleV2DownloadLanding)
-		mux.HandleFunc("/api/v2/downloads/verify", s.handleV2DownloadVerify)
-
-		// 认证 + 扫描（v2 admin 中间件，返回信封格式错误）
-		mux.Handle("/api/v2/auth/login", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.handleV2Login)))
-		mux.Handle("/api/v2/admin/scans", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanAll))))
-		mux.Handle("/api/v2/admin/scans/launcher", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2ScanLauncher))))
-	}
+	// 管理后台（v2 admin 中间件）
+	mux.Handle("/api/v2/admin/config", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminConfig))))
+	mux.Handle("/api/v2/admin/blacklist", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminBlacklist))))
+	mux.Handle("/api/v2/admin/files", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminFiles))))
+	mux.Handle("/api/v2/admin/files/download", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminFileDownload))))
+	mux.Handle("/api/v2/admin/self-update/status", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminSelfUpdateStatus))))
+	mux.Handle("/api/v2/admin/self-update/check", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminSelfUpdateCheck))))
+	mux.Handle("/api/v2/admin/self-update/apply", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminSelfUpdateApply))))
+	mux.Handle("/api/v2/admin/self-update/restart", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2AdminSelfUpdateRestart))))
+	mux.Handle("/api/v2/admin/self-update", s.v2AdminSwitchMiddleware(http.HandlerFunc(s.v2AdminMiddleware(s.handleV2SelfUpdateCheckEndpoint))))
 
 	// Admin UI
 	mux.Handle("/admin", s.AdminSwitchMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1499,195 +1005,6 @@ func (s *State) pickLatest(versions map[string]string) string {
 	return ""
 }
 
-func (s *State) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	indexCopy := make(map[string]map[string]string)
-	for k, v := range s.index {
-		indexCopy[k] = make(map[string]string)
-		for vk, vv := range v {
-			indexCopy[k][vk] = vv
-		}
-	}
-	infoCacheCopy := make(map[string]map[string]interface{})
-	for k, v := range s.infoCache {
-		infoCacheCopy[k] = v
-	}
-	s.mu.RUnlock()
-
-	result := make(map[string][]map[string]any)
-	for launcher, versions := range indexCopy {
-		var list []map[string]any
-		for v, p := range versions {
-			info := map[string]any{
-				"tag_name": v,
-			}
-
-			if fileInfo, ok := infoCacheCopy[p]; ok {
-				for k, val := range fileInfo {
-					if k != "is_latest" {
-						info[k] = val
-					}
-				}
-			} else {
-				if content, err := os.ReadFile(p); err == nil {
-					var fileInfo map[string]any
-					if err := json.Unmarshal(content, &fileInfo); err == nil {
-						infoCacheCopy[p] = fileInfo
-						s.updateInfoCache(p, fileInfo)
-						for k, val := range fileInfo {
-							if k != "is_latest" {
-								info[k] = val
-							}
-						}
-					}
-				}
-			}
-
-			list = append(list, info)
-		}
-		sort.Slice(list, func(i, j int) bool {
-			v1, _ := list[i]["tag_name"].(string)
-			v2, _ := list[j]["tag_name"].(string)
-			return version.Compare(v1, v2) > 0
-		})
-		result[launcher] = list
-	}
-
-	// 为 clone/all 模式启动器注入 clone_url
-	if s.Config != nil {
-		for _, lc := range s.Config.Launchers {
-			if !config.ShouldSyncClone(lc.Mode) {
-				continue
-			}
-			if list, ok := result[lc.Name]; ok {
-				cloneURL := s.cloneRepoURL(r, lc.Name)
-				for i := range list {
-					list[i]["clone_url"] = cloneURL
-				}
-			}
-		}
-	}
-
-	json.NewEncoder(w).Encode(result)
-}
-
-func (s *State) handleLauncherStatus(w http.ResponseWriter, r *http.Request) {
-	launcher := strings.TrimPrefix(r.URL.Path, "/api/v1/launchers/")
-	s.mu.RLock()
-	versions, ok := s.index[launcher]
-	versionsCopy := make(map[string]string)
-	if ok {
-		for k, v := range versions {
-			versionsCopy[k] = v
-		}
-	}
-	infoCacheCopy := make(map[string]map[string]interface{})
-	for k, v := range s.infoCache {
-		infoCacheCopy[k] = v
-	}
-	s.mu.RUnlock()
-
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	var list []map[string]any
-	for v, p := range versionsCopy {
-		info := map[string]any{"tag_name": v}
-
-		if fileInfo, ok := infoCacheCopy[p]; ok {
-			for k, val := range fileInfo {
-				if k != "is_latest" {
-					info[k] = val
-				}
-			}
-		} else {
-			if content, err := os.ReadFile(p); err == nil {
-				var fileInfo map[string]any
-				if err := json.Unmarshal(content, &fileInfo); err == nil {
-					infoCacheCopy[p] = fileInfo
-					s.updateInfoCache(p, fileInfo)
-					for k, val := range fileInfo {
-						if k != "is_latest" {
-							info[k] = val
-						}
-					}
-				}
-			}
-		}
-
-		list = append(list, info)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		v1, _ := list[i]["tag_name"].(string)
-		v2, _ := list[j]["tag_name"].(string)
-		return version.Compare(v1, v2) > 0
-	})
-
-	// 注入 clone_url
-	if s.Config != nil {
-		for _, lc := range s.Config.Launchers {
-			if lc.Name == launcher && config.ShouldSyncClone(lc.Mode) {
-				cloneURL := s.cloneRepoURL(r, lc.Name)
-				for i := range list {
-					list[i]["clone_url"] = cloneURL
-				}
-				break
-			}
-		}
-	}
-
-	json.NewEncoder(w).Encode(list)
-}
-
-func (s *State) handleFiles(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Not Implemented", http.StatusNotImplemented)
-}
-
-func (s *State) handleLatestAll(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// 添加 Header X-Latest-Versions
-	if b, err := json.Marshal(s.latest); err == nil {
-		w.Header().Set("X-Latest-Versions", string(b))
-	}
-	json.NewEncoder(w).Encode(s.latest)
-}
-
-func (s *State) handleLatestLauncher(w http.ResponseWriter, r *http.Request) {
-	launcher := strings.TrimPrefix(r.URL.Path, "/api/v1/latest/")
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if val, ok := s.latest[launcher]; ok {
-		w.Header().Set("X-Latest-Version", val)
-		w.Write([]byte(val))
-	} else {
-		http.NotFound(w, r)
-	}
-}
-
-func (s *State) handleStats(w http.ResponseWriter, r *http.Request) {
-	data, err := stats.GetStats(s.BasePath)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		log.Printf("获取统计数据失败: %v", err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	json.NewEncoder(w).Encode(data)
-}
-
-func (s *State) handleCaptchaConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"enabled": s.Config.CaptchaEnabled,
-		"app_id":  s.Config.CaptchaAppId,
-	})
-}
-
 type downloadValidationError struct {
 	StatusCode int
 	Code       string
@@ -1768,133 +1085,12 @@ func (s *State) issueDownloadToken(filePath, returnURL, source, flow string) (do
 	return downloadTokenResponse{
 		DownloadToken: token,
 		DownloadURL:   buildDownloadURL(token, filePath),
-		LandingURL:    fmt.Sprintf("/api/v1/downloads/landing?token=%s", url.QueryEscape(token)),
+		LandingURL:    fmt.Sprintf("/api/v2/downloads/landing?token=%s", url.QueryEscape(token)),
 	}, nil
 }
 
 func buildDownloadURL(token, filePath string) string {
 	return fmt.Sprintf("/download/%s/%s", token, filePath)
-}
-
-func (s *State) handleDownloadPrepare(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req downloadPrepareRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	if req.FilePath == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_required_parameters", "Missing required parameters")
-		return
-	}
-
-	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
-		writeJSONError(w, validationErr.StatusCode, validationErr.Code, validationErr.Message)
-		return
-	}
-
-	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "prepare")
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (s *State) handleDownloadLanding(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_token", "Missing token")
-		return
-	}
-
-	entry, valid := s.downloadTokenMgr.Peek(token)
-	if !valid {
-		writeJSONError(w, http.StatusForbidden, "expired_token", "Download token is invalid or expired")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"download_url": buildDownloadURL(token, entry.FilePath),
-		"return_url":   entry.ReturnURL,
-		"source":       entry.Source,
-		"file_name":    filepath.Base(entry.FilePath),
-		"file_path":    entry.FilePath,
-		"flow":         entry.Flow,
-	})
-}
-
-func (s *State) handleDownloadVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if !s.Config.CaptchaEnabled || s.captchaValidator == nil {
-		http.Error(w, "Captcha not enabled", http.StatusBadRequest)
-		return
-	}
-
-	var req downloadVerifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
-	if req.LotNumber == "" || req.CaptchaOutput == "" || req.PassToken == "" || req.GenTime == "" || req.FilePath == "" {
-		http.Error(w, "Missing required parameters", http.StatusBadRequest)
-		return
-	}
-
-	ip := netutil.ExtractClientIP(r)
-
-	result, err := s.captchaValidator.Verify(req.LotNumber, req.CaptchaOutput, req.PassToken, req.GenTime, ip)
-	if err != nil {
-		log.Printf("验证码验证失败: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":   "verification_failed",
-			"message": "Failed to verify captcha",
-		})
-		return
-	}
-
-	if result.Result != "success" {
-		log.Printf("验证码验证不成功: result=%s, reason=%s", result.Result, result.Reason)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "verification_failed",
-			"message": result.Reason,
-		})
-		return
-	}
-
-	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
-		writeJSONError(w, validationErr.StatusCode, validationErr.Code, validationErr.Message)
-		return
-	}
-
-	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "verify")
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
 
 func isBrowserRequest(r *http.Request) bool {
@@ -2140,7 +1336,7 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
         function verifyCaptcha(lotNumber, captchaOutput, passToken, genTime) {
             document.getElementById('loading').style.display = 'flex';
             
-            fetch('/api/v1/downloads/verify', {
+            fetch('/api/v2/downloads/verify', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2198,62 +1394,6 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
 </html>`
 
 	w.Write([]byte(html))
-}
-
-func (s *State) handleScanAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.scanAllFunc != nil {
-		go s.scanAllFunc()
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprintln(w, "Scan triggered")
-	} else {
-		http.Error(w, "Scan not available", http.StatusNotImplemented)
-	}
-}
-
-func (s *State) handleScanLauncher(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.scanLauncherFunc == nil {
-		http.Error(w, "Scan not available", http.StatusNotImplemented)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var req LauncherScanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Launcher == "" {
-		http.Error(w, "launcher is required", http.StatusBadRequest)
-		return
-	}
-	go s.scanLauncherFunc(req.Launcher)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(LauncherScanResponse{
-		Status:  "accepted",
-		Message: "扫描已触发",
-	})
-}
-
-func (s *State) handleSelfUpdateCheckEndpoint(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.selfUpdateCheckFunc != nil {
-		go s.selfUpdateCheckFunc()
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprintln(w, "Self update check triggered")
-	} else {
-		http.Error(w, "Self update check not available", http.StatusNotImplemented)
-	}
 }
 
 // responseWriterCounter 包装 http.ResponseWriter 以统计实际写入的字节数

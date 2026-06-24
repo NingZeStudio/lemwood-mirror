@@ -80,6 +80,25 @@ func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.H
 	return handler, path
 }
 
+// unwrapV2Envelope 解包 v2 信封响应，返回 data 字段。
+func unwrapV2Envelope(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var env struct {
+		Data  map[string]any `json:"data"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("Unmarshal envelope error = %v, body = %s", err, string(body))
+	}
+	if env.Error != nil {
+		t.Fatalf("v2 error: %s - %s", env.Error.Code, env.Error.Message)
+	}
+	return env.Data
+}
+
 func TestDownloadHandlerRejectsBeforeServingWhenLimitWouldBeExceeded(t *testing.T) {
 	handler, path := setupDownloadHandlerTest(t, 1, "hello")
 	ip := "127.0.0.1"
@@ -162,7 +181,7 @@ func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -172,17 +191,14 @@ func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	var resp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if resp["download_token"] == "" {
+	resp := unwrapV2Envelope(t, rec.Body.Bytes())
+	if resp["download_token"] == "" || resp["download_token"] == nil {
 		t.Fatal("download_token should not be empty")
 	}
-	if resp["download_url"] == "" {
+	if resp["download_url"] == "" || resp["download_url"] == nil {
 		t.Fatal("download_url should not be empty")
 	}
-	if resp["landing_url"] == "" {
+	if resp["landing_url"] == "" || resp["landing_url"] == nil {
 		t.Fatal("landing_url should not be empty")
 	}
 }
@@ -195,17 +211,18 @@ func TestDownloadLandingReturnsContext(t *testing.T) {
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareRec := httptest.NewRecorder()
 	handler.ServeHTTP(prepareRec, prepareReq)
 
-	var prepareResp map[string]string
-	if err := json.Unmarshal(prepareRec.Body.Bytes(), &prepareResp); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
+	prepareResp := unwrapV2Envelope(t, prepareRec.Body.Bytes())
+	landingURL, ok := prepareResp["landing_url"].(string)
+	if !ok || landingURL == "" {
+		t.Fatalf("landing_url missing or invalid: %v", prepareResp["landing_url"])
 	}
 
-	landingReq := httptest.NewRequest(http.MethodGet, prepareResp["landing_url"], nil)
+	landingReq := httptest.NewRequest(http.MethodGet, landingURL, nil)
 	landingRec := httptest.NewRecorder()
 	handler.ServeHTTP(landingRec, landingReq)
 
@@ -213,19 +230,16 @@ func TestDownloadLandingReturnsContext(t *testing.T) {
 		t.Fatalf("status = %d, want %d", landingRec.Code, http.StatusOK)
 	}
 
-	var landingResp map[string]string
-	if err := json.Unmarshal(landingRec.Body.Bytes(), &landingResp); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
+	landingResp := unwrapV2Envelope(t, landingRec.Body.Bytes())
 
 	if landingResp["return_url"] != "https://example.com/back" {
-		t.Fatalf("return_url = %q, want %q", landingResp["return_url"], "https://example.com/back")
+		t.Fatalf("return_url = %v, want %q", landingResp["return_url"], "https://example.com/back")
 	}
 	if landingResp["source"] != "homepage" {
-		t.Fatalf("source = %q, want %q", landingResp["source"], "homepage")
+		t.Fatalf("source = %v, want %q", landingResp["source"], "homepage")
 	}
 	if landingResp["file_name"] != "file.txt" {
-		t.Fatalf("file_name = %q, want %q", landingResp["file_name"], "file.txt")
+		t.Fatalf("file_name = %v, want %q", landingResp["file_name"], "file.txt")
 	}
 }
 
@@ -237,21 +251,23 @@ func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
 	state, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
 	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
-	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v1/downloads/prepare", body)
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareRec := httptest.NewRecorder()
 	handler.ServeHTTP(prepareRec, prepareReq)
 
-	var prepareResp map[string]string
-	if err := json.Unmarshal(prepareRec.Body.Bytes(), &prepareResp); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
+	prepareResp := unwrapV2Envelope(t, prepareRec.Body.Bytes())
+	token, ok := prepareResp["download_token"].(string)
+	if !ok || token == "" {
+		t.Fatalf("download_token missing or invalid: %v", prepareResp["download_token"])
 	}
 
-	if _, valid := state.downloadTokenMgr.Validate(prepareResp["download_token"]); !valid {
+	if _, valid := state.downloadTokenMgr.Validate(token); !valid {
 		t.Fatal("Validate() should consume token successfully")
 	}
 
-	landingReq := httptest.NewRequest(http.MethodGet, prepareResp["landing_url"], nil)
+	landingURL, _ := prepareResp["landing_url"].(string)
+	landingReq := httptest.NewRequest(http.MethodGet, landingURL, nil)
 	landingRec := httptest.NewRecorder()
 	handler.ServeHTTP(landingRec, landingReq)
 

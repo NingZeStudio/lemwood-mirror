@@ -90,7 +90,39 @@ func InitWritePool(workers int, queueSize int) {
 	workerWg.Add(1)
 	go ipInfoWorker()
 
+	// 启动 IP 流量记录定期清理 goroutine（每小时清理 24 小时前的 IP 级流量数据）
+	workerWg.Add(1)
+	go trafficCleanupWorker()
+
 	log.Printf("[Stats] 写入工作池已初始化: %d workers, queue size: %d", workers, queueSize)
+}
+
+// trafficCleanupWorker 每小时清理一次 ip_daily_traffic / repo_ip_daily_traffic 中
+// 超过 24 小时的记录。IP 级数据仅保留当日用于防刷墙，历史流量已聚合到无 IP 的 daily_traffic 表。
+func trafficCleanupWorker() {
+	defer workerWg.Done()
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	// 启动时先清理一次
+	if deleted, err := db.CleanupOldTrafficRecords(); err != nil {
+		log.Printf("[Stats] 清理过期 IP 流量记录失败: %v", err)
+	} else if deleted > 0 {
+		log.Printf("[Stats] 清理了 %d 条过期 IP 流量记录", deleted)
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			if deleted, err := db.CleanupOldTrafficRecords(); err != nil {
+				log.Printf("[Stats] 清理过期 IP 流量记录失败: %v", err)
+			} else if deleted > 0 {
+				log.Printf("[Stats] 清理了 %d 条过期 IP 流量记录", deleted)
+			}
+		case <-workerCtx.Done():
+			return
+		}
+	}
 }
 
 func CloseWritePool() {
@@ -299,6 +331,7 @@ func RecordVisit(r *http.Request) {
 		return
 	}
 
+	// 解析 IP 属地后只存储地域信息，不存储 IP 本身
 	getIPInfoAsync(ip, func(info *IPInfo) {
 		country, region, city := "", "", ""
 		if info != nil {
@@ -309,7 +342,7 @@ func RecordVisit(r *http.Request) {
 
 		enqueueWrite(&writeTask{
 			query: `INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			args:  []interface{}{ip, path, ua, referer, country, region, city},
+			args:  []interface{}{"", path, ua, referer, country, region, city},
 		})
 	})
 }
@@ -321,6 +354,7 @@ func RecordDownload(r *http.Request, fileName, launcher, version string) {
 		return
 	}
 
+	// 解析 IP 属地后只存储国家，不存储 IP 本身
 	getIPInfoAsync(ip, func(info *IPInfo) {
 		country := ""
 		if info != nil {
@@ -329,7 +363,7 @@ func RecordDownload(r *http.Request, fileName, launcher, version string) {
 
 		enqueueWrite(&writeTask{
 			query: `INSERT INTO downloads (file_name, launcher, version, ip, country) VALUES (?, ?, ?, ?, ?)`,
-			args:  []interface{}{fileName, launcher, version, ip, country},
+			args:  []interface{}{fileName, launcher, version, "", country},
 		})
 	})
 }
@@ -341,6 +375,7 @@ func RecordRepoDownload(r *http.Request, repoName, repoPath string) {
 		return
 	}
 
+	// 解析 IP 属地后只存储国家，不存储 IP 本身
 	getIPInfoAsync(ip, func(info *IPInfo) {
 		country := ""
 		if info != nil {
@@ -349,30 +384,33 @@ func RecordRepoDownload(r *http.Request, repoName, repoPath string) {
 
 		enqueueWrite(&writeTask{
 			query: `INSERT INTO repo_downloads (repo_name, repo_path, ip, country) VALUES (?, ?, ?, ?)`,
-			args:  []interface{}{repoName, repoPath, ip, country},
+			args:  []interface{}{repoName, repoPath, "", country},
 		})
 	})
 }
 
 type StatsData struct {
-	TotalVisits         int64              `json:"total_visits"`
-	TotalDownloads      int64              `json:"total_downloads"`
-	TotalRepoDownloads  int64              `json:"total_repo_downloads"`
-	TotalDays           int64              `json:"total_days"`
-	Last30Visits        int64              `json:"last_30_visits"`
-	Last30Downloads     int64              `json:"last_30_downloads"`
-	Last30RepoDownloads int64              `json:"last_30_repo_downloads"`
-	Disk                *DiskInfo          `json:"disk"`
-	TopDownloads        []DownloadRank     `json:"top_downloads"`
-	TopRepoDownloads    []RepoDownloadRank `json:"top_repo_downloads"`
-	GeoDistribution     []GeoStat          `json:"geo_distribution"`
-	DailyStats          []DailyStat        `json:"daily_stats"`
-	DroppedRecords      int64              `json:"dropped_records"`
+	TotalVisits            int64              `json:"total_visits"`
+	TotalDownloads         int64              `json:"total_downloads"`
+	TotalRepoDownloads     int64              `json:"total_repo_downloads"`
+	TotalDays              int64              `json:"total_days"`
+	Last30Visits           int64              `json:"last_30_visits"`
+	Last30Downloads        int64              `json:"last_30_downloads"`
+	Last30RepoDownloads    int64              `json:"last_30_repo_downloads"`
+	TotalTrafficBytes      int64              `json:"total_traffic_bytes"`
+	TotalRepoTrafficBytes  int64              `json:"total_repo_traffic_bytes"`
+	Last30TrafficBytes     int64              `json:"last_30_traffic_bytes"`
+	Last30RepoTrafficBytes int64              `json:"last_30_repo_traffic_bytes"`
+	Disk                   *DiskInfo          `json:"disk"`
+	TopDownloads           []DownloadRank     `json:"top_downloads"`
+	TopRepoDownloads       []RepoDownloadRank `json:"top_repo_downloads"`
+	GeoDistribution        []GeoStat          `json:"geo_distribution"`
+	DailyStats             []DailyStat        `json:"daily_stats"`
+	DroppedRecords         int64              `json:"dropped_records"`
 }
 
 type DownloadRank struct {
 	Launcher string `json:"launcher"`
-	Version  string `json:"version"`
 	Count    int64  `json:"count"`
 }
 
@@ -391,6 +429,8 @@ type DailyStat struct {
 	VisitCount        int64  `json:"visit_count"`
 	DownloadCount     int64  `json:"download_count"`
 	RepoDownloadCount int64  `json:"repo_download_count"`
+	TrafficBytes      int64  `json:"traffic_bytes"`
+	RepoTrafficBytes  int64  `json:"repo_traffic_bytes"`
 }
 
 func GetStats(storagePath string) (*StatsData, error) {
@@ -565,14 +605,62 @@ func computeStatsData() *StatsData {
 			queryGeoDistribution(data)
 		}()
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			queryDailyStats(data)
-		}()
+	go func() {
+		defer wg.Done()
+		queryDailyStats(data)
+	}()
 
-		wg.Wait()
-		return data
-	}
+	// 流量统计：goroutine 中只计算总量和构建 date→bytes map，
+	// DailyStats 合并放到 wg.Wait() 后顺序执行，避免与 queryDailyStats 竞争。
+	var dailyTrafficMap, dailyRepoTrafficMap map[string]int64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if v, err := db.GetTotalTraffic(); err == nil {
+			data.TotalTrafficBytes = v
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if v, err := db.GetTotalRepoTraffic(); err == nil {
+			data.TotalRepoTrafficBytes = v
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stats, err := db.GetDailyTrafficStats(30)
+		if err != nil {
+			return
+		}
+		dailyTrafficMap = make(map[string]int64, len(stats))
+		for _, s := range stats {
+			dailyTrafficMap[s.Date] = s.Bytes
+			data.Last30TrafficBytes += s.Bytes
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stats, err := db.GetDailyRepoTrafficStats(30)
+		if err != nil {
+			return
+		}
+		dailyRepoTrafficMap = make(map[string]int64, len(stats))
+		for _, s := range stats {
+			dailyRepoTrafficMap[s.Date] = s.Bytes
+			data.Last30RepoTrafficBytes += s.Bytes
+		}
+	}()
+
+	wg.Wait()
+
+	// 顺序合并每日流量到 DailyStats
+	mergeDailyTraffic(data, dailyTrafficMap, dailyRepoTrafficMap)
+
+	return data
+}
 
 	data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
 	data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
@@ -588,7 +676,43 @@ func computeStatsData() *StatsData {
 	queryGeoDistribution(data)
 	queryDailyStats(data)
 
+	// 流量统计（SQLite 顺序执行）
+	if v, err := db.GetTotalTraffic(); err == nil {
+		data.TotalTrafficBytes = v
+	}
+	if v, err := db.GetTotalRepoTraffic(); err == nil {
+		data.TotalRepoTrafficBytes = v
+	}
+	dailyTrafficMap := make(map[string]int64)
+	if stats, err := db.GetDailyTrafficStats(30); err == nil {
+		for _, s := range stats {
+			dailyTrafficMap[s.Date] = s.Bytes
+			data.Last30TrafficBytes += s.Bytes
+		}
+	}
+	dailyRepoTrafficMap := make(map[string]int64)
+	if stats, err := db.GetDailyRepoTrafficStats(30); err == nil {
+		for _, s := range stats {
+			dailyRepoTrafficMap[s.Date] = s.Bytes
+			data.Last30RepoTrafficBytes += s.Bytes
+		}
+	}
+	mergeDailyTraffic(data, dailyTrafficMap, dailyRepoTrafficMap)
+
 	return data
+}
+
+// mergeDailyTraffic 将每日流量 map 合并到 DailyStats 中对应的日期。
+func mergeDailyTraffic(data *StatsData, trafficMap, repoTrafficMap map[string]int64) {
+	for i := range data.DailyStats {
+		date := data.DailyStats[i].Date
+		if trafficMap != nil {
+			data.DailyStats[i].TrafficBytes = trafficMap[date]
+		}
+		if repoTrafficMap != nil {
+			data.DailyStats[i].RepoTrafficBytes = repoTrafficMap[date]
+		}
+	}
 }
 
 func saveSnapshot(data *StatsData) error {
@@ -672,9 +796,9 @@ func computeTotalDaysSQLite(data *StatsData) {
 
 func queryTopDownloads(data *StatsData) {
 	rows, err := db.DB.Query(`
-		SELECT launcher, version, COUNT(*) as c
+		SELECT launcher, COUNT(*) as c
 		FROM downloads
-		GROUP BY launcher, version
+		GROUP BY launcher
 		ORDER BY c DESC
 		LIMIT 10`)
 	if err != nil {
@@ -685,7 +809,7 @@ func queryTopDownloads(data *StatsData) {
 	var ranks []DownloadRank
 	for rows.Next() {
 		var r DownloadRank
-		if err := rows.Scan(&r.Launcher, &r.Version, &r.Count); err != nil {
+		if err := rows.Scan(&r.Launcher, &r.Count); err != nil {
 			continue
 		}
 		ranks = append(ranks, r)

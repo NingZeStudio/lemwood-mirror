@@ -24,7 +24,6 @@ type Bundle struct {
 func SyncEmbedded(projectRoot string) error {
 	bundles := []Bundle{
 		{Subdir: "web/default", Target: filepath.Join(projectRoot, "web", "default")},
-		{Subdir: "web/default_v2", Target: filepath.Join(projectRoot, "web", "default_v2")},
 		{Subdir: "web/admin", Target: filepath.Join(projectRoot, "web", "admin")},
 	}
 

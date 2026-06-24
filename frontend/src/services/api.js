@@ -5,6 +5,14 @@ const api = axios.create({
     baseURL: globalConfig.api.baseUrl
 })
 
+// v2 信封解包：将 response.data.data 提升到 response.data
+api.interceptors.response.use((response) => {
+    if (response.data && typeof response.data === 'object' && 'data' in response.data && 'meta' in response.data) {
+        response.data = response.data.data
+    }
+    return response
+})
+
 export default api;
 
 export const getStatus = () => api.get('/status');

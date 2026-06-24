@@ -120,7 +120,7 @@ func migrateFromSQLite(sqlitePath string) error {
 	}
 
 	// 2. 迁移数据
-	tables := []string{"visits", "downloads", "repo_downloads", "ip_blacklist", "ip_daily_traffic", "repo_ip_daily_traffic", "system_info"}
+	tables := []string{"visits", "downloads", "repo_downloads", "ip_blacklist", "ip_daily_traffic", "repo_ip_daily_traffic", "daily_traffic", "daily_repo_traffic", "system_info"}
 	for _, table := range tables {
 		if err := migrateTable(sqliteDB, DB, table); err != nil {
 			return fmt.Errorf("迁移表 %s 失败: %w", table, err)
@@ -278,7 +278,15 @@ func createTables() error {
                 PRIMARY KEY (ip, date)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE INDEX idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
-			`CREATE INDEX idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
+		`CREATE INDEX idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
+		`CREATE TABLE IF NOT EXISTS daily_traffic (
+                date VARCHAR(20) PRIMARY KEY,
+                bytes_downloaded BIGINT DEFAULT 0
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS daily_repo_traffic (
+                date VARCHAR(20) PRIMARY KEY,
+                bytes_downloaded BIGINT DEFAULT 0
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 ` + "`key`" + ` VARCHAR(255) PRIMARY KEY,
                 value TEXT,
@@ -347,7 +355,15 @@ func createTables() error {
                 PRIMARY KEY (ip, date)
             )`,
 			`CREATE INDEX IF NOT EXISTS idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
-			`CREATE INDEX IF NOT EXISTS idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
+		`CREATE INDEX IF NOT EXISTS idx_repo_ip_daily_traffic_date ON repo_ip_daily_traffic(date)`,
+		`CREATE TABLE IF NOT EXISTS daily_traffic (
+                date TEXT PRIMARY KEY,
+                bytes_downloaded INTEGER DEFAULT 0
+            )`,
+		`CREATE TABLE IF NOT EXISTS daily_repo_traffic (
+                date TEXT PRIMARY KEY,
+                bytes_downloaded INTEGER DEFAULT 0
+            )`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 key TEXT PRIMARY KEY,
                 value TEXT,
@@ -402,6 +418,11 @@ func createTables() error {
 }
 
 func migrateTables() error {
+	// 迁移：将 ip_daily_traffic / repo_ip_daily_traffic 中的历史数据聚合到 daily_traffic / daily_repo_traffic
+	if err := migrateDailyTrafficAggregate(); err != nil {
+		return fmt.Errorf("迁移每日流量聚合失败: %w", err)
+	}
+
 	if isMySQL {
 		// MySQL 新建表时已经包含了新列
 		return nil
@@ -442,6 +463,41 @@ func migrateTables() error {
 		}
 	}
 
+	return nil
+}
+
+// migrateDailyTrafficAggregate 将 ip_daily_traffic / repo_ip_daily_traffic 中
+// 已有数据聚合到 daily_traffic / daily_repo_traffic（仅首次迁移，不重复执行）。
+func migrateDailyTrafficAggregate() error {
+	// 检查 daily_traffic 是否已有数据，有则跳过
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM daily_traffic").Scan(&count); err != nil {
+		count = 0
+	}
+	if count > 0 {
+		return nil
+	}
+
+	log.Println("[数据库迁移] 将 ip_daily_traffic 历史数据聚合到 daily_traffic")
+
+	var insertPrefix string
+	if isMySQL {
+		insertPrefix = "INSERT IGNORE INTO"
+	} else {
+		insertPrefix = "INSERT OR IGNORE INTO"
+	}
+
+	if _, err := DB.Exec(insertPrefix + ` daily_traffic (date, bytes_downloaded)
+		SELECT date, SUM(bytes_downloaded) FROM ip_daily_traffic GROUP BY date`); err != nil {
+		return fmt.Errorf("聚合 daily_traffic 失败: %w", err)
+	}
+
+	if _, err := DB.Exec(insertPrefix + ` daily_repo_traffic (date, bytes_downloaded)
+		SELECT date, SUM(bytes_downloaded) FROM repo_ip_daily_traffic GROUP BY date`); err != nil {
+		return fmt.Errorf("聚合 daily_repo_traffic 失败: %w", err)
+	}
+
+	log.Println("[数据库迁移] 每日流量聚合完成")
 	return nil
 }
 
@@ -596,7 +652,12 @@ func RecordTraffic(ip string, bytes int64) error {
 	} else {
 		_, err = DB.Exec(query, ip, date, bytes, bytes)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 同时更新无 IP 的每日聚合表（用于历史流量统计，IP 级数据 24 小时后清理）
+	return updateDailyTrafficAggregate("daily_traffic", date, bytes)
 }
 
 func RecordRepoTraffic(ip string, bytes int64) error {
@@ -618,6 +679,31 @@ func RecordRepoTraffic(ip string, bytes int64) error {
 	} else {
 		_, err = DB.Exec(query, ip, date, bytes, bytes)
 	}
+	if err != nil {
+		return err
+	}
+
+	return updateDailyTrafficAggregate("daily_repo_traffic", date, bytes)
+}
+
+// updateDailyTrafficAggregate 更新无 IP 的每日流量聚合表。
+func updateDailyTrafficAggregate(table, date string, bytes int64) error {
+	var query string
+	if isMySQL {
+		query = fmt.Sprintf(`
+			INSERT INTO %s (date, bytes_downloaded) VALUES (?, ?)
+			ON DUPLICATE KEY UPDATE bytes_downloaded = bytes_downloaded + VALUES(bytes_downloaded)`, table)
+	} else {
+		query = fmt.Sprintf(`
+			INSERT INTO %s (date, bytes_downloaded) VALUES (?, ?)
+			ON CONFLICT(date) DO UPDATE SET bytes_downloaded = bytes_downloaded + ?`, table)
+	}
+
+	if isMySQL {
+		_, err := DB.Exec(query, date, bytes)
+		return err
+	}
+	_, err := DB.Exec(query, date, bytes, bytes)
 	return err
 }
 
@@ -647,6 +733,81 @@ func GetRepoTrafficOnDate(ip string, date string) (int64, error) {
 		return 0, nil
 	}
 	return bytes, err
+}
+
+// DailyTrafficStat 每日流量统计
+type DailyTrafficStat struct {
+	Date  string `json:"date"`
+	Bytes int64  `json:"bytes"`
+}
+
+// GetTotalTraffic 返回普通下载总流量（字节），从无 IP 聚合表查询
+func GetTotalTraffic() (int64, error) {
+	var bytes int64
+	err := DB.QueryRow("SELECT COALESCE(SUM(bytes_downloaded), 0) FROM daily_traffic").Scan(&bytes)
+	return bytes, err
+}
+
+// GetTotalRepoTraffic 返回 Repo 拉取总流量（字节），从无 IP 聚合表查询
+func GetTotalRepoTraffic() (int64, error) {
+	var bytes int64
+	err := DB.QueryRow("SELECT COALESCE(SUM(bytes_downloaded), 0) FROM daily_repo_traffic").Scan(&bytes)
+	return bytes, err
+}
+
+// GetDailyTrafficStats 返回最近 N 天每日普通下载流量，从无 IP 聚合表查询
+func GetDailyTrafficStats(days int) ([]DailyTrafficStat, error) {
+	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_traffic WHERE date >= ? ORDER BY date", threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DailyTrafficStat
+	for rows.Next() {
+		var stat DailyTrafficStat
+		if err := rows.Scan(&stat.Date, &stat.Bytes); err != nil {
+			return nil, err
+		}
+		result = append(result, stat)
+	}
+	return result, rows.Err()
+}
+
+// GetDailyRepoTrafficStats 返回最近 N 天每日 Repo 拉取流量，从无 IP 聚合表查询
+func GetDailyRepoTrafficStats(days int) ([]DailyTrafficStat, error) {
+	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_repo_traffic WHERE date >= ? ORDER BY date", threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DailyTrafficStat
+	for rows.Next() {
+		var stat DailyTrafficStat
+		if err := rows.Scan(&stat.Date, &stat.Bytes); err != nil {
+			return nil, err
+		}
+		result = append(result, stat)
+	}
+	return result, rows.Err()
+}
+
+// CleanupOldTrafficRecords 清理 ip_daily_traffic / repo_ip_daily_traffic 中
+// 超过 24 小时的记录（即 date < 今天），IP 级数据仅保留当日用于防刷墙。
+func CleanupOldTrafficRecords() (int64, error) {
+	today := time.Now().Format("2006-01-02")
+	res1, err := DB.Exec("DELETE FROM ip_daily_traffic WHERE date < ?", today)
+	if err != nil {
+		return 0, err
+	}
+	n1, _ := res1.RowsAffected()
+	res2, err := DB.Exec("DELETE FROM repo_ip_daily_traffic WHERE date < ?", today)
+	if err != nil {
+		return n1, err
+	}
+	n2, _ := res2.RowsAffected()
+	return n1 + n2, nil
 }
 func AddExternalBlacklist(ips []string) error {
 	tx, err := DB.Begin()
