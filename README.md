@@ -73,11 +73,13 @@ Windows 下生成 `mirror.exe`。CI 自动构建 Windows/Linux 的 amd64/arm64/x
 go run ./cmd/mirror
 ```
 
-启动时二进制会自动检查并释放内嵌的用户前端（`web/default`）和后台前端（`web/admin`）到项目目录。当二进制内嵌资源版本变化时，会自动覆盖更新本地静态资源。
+启动时二进制会自动释放内嵌的用户前端（`web/default`）和后台前端（`web/admin`）到项目目录。每次启动都会重新释放，内容未变化的文件会跳过写入以减少 IO，确保二进制内嵌的前端版本总是即时生效。
 
 ## 配置说明
 
 运行前编辑根目录 `config.yaml`，以下为示例配置项：
+
+> **旧版升级**：若从 5月及之前的版本升级（使用 `config.json`），服务启动时会自动迁移至 `config.yaml` 并删除旧文件，同时补全新增字段（`launcher.mode`、`self_update_*` 等）的默认值。升级后若发现项目根目录有遗留的 `web/default_v2/` 目录（6月前的双主题构建产物），也会自动清理。
 
 ```yaml
 server_address: ""

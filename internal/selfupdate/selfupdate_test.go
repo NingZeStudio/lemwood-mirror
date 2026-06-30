@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestLooksLikeProxyURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+		desc string
+	}{
+		{"http://127.0.0.1:7890", true, "本地 HTTP 代理"},
+		{"http://127.0.0.1:7890/", true, "带尾斜杠的本地代理"},
+		{"http://proxy.example.com:8080", true, "远程 HTTP 代理"},
+		{"socks5://127.0.0.1:1080", true, "SOCKS5 代理"},
+		{"https://ghproxy.com/", false, "镜像前缀（https 无端口）"},
+		{"https://ghproxy.com", false, "无尾斜杠镜像前缀"},
+		{"https://mirror.example.com/gh/", false, "带路径的镜像前缀"},
+		{"https://proxy.example.com:8443", true, "https 显式端口的代理"},
+		{"", false, "空字符串"},
+		{"not a url", false, "非法字符串"},
+		{"://broken", false, "残缺 URL"},
+	}
+	for _, tt := range cases {
+		if got := looksLikeProxyURL(tt.in); got != tt.want {
+			t.Fatalf("looksLikeProxyURL(%q) = %v, want %v (%s)", tt.in, got, tt.want, tt.desc)
+		}
+	}
+}
+
 func TestNormalizeChannel(t *testing.T) {
 	tests := []struct {
 		in   string

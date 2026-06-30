@@ -277,7 +277,7 @@ func main() {
 		}
 	}
 
-	ghc := gh.NewClient(cfg.GitHubToken)
+	ghc := gh.NewClient(cfg.GitHubToken, cfg.ProxyURL)
 	selfUpdateManager := selfupdate.NewManager(ghc, Version, os.Args[0], buildSelfUpdateConfig(cfg))
 	s.SetSelfUpdateManager(selfUpdateManager)
 

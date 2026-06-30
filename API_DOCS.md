@@ -76,6 +76,8 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - 实际传输完成后，精确字节数会被写入数据库；若对应类型的当日累计超限，IP 会被自动加入本地黑名单。
 - 触发流量封禁后，所有该 IP 的后续请求均返回 `403 Forbidden`。
 
+> **数据库 schema 版本追踪**：系统通过 `system_info` 表中 `key='schema_version'` 的行追踪数据库 schema 版本（缺失视为 v0）。服务启动时会自动应用未执行的版本化迁移，当前目标版本为 v2。迁移只支持 UP 方向，回滚需借助 `mysqldump` 备份恢复。
+
 ### 1.8 Git 仓库镜像
 
 - 当 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会同步 Git 镜像到项目根目录 `repo/{launcher}.git`。
@@ -88,7 +90,7 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 
 - 用户前端（`web/default`）和后台前端（`web/admin`）会被构建进二进制。
 - 服务启动时会自动释放 `web/default`、`web/admin` 到项目目录。
-- 当二进制内嵌资源版本变化时，启动时会自动覆盖更新本地前端文件。
+- 每次启动都会重新释放；内容未变化的文件会跳过写入以减少 IO，确保二进制内嵌的前端版本总是即时生效。
 
 ### 1.10 统一响应信封
 
@@ -984,6 +986,8 @@ POST /api/v2/admin/config     # 更新配置
 - 若 `admin_password` 为空，保持原密码不变；
 - 若 `admin_password` 非空，则视为新密码，服务端会自动哈希后保存；
 - 配置会经过 `NormalizeConfig` 校验与归一化，保存到 `config.yaml` 并热更新到运行时（含自更新模块配置）。
+
+> **配置文件迁移**：服务启动时若检测到旧版 `config.json`（5月及之前使用的格式），会自动迁移至 `config.yaml` 并删除旧文件。迁移过程中会自动补全新增字段的默认值（如 `launcher.mode`、`self_update_*` 等）。已废弃的 `api_version` 字段会在迁移时从文件中移除。
 
 **POST 成功响应（`data` 字段）：**
 

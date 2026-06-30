@@ -13,7 +13,6 @@ repo/
 # Local generated assets
 stats-page.png
 stats-page2.png
-web/admin/.embedded-manifest
 web/pnpm-workspace.yaml
 
 # Local workspace files

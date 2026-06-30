@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	github "github.com/google/go-github/v50/github"
@@ -12,21 +14,56 @@ import (
 )
 
 type Client struct {
-	cli *github.Client
+	cli      atomic.Pointer[github.Client]
+	token    string
+	proxyURL string
 }
 
 type RepositoryRelease = github.RepositoryRelease
 type ReleaseAsset = github.ReleaseAsset
 
-func NewClient(token string) *Client {
+// NewClient 创建 GitHub API 客户端。
+// proxyURL 非空时，所有 GitHub API 请求走该代理；为空时回退到 http.DefaultTransport
+// （即尊重 HTTP_PROXY/HTTPS_PROXY 环境变量）。
+func NewClient(token, proxyURL string) *Client {
+	c := &Client{token: token, proxyURL: proxyURL}
+	c.cli.Store(buildGithubClient(token, proxyURL))
+	return c
+}
+
+// SetProxy 运行时切换代理。传空字符串表示清除代理（仅使用环境变量）。
+// 安全可并发：内部用 atomic.Pointer 替换底层客户端。
+func (c *Client) SetProxy(proxyURL string) {
+	c.proxyURL = proxyURL
+	c.cli.Store(buildGithubClient(c.token, proxyURL))
+}
+
+func (c *Client) client() *github.Client {
+	return c.cli.Load()
+}
+
+// buildGithubClient 构造一个带代理与（可选）token 的 github.Client。
+func buildGithubClient(token, proxyURL string) *github.Client {
+	var base http.RoundTripper = http.DefaultTransport
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			if t, ok := http.DefaultTransport.(*http.Transport); ok {
+				cloned := t.Clone()
+				cloned.Proxy = http.ProxyURL(u)
+				base = cloned
+			}
+		}
+	}
 	var httpClient *http.Client
 	if token != "" {
-		ts := oauth2.StaticTokenSource(
-			&oauth2.Token{AccessToken: token},
-		)
-		httpClient = oauth2.NewClient(context.Background(), ts)
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		httpClient = &http.Client{
+			Transport: &oauth2.Transport{Source: ts, Base: base},
+		}
+	} else {
+		httpClient = &http.Client{Transport: base}
 	}
-	return &Client{cli: github.NewClient(httpClient)}
+	return github.NewClient(httpClient)
 }
 
 // ParseOwnerRepo 从完整的 GitHub 仓库 URL 中提取所有者和仓库名。
@@ -43,13 +80,13 @@ func ParseOwnerRepo(repoURL string) (string, string, error) {
 
 // LatestRelease 仅获取最新的发布元数据。
 func (c *Client) LatestRelease(ctx context.Context, owner, repo string) (*github.RepositoryRelease, *github.Response, error) {
-	return c.cli.Repositories.GetLatestRelease(ctx, owner, repo)
+	return c.client().Repositories.GetLatestRelease(ctx, owner, repo)
 }
 
 // LatestReleaseIncludingPrerelease 获取最新的发布版本（包括 pre-release）。
 // GitHub 的 GetLatestRelease API 不返回 pre-release，所以需要使用 ListReleases。
 func (c *Client) LatestReleaseIncludingPrerelease(ctx context.Context, owner, repo string) (*github.RepositoryRelease, *github.Response, error) {
-	releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: 10})
+	releases, resp, err := c.client().Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: 10})
 	if err != nil {
 		return nil, resp, err
 	}
@@ -61,7 +98,7 @@ func (c *Client) LatestReleaseIncludingPrerelease(ctx context.Context, owner, re
 
 // ListReleases 获取指定数量的 release 列表。
 func (c *Client) ListReleases(ctx context.Context, owner, repo string, limit int) ([]*github.RepositoryRelease, *github.Response, error) {
-	releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: limit})
+	releases, resp, err := c.client().Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{PerPage: limit})
 	if err != nil {
 		return nil, resp, err
 	}
@@ -81,7 +118,7 @@ func (c *Client) ListReleasesByPolicy(ctx context.Context, owner, repo string, l
 	var lastResp *github.Response
 
 	for {
-		releases, resp, err := c.cli.Repositories.ListReleases(ctx, owner, repo, opts)
+		releases, resp, err := c.client().Repositories.ListReleases(ctx, owner, repo, opts)
 		if err != nil {
 			return nil, resp, err
 		}
@@ -122,7 +159,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string, limit int) ([
 	var lastResp *github.Response
 
 	for {
-		tags, resp, err := c.cli.Repositories.ListTags(ctx, owner, repo, opts)
+		tags, resp, err := c.client().Repositories.ListTags(ctx, owner, repo, opts)
 		if err != nil {
 			return nil, resp, err
 		}
@@ -151,7 +188,7 @@ func (c *Client) ListTags(ctx context.Context, owner, repo string, limit int) ([
 }
 
 func (c *Client) GetReleaseByTag(ctx context.Context, owner, repo, tag string) (*github.RepositoryRelease, *github.Response, error) {
-	return c.cli.Repositories.GetReleaseByTag(ctx, owner, repo, tag)
+	return c.client().Repositories.GetReleaseByTag(ctx, owner, repo, tag)
 }
 
 // BackoffIfRateLimited 检查响应是否受到速率限制，并在需要时休眠。

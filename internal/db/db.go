@@ -120,6 +120,7 @@ func migrateFromSQLite(sqlitePath string) error {
 	}
 
 	// 2. 迁移数据
+	// 注意：stats_snapshot 是缓存表（id=1, data, updated_at），由统计模块重建，不参与数据迁移。
 	tables := []string{"visits", "downloads", "repo_downloads", "ip_blacklist", "ip_daily_traffic", "repo_ip_daily_traffic", "daily_traffic", "daily_repo_traffic", "system_info"}
 	for _, table := range tables {
 		if err := migrateTable(sqliteDB, DB, table); err != nil {
@@ -409,95 +410,11 @@ func createTables() error {
 		}
 	}
 
-	// 数据库迁移：为旧表添加新列
-	if err := migrateTables(); err != nil {
+	// 应用版本化数据库迁移（schema_version 追踪在 system_info 表中）
+	if err := runMigrations(); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
-	return nil
-}
-
-func migrateTables() error {
-	// 迁移：将 ip_daily_traffic / repo_ip_daily_traffic 中的历史数据聚合到 daily_traffic / daily_repo_traffic
-	if err := migrateDailyTrafficAggregate(); err != nil {
-		return fmt.Errorf("迁移每日流量聚合失败: %w", err)
-	}
-
-	if isMySQL {
-		// MySQL 新建表时已经包含了新列
-		return nil
-	}
-	// 检查 ip_blacklist 表是否有 source 列
-	var hasSourceColumn bool
-	rows, err := DB.Query("PRAGMA table_info(ip_blacklist)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull int
-		var dfltValue interface{}
-		var pk int
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
-			continue
-		}
-		if name == "source" {
-			hasSourceColumn = true
-		}
-	}
-
-	// 如果没有 source 列，添加新列
-	if !hasSourceColumn {
-		log.Println("数据库迁移: 为 ip_blacklist 表添加 source 和 ban_type 列")
-		alterQueries := []string{
-			"ALTER TABLE ip_blacklist ADD COLUMN source TEXT DEFAULT 'manual'",
-			"ALTER TABLE ip_blacklist ADD COLUMN ban_type TEXT DEFAULT 'manual'",
-		}
-		for _, q := range alterQueries {
-			if _, err := DB.Exec(q); err != nil {
-				return fmt.Errorf("添加列失败: %w, query: %s", err, q)
-			}
-		}
-	}
-
-	return nil
-}
-
-// migrateDailyTrafficAggregate 将 ip_daily_traffic / repo_ip_daily_traffic 中
-// 已有数据聚合到 daily_traffic / daily_repo_traffic（仅首次迁移，不重复执行）。
-func migrateDailyTrafficAggregate() error {
-	// 检查 daily_traffic 是否已有数据，有则跳过
-	var count int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM daily_traffic").Scan(&count); err != nil {
-		count = 0
-	}
-	if count > 0 {
-		return nil
-	}
-
-	log.Println("[数据库迁移] 将 ip_daily_traffic 历史数据聚合到 daily_traffic")
-
-	var insertPrefix string
-	if isMySQL {
-		insertPrefix = "INSERT IGNORE INTO"
-	} else {
-		insertPrefix = "INSERT OR IGNORE INTO"
-	}
-
-	if _, err := DB.Exec(insertPrefix + ` daily_traffic (date, bytes_downloaded)
-		SELECT date, SUM(bytes_downloaded) FROM ip_daily_traffic GROUP BY date`); err != nil {
-		return fmt.Errorf("聚合 daily_traffic 失败: %w", err)
-	}
-
-	if _, err := DB.Exec(insertPrefix + ` daily_repo_traffic (date, bytes_downloaded)
-		SELECT date, SUM(bytes_downloaded) FROM repo_ip_daily_traffic GROUP BY date`); err != nil {
-		return fmt.Errorf("聚合 daily_repo_traffic 失败: %w", err)
-	}
-
-	log.Println("[数据库迁移] 每日流量聚合完成")
 	return nil
 }
 

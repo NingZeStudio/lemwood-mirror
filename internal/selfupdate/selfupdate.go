@@ -71,6 +71,7 @@ type Manager struct {
 	status         Status
 	applyMu        sync.Mutex
 	httpClient     *http.Client
+	assetProxyURL  string
 	autoRestart    bool
 	onRestart      func() error
 }
@@ -86,15 +87,40 @@ func NewManager(client *gh.Client, currentVersion, binaryPath string, cfg Config
 			Channel:        normalizeChannel(cfg.Channel),
 			CurrentVersion: normalizeVersion(currentVersion),
 		},
-		httpClient:  buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL),
-		autoRestart: cfg.AutoRestart,
+		httpClient:    buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL),
+		assetProxyURL: cfg.AssetProxyURL,
+		autoRestart:   cfg.AutoRestart,
 	}
 	return m
 }
 
+// looksLikeProxyURL 判断 asset_proxy_url 应当作 HTTP 代理还是镜像前缀。
+// 规则：能解析为 URL、有 host、且路径为空（或仅 "/"）时视为 HTTP 代理候选；
+// 其中 https 协议必须显式带端口才视为代理（避免 https://ghproxy.com/ 被误判为代理）。
+// 其余情况（有具体路径，或 https 无端口）视为镜像前缀。
+func looksLikeProxyURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil || u.Host == "" {
+		return false
+	}
+	if strings.Trim(u.Path, "/") != "" {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "socks5", "socks":
+		return true
+	case "https":
+		return u.Port() != ""
+	}
+	return false
+}
+
 func buildHTTPClient(proxyURL, assetProxyURL string) *http.Client {
-	proxy := assetProxyURL
-	if proxy == "" {
+	// asset_proxy_url 看起来像 HTTP 代理时优先用作下载代理；否则回退到 proxy_url。
+	proxy := ""
+	if assetProxyURL != "" && looksLikeProxyURL(assetProxyURL) {
+		proxy = assetProxyURL
+	} else if proxyURL != "" {
 		proxy = proxyURL
 	}
 	transport := &http.Transport{
@@ -103,8 +129,9 @@ func buildHTTPClient(proxyURL, assetProxyURL string) *http.Client {
 		IdleConnTimeout:     90 * time.Second,
 	}
 	if proxy != "" {
-		transport.Proxy = func(_ *http.Request) (*url.URL, error) {
-			return url.Parse(proxy)
+		parsed, err := url.Parse(proxy)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(parsed)
 		}
 	}
 	return &http.Client{
@@ -120,7 +147,12 @@ func (m *Manager) UpdateConfig(cfg Config) {
 	m.status.RepoURL = cfg.RepoURL
 	m.status.Channel = normalizeChannel(cfg.Channel)
 	m.httpClient = buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL)
+	m.assetProxyURL = cfg.AssetProxyURL
 	m.autoRestart = cfg.AutoRestart
+	// 同步更新 GitHub API 客户端的代理，使 Check/Apply 的 API 调用也走代理。
+	if m.client != nil {
+		m.client.SetProxy(cfg.ProxyURL)
+	}
 }
 
 func (m *Manager) SetOnRestart(fn func() error) {
@@ -251,6 +283,7 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 	latestVersion := m.status.LatestVersion
 	repoURL := m.status.RepoURL
 	httpClient := m.httpClient
+	assetProxyURL := m.assetProxyURL
 	m.mu.RUnlock()
 
 	if !canApply {
@@ -277,7 +310,7 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 		return status, err
 	}
 
-	if err := downloadAndReplace(ctx, httpClient, asset, m.binaryPath, isArchive); err != nil {
+	if err := downloadAndReplace(ctx, httpClient, asset, m.binaryPath, isArchive, assetProxyURL); err != nil {
 		status := m.SetApplyError(err)
 		return status, err
 	}
@@ -421,10 +454,15 @@ func platformPatterns() []string {
 	return base
 }
 
-func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.ReleaseAsset, targetPath string, isArchive bool) error {
+func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.ReleaseAsset, targetPath string, isArchive bool, assetProxyURL string) error {
 	downloadURL := asset.GetBrowserDownloadURL()
 	if downloadURL == "" {
 		return fmt.Errorf("资产 %s 没有下载链接", asset.GetName())
+	}
+
+	// asset_proxy_url 不像 HTTP 代理时，作为镜像前缀拼接到下载链接前（与 downloader.go 一致）。
+	if assetProxyURL != "" && !looksLikeProxyURL(assetProxyURL) {
+		downloadURL = assetProxyURL + downloadURL
 	}
 
 	log.Printf("自更新: 下载 %s (%d 字节)", asset.GetName(), asset.GetSize())

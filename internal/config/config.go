@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,6 +244,19 @@ func LoadConfig(projectRoot string) (*Config, error) {
 			}
 			if err := cfg.Save(projectRoot); err != nil {
 				return nil, err
+			}
+
+			// 校验 config.yaml 已成功写入且可读，再删除旧 config.json；
+			// 任何一步失败仅记录日志，不返回错误（迁移本身已成功）。
+			yamlPath := configYAMLPath(projectRoot)
+			if _, verifyErr := os.Stat(yamlPath); verifyErr == nil {
+				if _, verifyErr := os.ReadFile(yamlPath); verifyErr == nil {
+					if removeErr := os.Remove(legacyPath); removeErr != nil {
+						log.Printf("[配置迁移] 删除旧 config.json 失败（可手动删除）: %v", removeErr)
+					} else {
+						log.Printf("[配置迁移] 已从 config.json 迁移至 config.yaml，并删除旧文件")
+					}
+				}
 			}
 			return cfg, nil
 		}
