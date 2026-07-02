@@ -85,7 +85,7 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 - `/repo/...` 仅支持只读访问，供 `git clone` / `git fetch` 使用。
 - `/repo/...` 走**独立的 repo 流量计量与 repo 下载统计**，不与普通 `/download/...` 混算。
 - `/repo/...` 不走下载验证码与下载令牌。
-- 访问 `/repo/...` 中的**目录**时，返回 `application/json` 的条目列表（`name`、`type`、`size`、`mod_time`）；访问文件时仍返回文件内容。
+- 访问 `/repo/...` 中的**目录**时，返回 v2 信封格式的条目列表（`data` 为 `[{name, type, size, mod_time}]`）；访问文件时仍返回原始文件内容以兼容 `git clone`。目录列表的错误响应同样遵循 v2 信封（`error` 字段）。
 
 ### 1.9 内嵌前端资源
 

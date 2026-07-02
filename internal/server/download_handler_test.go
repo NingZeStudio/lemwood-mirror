@@ -100,6 +100,43 @@ func unwrapV2Envelope(t *testing.T, body []byte) map[string]any {
 	return env.Data
 }
 
+// unwrapV2EnvelopeSlice 解包 v2 信封响应中 data 为切片的情况。
+func unwrapV2EnvelopeSlice(t *testing.T, body []byte) []RepoDirEntry {
+	t.Helper()
+	var env struct {
+		Data  []RepoDirEntry `json:"data"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("Unmarshal envelope error = %v, body = %s", err, string(body))
+	}
+	if env.Error != nil {
+		t.Fatalf("v2 error: %s - %s", env.Error.Code, env.Error.Message)
+	}
+	return env.Data
+}
+
+// unwrapV2Error 解包 v2 信封错误响应，返回 error 字段。
+func unwrapV2Error(t *testing.T, body []byte) (string, string) {
+	t.Helper()
+	var env struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("Unmarshal envelope error = %v, body = %s", err, string(body))
+	}
+	if env.Error == nil {
+		t.Fatalf("expected v2 error envelope, got success: %s", string(body))
+	}
+	return env.Error.Code, env.Error.Message
+}
+
 func TestDownloadHandlerRejectsBeforeServingWhenLimitWouldBeExceeded(t *testing.T) {
 	handler, path := setupDownloadHandlerTest(t, 1, "hello")
 	ip := "127.0.0.1"
@@ -343,11 +380,7 @@ func TestRepoHandlerDirectoryListing(t *testing.T) {
 		t.Fatalf("content-type = %q, want application/json", contentType)
 	}
 
-	var entries []RepoDirEntry
-	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
-		t.Fatalf("unmarshal entries error = %v", err)
-	}
-
+	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
 	if len(entries) != 1 || entries[0].Name != "info" || entries[0].Type != "dir" {
 		t.Fatalf("entries = %+v, want one dir named info", entries)
 	}
@@ -366,13 +399,46 @@ func TestRepoHandlerDirectoryListingNested(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	var entries []RepoDirEntry
-	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
-		t.Fatalf("unmarshal entries error = %v", err)
-	}
-
+	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
 	if len(entries) != 1 || entries[0].Name != "refs" || entries[0].Type != "file" {
 		t.Fatalf("entries = %+v, want one file named refs", entries)
+	}
+}
+
+func TestRepoHandlerDirectoryListingRoot(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
+	if len(entries) != 1 || entries[0].Name != "mirror.git" || entries[0].Type != "dir" {
+		t.Fatalf("entries = %+v, want one dir named mirror.git", entries)
+	}
+}
+
+func TestRepoHandlerNotFoundReturnsEnvelope(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/nonexistent", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	code, _ := unwrapV2Error(t, rec.Body.Bytes())
+	if code != "not_found" {
+		t.Fatalf("error code = %q, want not_found", code)
 	}
 }
 
@@ -401,6 +467,10 @@ func TestRepoHandlerRejectsNonReadMethod(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	code, _ := unwrapV2Error(t, rec.Body.Bytes())
+	if code != "method_not_allowed" {
+		t.Fatalf("error code = %q, want method_not_allowed", code)
 	}
 }
 

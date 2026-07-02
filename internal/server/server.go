@@ -319,11 +319,11 @@ type RepoDirEntry struct {
 	ModTime time.Time `json:"mod_time"`
 }
 
-// listRepoDirectory 将目录内容序列化为 JSON 返回。
-func listRepoDirectory(w http.ResponseWriter, dir string) {
+// listRepoDirectory 将目录内容以 v2 信封格式返回。
+func listRepoDirectory(w http.ResponseWriter, r *http.Request, dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		http.Error(w, "读取目录失败", http.StatusInternalServerError)
+		writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "读取目录失败", nil)
 		return
 	}
 
@@ -355,22 +355,20 @@ func listRepoDirectory(w http.ResponseWriter, dir string) {
 		return false
 	})
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(items); err != nil {
-		log.Printf("序列化目录列表失败: %v", err)
-	}
+	writeV2Success(w, r, items, false)
 }
 
-// handleRepo 处理 /repo/ 下的请求：目录返回 JSON 列表，文件按原逻辑下载。
+// handleRepo 处理 /repo/ 下的请求：目录返回 v2 信封格式的条目列表，
+// 文件按原逻辑下载（保持原始字节以兼容 git clone）。
 func (s *State) handleRepo(w http.ResponseWriter, r *http.Request, repoDir string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
 		return
 	}
 
 	path := r.URL.Path
 	if containsDotDot(path) {
-		http.NotFound(w, r)
+		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
 		return
 	}
 
@@ -382,26 +380,26 @@ func (s *State) handleRepo(w http.ResponseWriter, r *http.Request, repoDir strin
 	absPath, _ := filepath.Abs(cleanPath)
 	if !strings.HasPrefix(absPath, absBase) {
 		log.Printf("安全警告：拦截到来自 %s 的 repo 路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
-		http.NotFound(w, r)
+		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
 		return
 	}
 
 	info, err := os.Stat(cleanPath)
 	if err != nil {
-		http.NotFound(w, r)
+		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
 		return
 	}
 
 	if info.IsDir() {
 		if r.Method == http.MethodHead {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
 			return
 		}
-		listRepoDirectory(w, cleanPath)
+		listRepoDirectory(w, r, cleanPath)
 		return
 	}
 
-	// 文件：HEAD 直接返回，GET 走流量控制
+	// 文件：HEAD 直接返回原始内容，GET 走流量控制
 	if r.Method == http.MethodHead {
 		http.ServeFile(w, r, cleanPath)
 		return
@@ -422,7 +420,7 @@ func (s *State) handleRepo(w http.ResponseWriter, r *http.Request, repoDir strin
 		if s.Config.AppealContact != "" {
 			message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
 		}
-		http.Error(w, message, http.StatusForbidden)
+		writeV2Error(w, r, http.StatusForbidden, "traffic_exceeded", message, nil)
 		log.Printf("[Repo防刷墙] 拒绝请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
 		return
 	}
