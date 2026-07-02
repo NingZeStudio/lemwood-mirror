@@ -31,6 +31,19 @@ const (
 	ChannelPreview Channel = "preview"
 )
 
+// DefaultRepoURL 是 self_update_repo_url 留空时回退使用的默认更新源
+// （本项目自身仓库）。允许 fork 维护者在配置中显式指定自己的仓库地址覆盖。
+const DefaultRepoURL = "https://github.com/NingZeStudio/lemwood-mirror"
+
+// effectiveRepoURL 返回实际生效的更新源仓库地址：留空时回退到 DefaultRepoURL。
+func effectiveRepoURL(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return DefaultRepoURL
+	}
+	return v
+}
+
 type TagInfo struct {
 	Name      string    `json:"name"`
 	Stable    bool      `json:"stable"`
@@ -83,7 +96,7 @@ func NewManager(client *gh.Client, currentVersion, binaryPath string, cfg Config
 		binaryPath:     binaryPath,
 		status: Status{
 			Enabled:        cfg.Enabled,
-			RepoURL:        cfg.RepoURL,
+			RepoURL:        effectiveRepoURL(cfg.RepoURL),
 			Channel:        normalizeChannel(cfg.Channel),
 			CurrentVersion: normalizeVersion(currentVersion),
 		},
@@ -144,7 +157,7 @@ func (m *Manager) UpdateConfig(cfg Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status.Enabled = cfg.Enabled
-	m.status.RepoURL = cfg.RepoURL
+	m.status.RepoURL = effectiveRepoURL(cfg.RepoURL)
 	m.status.Channel = normalizeChannel(cfg.Channel)
 	m.httpClient = buildHTTPClient(cfg.ProxyURL, cfg.AssetProxyURL)
 	m.assetProxyURL = cfg.AssetProxyURL

@@ -142,6 +142,43 @@ func TestSplitPreRelease(t *testing.T) {
 	}
 }
 
+func TestEffectiveRepoURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", DefaultRepoURL},
+		{"   ", DefaultRepoURL},
+		{"https://github.com/foo/bar", "https://github.com/foo/bar"},
+		{"  https://github.com/foo/bar  ", "https://github.com/foo/bar"},
+	}
+	for _, tt := range cases {
+		if got := effectiveRepoURL(tt.in); got != tt.want {
+			t.Fatalf("effectiveRepoURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestNewManagerAppliesDefaultRepoURL(t *testing.T) {
+	m := NewManager(nil, "v1.0.0", "/tmp/bin", Config{Enabled: true, RepoURL: ""})
+	if m.Status().RepoURL != DefaultRepoURL {
+		t.Fatalf("empty RepoURL should fall back to DefaultRepoURL, got %q", m.Status().RepoURL)
+	}
+
+	m2 := NewManager(nil, "v1.0.0", "/tmp/bin", Config{Enabled: true, RepoURL: "https://github.com/foo/bar"})
+	if got := m2.Status().RepoURL; got != "https://github.com/foo/bar" {
+		t.Fatalf("explicit RepoURL should be preserved, got %q", got)
+	}
+}
+
+func TestUpdateConfigAppliesDefaultRepoURL(t *testing.T) {
+	m := NewManager(nil, "v1.0.0", "/tmp/bin", Config{Enabled: true, RepoURL: "https://github.com/foo/bar"})
+	m.UpdateConfig(Config{Enabled: true, RepoURL: ""})
+	if got := m.Status().RepoURL; got != DefaultRepoURL {
+		t.Fatalf("UpdateConfig with empty RepoURL should fall back to DefaultRepoURL, got %q", got)
+	}
+}
+
 func TestIsExtractableBinary(t *testing.T) {
 	cases := []struct {
 		name string
