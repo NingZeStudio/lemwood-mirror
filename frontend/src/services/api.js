@@ -15,30 +15,29 @@ api.interceptors.response.use((response) => {
 
 export default api;
 
-export const getStatus = () => api.get('/status');
-export const getLatest = () => api.get('/latest');
-export const getStats = () => api.get('/stats');
-export const getFiles = (path = '.') => api.get(`/files?path=${encodeURIComponent(path)}`);
-export const scan = () => api.post('/scan');
-export const getCaptchaConfig = () => api.get('/captcha/config');
-export const verifyDownload = (lotNumber, captchaOutput, passToken, genTime, filePath, returnUrl, source) => 
-    api.post('/download/verify', { 
-        lot_number: lotNumber, 
-        captcha_output: captchaOutput, 
-        pass_token: passToken, 
-        gen_time: genTime, 
+export const getStatus = () => api.get(globalConfig.api.endpoints.status)
+export const getLatest = () => api.get(globalConfig.api.endpoints.latest)
+export const getStats = () => api.get(globalConfig.api.endpoints.stats)
+export const scan = () => api.post(globalConfig.api.endpoints.scan)
+export const getCaptchaConfig = () => api.get(globalConfig.api.endpoints.captchaConfig)
+export const verifyDownload = (lotNumber, captchaOutput, passToken, genTime, filePath, returnUrl, source) =>
+    api.post(globalConfig.api.endpoints.downloadVerify, {
+        lot_number: lotNumber,
+        captcha_output: captchaOutput,
+        pass_token: passToken,
+        gen_time: genTime,
         file_path: filePath,
         ...(returnUrl && { return_url: returnUrl }),
         ...(source && { source: source })
-    });
+    })
 
-export const prepareDownload = (filePath, returnUrl, source) => 
-    api.post('/download/prepare', {
+export const prepareDownload = (filePath, returnUrl, source) =>
+    api.post(globalConfig.api.endpoints.downloadPrepare, {
         file_path: filePath,
         ...(returnUrl && { return_url: returnUrl }),
         ...(source && { source: source })
-    });
+    })
 
-export const getDownloadLanding = (token) => 
-    api.get(`/download/landing?token=${encodeURIComponent(token)}`);
+export const getDownloadLanding = (token) =>
+    api.get(`${globalConfig.api.endpoints.downloadLanding}?token=${encodeURIComponent(token)}`)
 
