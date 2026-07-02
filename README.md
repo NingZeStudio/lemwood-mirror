@@ -213,14 +213,14 @@ git clone https://mirror.example.com/repo/fcl.git
 
 ### 验证码关闭
 
-1. `POST /api/download/prepare` → 获取 `download_token`、`download_url`、`landing_url`
-2. 进入引导页 → `GET /api/download/landing?token=...`
+1. `POST /api/v2/downloads/prepare` → 获取 `download_token`、`download_url`、`landing_url`
+2. 进入引导页 → `GET /api/v2/downloads/landing?token=...`
 3. 触发真实下载 `/download/...`
 
 ### 验证码开启
 
-1. `GET /api/captcha/config` → 获取验证码配置
-2. 用户完成验证 → `POST /api/download/verify`
+1. `GET /api/v2/captcha/config` → 获取验证码配置
+2. 用户完成验证 → `POST /api/v2/downloads/verify`
 3. 获取 token → 同上流程
 
 ### 细节说明
@@ -269,24 +269,24 @@ server {
 ### 健康检查
 
 - 首页 → 确认启动器版本列表正常展示
-- `/api/status` → 确认返回版本索引
-- `/api/latest` → 确认返回各启动器最新版本号
-- `/api/stats` → 确认统计接口正常
+- `/api/v2/launchers` → 确认返回版本索引
+- `/api/v2/latest` → 确认返回各启动器最新版本号
+- `/api/v2/stats` → 确认统计接口正常
 - 执行一次实际下载 → 确认链路可用
 
 ## API
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/status` | GET | 版本索引 |
-| `/api/latest/{launcher}` | GET | 启动器最新版本号 |
-| `/api/stats` | GET | 统计数据 |
-| `/api/download/prepare` | POST | 准备下载（验证码关闭时） |
-| `/api/download/verify` | POST | 验证码校验（验证码开启时） |
-| `/api/download/landing` | GET | 下载引导页 |
-| `/api/captcha/config` | GET | 验证码配置 |
-| `/api/scan` | POST | 手动触发全量扫描 |
-| `/api/scan/launcher` | POST | 手动触发指定启动器扫描 |
+| `/api/v2/launchers` | GET | 版本索引 |
+| `/api/v2/latest/{launcher}` | GET | 启动器最新版本号 |
+| `/api/v2/stats` | GET | 统计数据 |
+| `/api/v2/downloads/prepare` | POST | 准备下载（验证码关闭时） |
+| `/api/v2/downloads/verify` | POST | 验证码校验（验证码开启时） |
+| `/api/v2/downloads/landing` | GET | 下载引导页 |
+| `/api/v2/captcha/config` | GET | 验证码配置 |
+| `/api/v2/admin/scans` | POST | 手动触发全量扫描（需 Admin 登录） |
+| `/api/v2/admin/scans/launcher` | POST | 手动触发指定启动器扫描（需 Admin 登录） |
 
 > 完整文档见 [`API_DOCS.md`](API_DOCS.md)，管理后台 API 不在公开文档范围内。
 

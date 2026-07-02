@@ -76,7 +76,6 @@ paths:
                         - tag_name: 1.3.0.7
                           name: 1.3.0.7
                           published_at: 2025-01-01T00:00:00Z
-                          is_latest: true
                           assets:
                             - name: FCL-release-1.3.0.7-all.apk
                               url: /download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk
@@ -484,6 +483,122 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /download/{token}/{file_path}:
+    get:
+      tags: [Downloads]
+      summary: Download actual file (token in path)
+      description: |
+        Validates and consumes the download token, then returns the binary file stream.
+        The token can also be supplied via the `token` query parameter on
+        `/download/{file_path}`. This endpoint does NOT use the v2 envelope.
+        Supports `Range` requests (206 Partial Content).
+      operationId: getV2DownloadFile
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: 64-character hex download token
+          schema:
+            type: string
+        - name: file_path
+          in: path
+          required: true
+          description: File path relative to storage_path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Binary file stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Partial Content (Range request)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: |
+            Token invalid/expired/mismatch, captcha required, or traffic exceeded.
+            Non-browser clients receive a flat JSON error; browser clients may
+            receive an HTML captcha page when captcha is enabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  captcha:
+                    type: boolean
+                  app_id:
+                    type: string
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Invalid path or file not found
+        '405':
+          description: Method not allowed
+
+  /repo/{launcher}.git/{path}:
+    get:
+      tags: [Public]
+      summary: Git mirror read-only endpoint
+      description: |
+        Serves Git mirror files for `git clone` / `git fetch`. File and HEAD
+        requests return raw bytes; directory requests return a v2 envelope
+        listing entries. Uses independent repo traffic metering and repo
+        download statistics.
+      operationId: getV2RepoMirror
+      security: []
+      parameters:
+        - name: launcher
+          in: path
+          required: true
+          description: Launcher identifier whose Git mirror is being accessed
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          description: Path inside the `.git` mirror
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw Git object or directory listing
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/RepoEntry'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   # ============================================================
   # Admin: config
   # ============================================================
@@ -860,6 +975,8 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotConfigured'
 
   /api/v2/admin/self-update/check:
     post:
@@ -889,6 +1006,10 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotConfigured'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
   /api/v2/admin/self-update/apply:
     post:
@@ -918,6 +1039,10 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotConfigured'
+        '502':
+          $ref: '#/components/responses/BadGateway'
 
   /api/v2/admin/self-update/restart:
     post:
@@ -947,6 +1072,41 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotConfigured'
+
+  /api/v2/admin/self-update:
+    post:
+      tags: [Admin]
+      summary: Trigger asynchronous self-update check
+      description: |
+        Triggers an asynchronous check for available updates in the background.
+        Returns `202 Accepted` immediately. Response is wrapped in the v2 envelope.
+      operationId: postV2AdminSelfUpdateAsync
+      security:
+        - BearerAuth: []
+      responses:
+        '202':
+          description: Self-update check triggered
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/V2Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ScanResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '501':
+          $ref: '#/components/responses/NotConfigured'
 
   # ============================================================
   # Admin: scans
@@ -981,6 +1141,21 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          description: Scan function not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+              example:
+                data: null
+                error:
+                  code: scan_unavailable
+                  message: Scan not available
+                meta:
+                  version: v2
+                  timestamp: 2026-06-18T12:00:00Z
+                  request_id: b2c3d4e5f6g7h8i9
 
   /api/v2/admin/scans/launcher:
     post:
@@ -1020,6 +1195,21 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+        '501':
+          description: Scan function not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2Envelope'
+              example:
+                data: null
+                error:
+                  code: scan_unavailable
+                  message: Scan not available
+                meta:
+                  version: v2
+                  timestamp: 2026-06-18T12:00:00Z
+                  request_id: b2c3d4e5f6g7h8i9
 
 components:
   # ============================================================
@@ -1138,6 +1328,36 @@ components:
             error:
               code: internal_error
               message: Failed to fetch stats
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    NotConfigured:
+      description: Feature not configured
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: not_configured
+              message: Self update not configured
+            meta:
+              version: v2
+              timestamp: 2026-06-18T12:00:00Z
+              request_id: b2c3d4e5f6g7h8i9
+    BadGateway:
+      description: Upstream communication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V2Envelope'
+          example:
+            data: null
+            error:
+              code: check_failed
+              message: Failed to check for updates
             meta:
               version: v2
               timestamp: 2026-06-18T12:00:00Z
@@ -1802,11 +2022,11 @@ components:
         source:
           type: string
           example: local
-          description: Source of the ban (e.g. local, external)
+          description: Source of the ban (local=traffic auto-ban, manual=admin console, external=external blacklist)
         ban_type:
           type: string
           example: traffic
-          description: Type of ban
+          description: Type of ban (traffic=traffic limit exceeded, manual=manual/external ban)
         created_at:
           type: string
           example: 2026-06-18 12:00:00
@@ -1824,6 +2044,32 @@ components:
           type: string
           example: manual ban
       required: [ip]
+
+    # ----------------------------------------------------------
+    # Repo
+    # ----------------------------------------------------------
+    RepoEntry:
+      type: object
+      description: A single entry in a Git mirror directory listing.
+      properties:
+        name:
+          type: string
+          example: objects
+        type:
+          type: string
+          enum: [dir, file]
+          example: dir
+        size:
+          type: integer
+          format: int64
+          example: 0
+          description: Size in bytes (0 for directories)
+        mod_time:
+          type: string
+          format: date-time
+          example: 2026-06-18T12:00:00Z
+          description: Last modification time
+      required: [name, type, size, mod_time]
 
     # ----------------------------------------------------------
     # Files
@@ -1908,13 +2154,11 @@ components:
         last_checked_at:
           type: string
           format: date-time
-          nullable: true
-          description: Last check time
+          description: Last check time (omitted if never checked)
         last_applied_at:
           type: string
           format: date-time
-          nullable: true
-          description: Last apply time
+          description: Last apply time (omitted if never applied)
         last_check_error:
           type: string
           description: Last check error message (omitted if empty)

@@ -27,15 +27,17 @@
 
 ### 1.4 CORS
 
-所有接口均返回以下 CORS 响应头：
+API 端点根据请求 `Origin` 头动态返回 `Access-Control-Allow-Origin`（回显请求的 Origin），并返回以下响应头：
 
 ```
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization
 Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 ```
 
 `OPTIONS` 预检请求直接返回 `200 OK`，无需额外配置。
+
+> 当前 `Access-Control-Allow-Methods` 未包含 `DELETE`，后台管理面板的删除操作在跨域场景下需由同域代理或前端统一处理。
 
 ### 1.5 常见状态码
 
@@ -132,7 +134,9 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 
 #### ETag 条件请求
 
-GET 查询接口（`/launchers`、`/latest`、`/stats` 等）返回 `ETag` 弱标签头。客户端可在后续请求中携带 `If-None-Match` 头，若内容未变则服务端返回 `304 Not Modified`（无响应体），大幅减少带宽和解析开销。
+JSON GET 查询接口（`/api/v2/launchers`、`/api/v2/latest`、`/api/v2/stats`、`/api/v2/captcha/config`、`/api/v2/auth/2fa/status` 等）返回 `ETag` 弱标签头。客户端可在后续请求中携带 `If-None-Match` 头，若内容未变则服务端返回 `304 Not Modified`（无响应体），大幅减少带宽和解析开销。
+
+> `GET /api/v2/latest/{launcher}` 成功响应为纯文本版本号，不返回 `ETag`、`Cache-Control` 与 `304`；错误响应仍走统一信封。
 
 ```http
 GET /api/v2/launchers
@@ -152,7 +156,7 @@ If-None-Match: W/"a1b2c3d4e5f6g7h8"
 
 #### 统一缓存
 
-所有 GET 查询接口返回 `Cache-Control: public, max-age=300`（5 分钟），服务端内部对 `/stats` 有同 TTL 的内存缓存。
+JSON GET 查询接口返回 `Cache-Control: public, max-age=300`（5 分钟），服务端内部对 `/stats` 有同 TTL 的内存缓存。
 
 ---
 
@@ -178,7 +182,6 @@ GET /api/v2/launchers
       "tag_name": "1.3.0.7",
       "name": "1.3.0.7",
       "published_at": "2025-01-01T00:00:00Z",
-      "is_latest": true,
       "clone_url": "https://beta.miawa.cn/repo/fcl.git",
       "assets": [
         {
@@ -202,7 +205,6 @@ GET /api/v2/launchers
 | `tag_name` | string | GitHub Release 的 tag 名称 |
 | `name` | string | GitHub Release 的标题名称 |
 | `published_at` | string | 发布时间（ISO 8601 / RFC 3339） |
-| `is_latest` | bool | 是否为该启动器的当前最新版本 |
 | `clone_url` | string | 当对应 launcher 的 `mode` 为 `clone` / `all` 且当前有 release 数据时返回的 Git 克隆地址 |
 | `assets[].name` | string | 资源文件名 |
 | `assets[].url` | string | 构造的下载地址（受 `download_url_base` / `server_address` 配置影响） |
@@ -233,7 +235,6 @@ GET /api/v2/launchers/{launcher}
     "tag_name": "1.3.0.7",
     "name": "1.3.0.7",
     "published_at": "2025-01-01T00:00:00Z",
-    "is_latest": true,
     "assets": [
       {
         "name": "FCL-release-1.3.0.7-all.apk",
@@ -357,7 +358,8 @@ GET /api/v2/stats
       "traffic_bytes": 83886080,
       "repo_traffic_bytes": 10485760
     }
-  ]
+  ],
+  "dropped_records": 0
 }
 ```
 
@@ -395,6 +397,7 @@ GET /api/v2/stats
 | `daily_stats[].repo_download_count` | int | 当日 Repo 拉取量 |
 | `daily_stats[].traffic_bytes` | int | 当日普通下载流量（字节） |
 | `daily_stats[].repo_traffic_bytes` | int | 当日 Repo 拉取流量（字节） |
+| `dropped_records` | int | 因统计写入队列溢出而丢弃的记录数 |
 
 ### 2.6 获取验证码配置
 
@@ -1023,8 +1026,8 @@ DELETE /api/v2/admin/blacklist?ip={ip}   # 移除黑名单条目
   {
     "ip": "1.2.3.4",
     "reason": "流量超限",
-    "source": "traffic",
-    "ban_type": "local",
+    "source": "local",
+    "ban_type": "traffic",
     "created_at": "2026-06-18 12:00:00"
   }
 ]
@@ -1034,8 +1037,8 @@ DELETE /api/v2/admin/blacklist?ip={ip}   # 移除黑名单条目
 |------|------|------|
 | `ip` | string | 被封禁的 IP |
 | `reason` | string | 封禁原因 |
-| `source` | string | 来源（如 `traffic`、`manual`、`external`） |
-| `ban_type` | string | 封禁类型 |
+| `source` | string | 来源：`local`（流量超限自动封禁）、`manual`（后台手动添加）、`external`（外部黑名单同步） |
+| `ban_type` | string | 封禁类型：`traffic`（流量超限）、`manual`（手动/外部封禁） |
 | `created_at` | string | 封禁时间 |
 
 **POST 请求体：**
