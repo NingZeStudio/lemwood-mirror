@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -324,7 +325,7 @@ func TestRepoHandlerAllowsHeadWithoutCaptcha(t *testing.T) {
 	}
 }
 
-func TestRepoHandlerRejectsDirectoryListing(t *testing.T) {
+func TestRepoHandlerDirectoryListing(t *testing.T) {
 	cfg := &config.Config{AppealContact: "test-contact"}
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
 
@@ -333,8 +334,45 @@ func TestRepoHandlerRejectsDirectoryListing(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	contentType := rec.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		t.Fatalf("content-type = %q, want application/json", contentType)
+	}
+
+	var entries []RepoDirEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("unmarshal entries error = %v", err)
+	}
+
+	if len(entries) != 1 || entries[0].Name != "info" || entries[0].Type != "dir" {
+		t.Fatalf("entries = %+v, want one dir named info", entries)
+	}
+}
+
+func TestRepoHandlerDirectoryListingNested(t *testing.T) {
+	cfg := &config.Config{AppealContact: "test-contact"}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var entries []RepoDirEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("unmarshal entries error = %v", err)
+	}
+
+	if len(entries) != 1 || entries[0].Name != "refs" || entries[0].Type != "file" {
+		t.Fatalf("entries = %+v, want one file named refs", entries)
 	}
 }
 
