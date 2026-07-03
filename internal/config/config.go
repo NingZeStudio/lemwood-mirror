@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const defaultConfigTemplate = `# 柠枺镜像配置文件
+const defaultConfigTemplate = `# 柠泽资源站配置文件
 # YAML 支持注释，后台保存时会保留本模板结构并回填最新配置值。
 
 server_address: {{ yaml .ServerAddress }}

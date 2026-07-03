@@ -1,4 +1,4 @@
-# 柠枺镜像
+# 柠泽资源站
 
 [![CI](https://img.shields.io/github/actions/workflow/status/leemwood/lemwood-mirror/build.yml?branch=main)](https://github.com/leemwood/lemwood-mirror/actions)
 [![Go Version](https://img.shields.io/badge/Go-1.24-blue)](https://go.dev/)

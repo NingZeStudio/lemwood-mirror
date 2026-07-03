@@ -1181,7 +1181,7 @@ func (s *State) serveVerifyPage(w http.ResponseWriter, r *http.Request, filePath
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>安全验证 - 柠枺镜像</title>
+    <title>安全验证 - 柠泽资源站</title>
     <script src="https://static.geetest.com/v4/gt4.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }

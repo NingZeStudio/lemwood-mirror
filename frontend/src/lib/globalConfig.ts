@@ -1,7 +1,7 @@
 export const globalConfig = {
   site: {
-    name: '柠枺镜像',
-    nameFull: '柠枺镜像状态',
+    name: '柠泽资源站',
+    nameFull: '柠泽资源站状态',
     nameEn: 'Lemwood Mirror',
     version: '3.15.0',
     description: 'Minecraft 启动器版本镜像站',

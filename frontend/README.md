@@ -1,4 +1,4 @@
-# 柠枺镜像状态 (Lemwood Mirror Status)
+# 柠泽资源站状态 (Lemwood Mirror Status)
 
 基于 **Vue 3 + Vite** 的镜像服务状态展示前端项目。
 
