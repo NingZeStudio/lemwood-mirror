@@ -261,15 +261,15 @@ func (s *State) handleV2LatestAll(w http.ResponseWriter, r *http.Request) {
 	writeV2Success(w, r, latestCopy, false)
 }
 
-// handleV2LatestLauncher 返回纯文本版本号（与 v1 一致，不走信封）。
+// handleV2LatestLauncher 返回指定启动器最新版本号（信封包裹）。
 func (s *State) handleV2LatestLauncher(w http.ResponseWriter, r *http.Request) {
 	launcher := strings.TrimPrefix(r.URL.Path, "/api/v2/latest/")
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if val, ok := s.latest[launcher]; ok {
+		// 保留 X-Latest-Version 头以兼容旧客户端
 		w.Header().Set("X-Latest-Version", val)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte(val))
+		writeV2Success(w, r, map[string]string{"version": val}, false)
 	} else {
 		writeV2Error(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Launcher %q not found", launcher), nil)
 	}
