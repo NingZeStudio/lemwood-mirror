@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Layout, Menu, Button, Drawer, theme } from 'antd'
+import { useState, useMemo } from 'react'
+import { Layout, Menu, Button, Drawer, theme, Typography, Space, Badge } from 'antd'
 import {
   SettingOutlined,
   FolderOutlined,
@@ -14,24 +14,37 @@ import { useAuthStore } from '@/store/authStore'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 
 const { Sider, Content } = Layout
+const { Title } = Typography
 
-const menuItems = [
+interface MenuItem {
+  key: string
+  icon: React.ReactNode
+  label: string
+  title: string
+}
+
+const menuItems: MenuItem[] = [
   {
     key: '/config',
     icon: <SettingOutlined />,
     label: '配置编辑',
+    title: '配置编辑',
   },
   {
     key: '/files',
     icon: <FolderOutlined />,
     label: '文件管理',
+    title: '文件管理',
   },
   {
     key: '/blacklist',
     icon: <StopOutlined />,
     label: '黑名单管理',
+    title: '黑名单管理',
   },
 ]
+
+const menuNavItems = menuItems.map(({ key, icon, label }) => ({ key, icon, label }))
 
 export function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false)
@@ -43,6 +56,11 @@ export function AdminLayout() {
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken()
+
+  const activeItem = useMemo(
+    () => menuItems.find((item) => item.key === location.pathname) || menuItems[0],
+    [location.pathname]
+  )
 
   const handleMenuClick = ({ key }: { key: string }) => {
     navigate(key)
@@ -61,7 +79,7 @@ export function AdminLayout() {
       <Menu
         mode="inline"
         selectedKeys={[location.pathname]}
-        items={menuItems}
+        items={menuNavItems}
         onClick={handleMenuClick}
         style={{ borderRight: 0 }}
       />
@@ -109,32 +127,46 @@ export function AdminLayout() {
     </div>
   )
 
+  const headerBar = (
+    <div
+      style={{
+        padding: '0 16px',
+        background: colorBgContainer,
+        display: 'flex',
+        alignItems: 'center',
+        height: isMobile ? 56 : 64,
+        borderBottom: '1px solid #f0f0f0',
+        position: 'sticky',
+        top: 0,
+        zIndex: 100,
+      }}
+    >
+      <Button
+        type="text"
+        icon={isMobile ? <MenuOutlined /> : collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        onClick={() => (isMobile ? setDrawerOpen(true) : setCollapsed(!collapsed))}
+        style={{ fontSize: isMobile ? 18 : 16, width: isMobile ? 48 : 64, height: isMobile ? 48 : 64 }}
+      />
+      <Space direction="vertical" size={0} style={{ marginLeft: 8, flex: 1, minWidth: 0 }}>
+        <Title level={5} style={{ margin: 0, fontSize: isMobile ? 15 : 16, lineHeight: '22px' }}>
+          {activeItem.title}
+        </Title>
+        {!isMobile && (
+          <span style={{ fontSize: 12, color: '#8c8c8c', lineHeight: '18px' }}>Lemwood Mirror 后台管理</span>
+        )}
+      </Space>
+      {!isMobile && (
+        <Badge dot color="green">
+          <span style={{ fontSize: 13, color: '#595959' }}>在线</span>
+        </Badge>
+      )}
+    </div>
+  )
+
   if (isMobile) {
     return (
       <Layout style={{ minHeight: '100vh' }}>
-        <div
-          style={{
-            padding: '0 16px',
-            background: colorBgContainer,
-            display: 'flex',
-            alignItems: 'center',
-            height: 56,
-            borderBottom: '1px solid #f0f0f0',
-            position: 'sticky',
-            top: 0,
-            zIndex: 100,
-          }}
-        >
-          <Button
-            type="text"
-            icon={<MenuOutlined />}
-            onClick={() => setDrawerOpen(true)}
-            style={{ fontSize: 18, width: 48, height: 48 }}
-          />
-          <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 8 }}>
-            后台管理
-          </span>
-        </div>
+        {headerBar}
         <Drawer
           placement="left"
           onClose={() => setDrawerOpen(false)}
@@ -147,11 +179,11 @@ export function AdminLayout() {
         </Drawer>
         <Content
           style={{
-            margin: 16,
+            margin: 12,
             padding: 16,
             background: colorBgContainer,
             borderRadius: borderRadiusLG,
-            minHeight: 'calc(100vh - 88px)',
+            minHeight: 'calc(100vh - 80px)',
           }}
         >
           <Outlet />
@@ -167,26 +199,7 @@ export function AdminLayout() {
         {menuContent}
       </Sider>
       <Layout>
-        <div
-          style={{
-            padding: '0 16px',
-            background: colorBgContainer,
-            display: 'flex',
-            alignItems: 'center',
-            height: 64,
-            borderBottom: '1px solid #f0f0f0',
-          }}
-        >
-          <Button
-            type="text"
-            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
-            style={{ fontSize: 16, width: 64, height: 64 }}
-          />
-          <span style={{ fontSize: 16, fontWeight: 500, marginLeft: 8 }}>
-            后台管理
-          </span>
-        </div>
+        {headerBar}
         <Content
           style={{
             margin: 24,

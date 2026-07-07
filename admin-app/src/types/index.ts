@@ -86,6 +86,8 @@ export interface FileInfo {
 export interface BlacklistItem {
   ip: string
   reason: string
+  source: string
+  ban_type: string
   created_at: string
 }
 

@@ -4,6 +4,10 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
@@ -14,4 +18,27 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+/* 移动端表格/列表避免横向溢出 */
+.ant-table-cell {
+  word-break: break-word;
+}
+
+/* 移动端 breadcrumb 截断 */
+.ant-breadcrumb {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 小屏幕下表单控件撑满 */
+@media (max-width: 768px) {
+  .ant-form-item {
+    margin-bottom: 16px;
+  }
+
+  .ant-form-item-label {
+    padding-bottom: 4px;
+  }
 }

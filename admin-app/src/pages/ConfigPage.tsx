@@ -14,12 +14,34 @@ import {
   Image,
   Tag,
   Descriptions,
+  Typography,
+  Affix,
+  Flex,
 } from 'antd'
-import { PlusOutlined, MinusCircleOutlined, SyncOutlined, CloudUploadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { getConfig, updateConfig, triggerLauncherScan, getSelfUpdateStatus, checkSelfUpdate, applySelfUpdate, restartSelfUpdate } from '@/api/config'
+import {
+  PlusOutlined,
+  MinusCircleOutlined,
+  SyncOutlined,
+  CloudUploadOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  SaveOutlined,
+} from '@ant-design/icons'
+import {
+  getConfig,
+  updateConfig,
+  triggerLauncherScan,
+  getSelfUpdateStatus,
+  checkSelfUpdate,
+  applySelfUpdate,
+  restartSelfUpdate,
+} from '@/api/config'
 import type { Config, SelfUpdateStatus } from '@/types'
 import { generateTOTPSecret, getTOTPQRCodeUrl } from '@/lib/utils'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+
+const { Title } = Typography
 
 export function ConfigPage() {
   const [form] = Form.useForm()
@@ -51,25 +73,46 @@ export function ConfigPage() {
     }
   }
 
-  async function loadSelfUpdateStatus() {
-    try {
-      const status = await getSelfUpdateStatus()
-      setSelfUpdateStatus(status)
-    } catch {
-      // 自更新未启用时不报错
-    }
-  }
-
   useEffect(() => {
-    loadConfig()
-    loadSelfUpdateStatus()
-  }, [])
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        const config = await getConfig()
+        if (cancelled) return
+        form.setFieldsValue({
+          ...config,
+          github_token: '',
+          admin_password: '',
+          captcha_secret_key: '',
+        })
+        setTotpSecret(config.two_factor_secret || '')
+      } catch {
+        if (!cancelled) message.error('加载配置失败')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    ;(async () => {
+      try {
+        const status = await getSelfUpdateStatus()
+        if (!cancelled) setSelfUpdateStatus(status)
+      } catch {
+        // 自更新未启用时不报错
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [form])
 
-  const handleSave = async (values: Config & { admin_password?: string; github_token?: string; captcha_secret_key?: string }) => {
+  const handleSave = async (
+    values: Config & { admin_password?: string; github_token?: string; captcha_secret_key?: string }
+  ) => {
     setSaving(true)
     try {
       const updateData: Record<string, unknown> = { ...values }
-      
+
       if (!values.admin_password) {
         delete updateData.admin_password
       }
@@ -167,6 +210,12 @@ export function ConfigPage() {
     )
   }
 
+  const saveButton = (
+    <Button type="primary" htmlType="submit" loading={saving} size="large" icon={<SaveOutlined />} block={isMobile}>
+      保存配置
+    </Button>
+  )
+
   return (
     <Form
       form={form}
@@ -179,34 +228,26 @@ export function ConfigPage() {
         download_timeout_minutes: 30,
       }}
     >
+      <Title level={4} style={{ marginTop: 0, marginBottom: 16 }}>
+        <SettingOutlined style={{ marginRight: 8 }} />
+        配置编辑
+      </Title>
+
       <Card title="基础设置" style={{ marginBottom: 16 }}>
         <Form.Item label="管理员登录限制">
           <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : 'auto' }}>
             <Form.Item name="admin_max_retries" noStyle>
-              <InputNumber 
-                min={1} 
-                addonBefore="最大重试次数" 
-                style={{ width: isMobile ? '100%' : 150 }} 
-              />
+              <InputNumber min={1} addonBefore="最大重试次数" style={{ width: isMobile ? '100%' : 170 }} />
             </Form.Item>
             <Form.Item name="admin_lock_duration" noStyle>
-              <InputNumber 
-                min={1} 
-                addonBefore="锁定时长(分钟)" 
-                style={{ width: isMobile ? '100%' : 150 }} 
-              />
+              <InputNumber min={1} addonBefore="锁定时长(分钟)" style={{ width: isMobile ? '100%' : 170 }} />
             </Form.Item>
           </Space>
         </Form.Item>
         <Form.Item name="server_port" label="服务端口" rules={[{ required: true }]}>
           <InputNumber min={1} max={65535} style={{ width: isMobile ? '100%' : 200 }} />
         </Form.Item>
-        <Form.Item
-          name="check_cron"
-          label="检查频率 (Cron)"
-          rules={[{ required: true }]}
-          extra="例如: @every 10m"
-        >
+        <Form.Item name="check_cron" label="检查频率 (Cron)" rules={[{ required: true }]} extra="例如: @every 10m">
           <Input placeholder="@every 10m" />
         </Form.Item>
         <Form.Item name="storage_path" label="存储路径" rules={[{ required: true }]}>
@@ -229,11 +270,7 @@ export function ConfigPage() {
         <Form.Item name="proxy_url" label="代理 URL" extra="例如: http://127.0.0.1:7890">
           <Input />
         </Form.Item>
-        <Form.Item
-          name="asset_proxy_url"
-          label="资源代理前缀"
-          extra="用于加速下载，例如: https://ghproxy.com/"
-        >
+        <Form.Item name="asset_proxy_url" label="资源代理前缀" extra="用于加速下载，例如: https://ghproxy.com/">
           <Input />
         </Form.Item>
       </Card>
@@ -266,17 +303,14 @@ export function ConfigPage() {
                 <Form.Item name="two_factor_secret" label="验证器密钥 (Secret)">
                   <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : 'auto' }}>
                     <Input readOnly style={{ width: isMobile ? '100%' : 200 }} />
-                    <Button onClick={handleGenerateTOTP} block={isMobile}>生成新密钥</Button>
+                    <Button onClick={handleGenerateTOTP} block={isMobile}>
+                      生成新密钥
+                    </Button>
                   </Space>
                 </Form.Item>
                 {totpSecret && (
                   <Form.Item label="二维码">
-                    <Image
-                      src={getTOTPQRCodeUrl(totpSecret)}
-                      alt="TOTP QR Code"
-                      width={150}
-                      height={150}
-                    />
+                    <Image src={getTOTPQRCodeUrl(totpSecret)} alt="TOTP QR Code" width={150} height={150} />
                     <div style={{ color: '#666', marginTop: 8 }}>
                       请将此密钥手动输入或扫描二维码添加至您的验证器应用
                     </div>
@@ -316,10 +350,19 @@ export function ConfigPage() {
       </Card>
 
       <Card title="程序自更新" style={{ marginBottom: 16 }}>
-        <Form.Item name="self_update_enabled" label="启用自更新检查" valuePropName="checked" extra="开启后可从 GitHub 检查程序自身更新">
+        <Form.Item
+          name="self_update_enabled"
+          label="启用自更新检查"
+          valuePropName="checked"
+          extra="开启后可从 GitHub 检查程序自身更新"
+        >
           <Switch />
         </Form.Item>
-        <Form.Item name="self_update_repo_url" label="更新仓库地址" extra="例如: https://github.com/NingZeStudio/lemwood-mirror">
+        <Form.Item
+          name="self_update_repo_url"
+          label="更新仓库地址"
+          extra="例如: https://github.com/NingZeStudio/lemwood-mirror"
+        >
           <Input placeholder="https://github.com/owner/repo" />
         </Form.Item>
         <Form.Item name="self_update_channel" label="更新类型" initialValue="notify">
@@ -329,10 +372,14 @@ export function ConfigPage() {
               { label: 'Release (稳定版)', value: 'release' },
               { label: 'Preview (预览版)', value: 'preview' },
             ]}
-            style={{ width: 200 }}
+            style={{ width: isMobile ? '100%' : 200 }}
           />
         </Form.Item>
-        <Form.Item name="self_update_check_cron" label="自动检查频率 (Cron)" extra="留空则仅手动检查。例如: @every 1h">
+        <Form.Item
+          name="self_update_check_cron"
+          label="自动检查频率 (Cron)"
+          extra="留空则仅手动检查。例如: @every 1h"
+        >
           <Input placeholder="@every 1h" />
         </Form.Item>
         <Form.Item name="self_update_auto_restart" label="更新后自动重启" valuePropName="checked">
@@ -351,16 +398,16 @@ export function ConfigPage() {
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="最近检查">
-                {selfUpdateStatus.last_checked_at
-                  ? new Date(selfUpdateStatus.last_checked_at).toLocaleString()
-                  : '-'}
+                {selfUpdateStatus.last_checked_at ? new Date(selfUpdateStatus.last_checked_at).toLocaleString() : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="状态">
-                {selfUpdateStatus.pending_restart
-                  ? <Tag color="orange">待重启</Tag>
-                  : selfUpdateStatus.has_update
-                    ? <Tag color="green">有更新</Tag>
-                    : <Tag>已最新</Tag>}
+                {selfUpdateStatus.pending_restart ? (
+                  <Tag color="orange">待重启</Tag>
+                ) : selfUpdateStatus.has_update ? (
+                  <Tag color="green">有更新</Tag>
+                ) : (
+                  <Tag>已最新</Tag>
+                )}
               </Descriptions.Item>
               {selfUpdateStatus.last_check_error && (
                 <Descriptions.Item label="检查错误" span={2}>
@@ -378,12 +425,8 @@ export function ConfigPage() {
                 </Descriptions.Item>
               )}
             </Descriptions>
-            <Space style={{ marginTop: 8 }}>
-              <Button
-                icon={<SearchOutlined />}
-                loading={checkingUpdate}
-                onClick={handleCheckUpdate}
-              >
+            <Flex gap={8} wrap style={{ marginTop: 12 }}>
+              <Button icon={<SearchOutlined />} loading={checkingUpdate} onClick={handleCheckUpdate}>
                 检查更新
               </Button>
               <Button
@@ -394,15 +437,10 @@ export function ConfigPage() {
               >
                 应用更新
               </Button>
-              <Button
-                icon={<ReloadOutlined />}
-                loading={restarting}
-                danger
-                onClick={handleRestart}
-              >
+              <Button icon={<ReloadOutlined />} loading={restarting} danger onClick={handleRestart}>
                 重启
               </Button>
-            </Space>
+            </Flex>
           </Card>
         )}
       </Card>
@@ -417,7 +455,10 @@ export function ConfigPage() {
               icon={<PlusOutlined />}
               onClick={() => {
                 const launchers = form.getFieldValue('launchers') || []
-                form.setFieldValue('launchers', [...launchers, { name: '', source_url: '', repo_selector: '', mode: 'release' }])
+                form.setFieldValue('launchers', [
+                  ...launchers,
+                  { name: '', source_url: '', repo_selector: '', mode: 'release' },
+                ])
               }}
             >
               添加启动器
@@ -449,12 +490,7 @@ export function ConfigPage() {
                   style={{ marginBottom: 16 }}
                   extra={
                     !isMobile && (
-                      <Button
-                        type="text"
-                        danger
-                        icon={<MinusCircleOutlined />}
-                        onClick={() => remove(name)}
-                      >
+                      <Button type="text" danger icon={<MinusCircleOutlined />} onClick={() => remove(name)}>
                         删除
                       </Button>
                     )
@@ -487,11 +523,7 @@ export function ConfigPage() {
                   >
                     <Input />
                   </Form.Item>
-                  <Form.Item
-                    {...restField}
-                    name={[name, 'repo_selector']}
-                    label="版本选择器 (可选)"
-                  >
+                  <Form.Item {...restField} name={[name, 'repo_selector']} label="版本选择器 (可选)">
                     <Input />
                   </Form.Item>
                   <Form.Item
@@ -549,6 +581,7 @@ export function ConfigPage() {
                           onClick={() => handleScanLauncher(launcherName)}
                           disabled={!launcherName || scanningLauncher !== null}
                           loading={scanningLauncher === launcherName}
+                          block={isMobile}
                         >
                           请求更新
                         </Button>
@@ -563,11 +596,21 @@ export function ConfigPage() {
       </Card>
 
       <Divider />
-      <Form.Item>
-        <Button type="primary" htmlType="submit" loading={saving} size="large" block={isMobile}>
-          保存配置
-        </Button>
-      </Form.Item>
+      {isMobile ? (
+        <Affix offsetBottom={16}>
+          <div
+            style={{
+              padding: '12px 0',
+              background: '#fff',
+              borderTop: '1px solid #f0f0f0',
+            }}
+          >
+            {saveButton}
+          </div>
+        </Affix>
+      ) : (
+        <Form.Item>{saveButton}</Form.Item>
+      )}
     </Form>
   )
 }

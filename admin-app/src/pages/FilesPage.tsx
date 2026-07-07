@@ -8,6 +8,9 @@ import {
   message,
   Empty,
   Space,
+  Card,
+  Typography,
+  Flex,
 } from 'antd'
 import {
   FolderOutlined,
@@ -16,6 +19,7 @@ import {
   DeleteOutlined,
   UploadOutlined,
   HomeOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import { getFiles, deleteFile, downloadFile, uploadFile } from '@/api/files'
@@ -23,6 +27,8 @@ import type { FileInfo } from '@/types'
 import { formatSize } from '@/lib/utils'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import dayjs from 'dayjs'
+
+const { Text } = Typography
 
 export function FilesPage() {
   const [files, setFiles] = useState<FileInfo[]>([])
@@ -99,9 +105,15 @@ export function FilesPage() {
 
   const getBreadcrumbItems = () => {
     const items = [
-      { title: <a onClick={() => handleNavigate('')}><HomeOutlined /></a> },
+      {
+        title: (
+          <a onClick={() => handleNavigate('')}>
+            <HomeOutlined />
+          </a>
+        ),
+      },
     ]
-    
+
     if (currentPath) {
       const parts = currentPath.split('/')
       parts.forEach((part, index) => {
@@ -111,8 +123,68 @@ export function FilesPage() {
         })
       })
     }
-    
+
     return items
+  }
+
+  const renderMobileCard = (record: FileInfo) => {
+    const path = currentPath ? `${currentPath}/${record.name}` : record.name
+    return (
+      <Card
+        key={record.name}
+        size="small"
+        style={{ marginBottom: 12 }}
+        styles={{ body: { padding: 12 } }}
+      >
+        <Flex justify="space-between" align="start" gap={12}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Flex gap={8} align="center">
+              {record.is_dir ? (
+                <FolderOutlined style={{ color: '#faad14', fontSize: 16 }} />
+              ) : (
+                <FileTextOutlined style={{ color: '#1890ff', fontSize: 16 }} />
+              )}
+              {record.is_dir ? (
+                <a
+                  onClick={() => handleNavigate(currentPath ? `${currentPath}/${record.name}` : record.name)}
+                  style={{ fontWeight: 500 }}
+                >
+                  {record.name}
+                </a>
+              ) : (
+                <Text style={{ fontWeight: 500 }}>{record.name}</Text>
+              )}
+            </Flex>
+            <Flex gap={12} style={{ marginTop: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.is_dir ? '目录' : formatSize(record.size)}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {dayjs(record.mod_time).format('YYYY-MM-DD HH:mm')}
+              </Text>
+            </Flex>
+          </div>
+          <Space size="small" direction="vertical" style={{ alignItems: 'flex-end' }}>
+            {!record.is_dir && (
+              <Button
+                type="text"
+                icon={<DownloadOutlined />}
+                onClick={() => handleDownload(path)}
+                size="small"
+              />
+            )}
+            <Popconfirm
+              title="确定要删除吗？"
+              onConfirm={() => handleDelete(path)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+            </Popconfirm>
+          </Space>
+        </Flex>
+      </Card>
+    )
   }
 
   const columns = [
@@ -124,42 +196,38 @@ export function FilesPage() {
         <Space>
           {record.is_dir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileOutlined />}
           {record.is_dir ? (
-            <a onClick={() => handleNavigate(currentPath ? `${currentPath}/${name}` : name)}>
-              {name}
-            </a>
+            <a onClick={() => handleNavigate(currentPath ? `${currentPath}/${name}` : name)}>{name}</a>
           ) : (
             <span>{name}</span>
           )}
         </Space>
       ),
     },
-    ...(isMobile ? [] : [
-      {
-        title: '类型',
-        dataIndex: 'is_dir',
-        key: 'type',
-        width: 80,
-        render: (isDir: boolean) => (isDir ? '目录' : '文件'),
-      },
-      {
-        title: '大小',
-        dataIndex: 'size',
-        key: 'size',
-        width: 100,
-        render: (size: number, record: FileInfo) => (record.is_dir ? '-' : formatSize(size)),
-      },
-      {
-        title: '修改时间',
-        dataIndex: 'mod_time',
-        key: 'mod_time',
-        width: 160,
-        render: (time: string) => dayjs(time).format('YYYY-MM-DD HH:mm'),
-      },
-    ]),
+    {
+      title: '类型',
+      dataIndex: 'is_dir',
+      key: 'type',
+      width: 80,
+      render: (isDir: boolean) => (isDir ? '目录' : '文件'),
+    },
+    {
+      title: '大小',
+      dataIndex: 'size',
+      key: 'size',
+      width: 100,
+      render: (size: number, record: FileInfo) => (record.is_dir ? '-' : formatSize(size)),
+    },
+    {
+      title: '修改时间',
+      dataIndex: 'mod_time',
+      key: 'mod_time',
+      width: 160,
+      render: (time: string) => dayjs(time).format('YYYY-MM-DD HH:mm'),
+    },
     {
       title: '操作',
       key: 'action',
-      width: isMobile ? 80 : 150,
+      width: 150,
       render: (_: unknown, record: FileInfo) => {
         const path = currentPath ? `${currentPath}/${record.name}` : record.name
         return (
@@ -171,7 +239,7 @@ export function FilesPage() {
                 onClick={() => handleDownload(path)}
                 size="small"
               >
-                {!isMobile && '下载'}
+                下载
               </Button>
             )}
             <Popconfirm
@@ -181,7 +249,7 @@ export function FilesPage() {
               cancelText="取消"
             >
               <Button type="link" danger icon={<DeleteOutlined />} size="small">
-                {!isMobile && '删除'}
+                删除
               </Button>
             </Popconfirm>
           </Space>
@@ -192,40 +260,60 @@ export function FilesPage() {
 
   return (
     <div>
-      <div 
-        style={{ 
-          marginBottom: 16, 
-          display: 'flex', 
-          flexDirection: isMobile ? 'column' : 'row',
-          justifyContent: 'space-between', 
-          alignItems: isMobile ? 'stretch' : 'center',
-          gap: isMobile ? 12 : 0,
-        }}
-      >
-        <Breadcrumb items={getBreadcrumbItems()} />
-        <Upload {...uploadProps}>
-          <Button icon={<UploadOutlined />} block={isMobile}>上传文件</Button>
-        </Upload>
-      </div>
+      <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 16 }}>
+        <FolderOutlined style={{ marginRight: 8 }} />
+        文件管理
+      </Typography.Title>
+
+      <Card style={{ marginBottom: 16 }} styles={{ body: { padding: isMobile ? 12 : 16 } }}>
+        <Flex
+          gap={12}
+          vertical={isMobile}
+          justify="space-between"
+          align={isMobile ? 'stretch' : 'center'}
+        >
+          <Breadcrumb
+            items={getBreadcrumbItems()}
+            style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+          />
+          <Upload {...uploadProps}>
+            <Button icon={<UploadOutlined />} block={isMobile}>
+              上传文件
+            </Button>
+          </Upload>
+        </Flex>
+      </Card>
 
       {currentPath && (
         <div style={{ marginBottom: 16 }}>
-          <Button onClick={handleNavigateParent}>.. (返回上一级)</Button>
+          <Button onClick={handleNavigateParent} size={isMobile ? 'small' : 'middle'}>
+            .. 返回上一级
+          </Button>
         </div>
       )}
 
-      <Table
-        columns={columns}
-        dataSource={files}
-        rowKey="name"
-        loading={loading}
-        locale={{
-          emptyText: <Empty description="暂无文件" />,
-        }}
-        pagination={false}
-        scroll={{ x: isMobile ? 300 : undefined }}
-        size={isMobile ? 'small' : 'middle'}
-      />
+      {isMobile ? (
+        <div>
+          {files.length === 0 ? (
+            <Empty description="暂无文件" style={{ marginTop: 40 }} />
+          ) : (
+            files.map(renderMobileCard)
+          )}
+        </div>
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={files}
+          rowKey="name"
+          loading={loading}
+          locale={{
+            emptyText: <Empty description="暂无文件" />,
+          }}
+          pagination={false}
+          scroll={{ x: 700 }}
+          size="middle"
+        />
+      )}
     </div>
   )
 }
