@@ -5,7 +5,7 @@ export const globalConfig = {
     nameEn: 'Lemwood Mirror',
     version: '3.15.0',
     description: 'Minecraft 启动器版本镜像站',
-    url: 'https://beta.miawa.cn/',
+    url: 'https://miawa.cn/',
     language: 'zh-CN',
     author: 'Lemwood & QiTry'
   },
@@ -105,7 +105,7 @@ export const globalConfig = {
   },
 
   download: {
-    baseUrl: 'https://beta.miawa.cn',
+    baseUrl: 'https://miawa.cn',
     sourceLabels: {
       home: 'home-latest-download',
       files: 'files-download',

@@ -12,7 +12,7 @@
 ### 1.2 Base URL
 
 - 站内调用使用相对路径：`/api/v2/...`
-- 外部调用拼接站点域名，例如：`https://beta.miawa.cn/api/v2`
+- 外部调用拼接站点域名，例如：`https://miawa.cn/api/v2`
 
 ### 1.3 内容类型
 
@@ -83,7 +83,7 @@ Access-Control-Expose-Headers: X-Latest-Version, X-Latest-Versions
 ### 1.8 Git 仓库镜像
 
 - 当 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会同步 Git 镜像到项目根目录 `repo/{launcher}.git`。
-- 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://beta.miawa.cn/repo/fcl.git`。
+- 标准克隆地址为：`GET /repo/{launcher}.git/...`，例如：`git clone https://miawa.cn/repo/fcl.git`。
 - `/repo/...` 仅支持只读访问，供 `git clone` / `git fetch` 使用。
 - `/repo/...` 走**独立的 repo 流量计量与 repo 下载统计**，不与普通 `/download/...` 混算。
 - `/repo/...` 不走下载验证码与下载令牌。
@@ -182,11 +182,11 @@ GET /api/v2/launchers
       "tag_name": "1.3.0.7",
       "name": "1.3.0.7",
       "published_at": "2025-01-01T00:00:00Z",
-      "clone_url": "https://beta.miawa.cn/repo/fcl.git",
+      "clone_url": "https://miawa.cn/repo/fcl.git",
       "assets": [
         {
           "name": "FCL-release-1.3.0.7-all.apk",
-          "url": "https://beta.miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+          "url": "https://miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
           "size": 12345678
         }
       ]
@@ -238,7 +238,7 @@ GET /api/v2/launchers/{launcher}
     "assets": [
       {
         "name": "FCL-release-1.3.0.7-all.apk",
-        "url": "https://beta.miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
+        "url": "https://miawa.cn/download/fcl/1.3.0.7/FCL-release-1.3.0.7-all.apk",
         "size": 12345678
       }
     ]

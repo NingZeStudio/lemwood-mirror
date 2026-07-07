@@ -1473,7 +1473,7 @@ components:
           description: Optional release notes body
         clone_url:
           type: string
-          example: https://beta.miawa.cn/repo/fcl.git
+          example: https://miawa.cn/repo/fcl.git
           description: |
             Git clone URL. Present only when the launcher's `mode` is `clone` or `all`.
         assets:
@@ -1886,7 +1886,7 @@ components:
       properties:
         server_address:
           type: string
-          example: beta.miawa.cn
+          example: miawa.cn
         server_port:
           type: integer
           example: 8080
