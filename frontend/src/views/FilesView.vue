@@ -90,7 +90,7 @@ const formatDate = (dateString) => {
 
 const formatSize = (bytes) => {
   if (bytes == null) return ''
-  const units = ['B', 'KB', 'MB', 'GB']
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB']
   let i = 0
   let size = bytes
   while (size >= 1024 && i < units.length - 1) {
