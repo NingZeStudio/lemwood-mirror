@@ -72,6 +72,11 @@ self_update_channel: {{ yaml .SelfUpdateChannel }}
 self_update_check_cron: {{ yaml .SelfUpdateCheckCron }}
 self_update_auto_restart: {{ .SelfUpdateAutoRestart }}
 
+# ip2region 离线 IP 归属地数据库下载地址（首次启动时自动下载到 storage_path 目录）。
+# IPv4 与 IPv6 为两份独立的 xdb 文件，留空使用默认地址；可自定义镜像源以加速下载。
+ip2region_v4_xdb_url: {{ yaml .IP2RegionV4XdbURL }}
+ip2region_v6_xdb_url: {{ yaml .IP2RegionV6XdbURL }}
+
 # 启动器列表
 # mode:
 #   - release: 仅同步 Release 资源
@@ -192,6 +197,8 @@ type Config struct {
 	SelfUpdateChannel      string           `json:"self_update_channel" yaml:"self_update_channel"`
 	SelfUpdateCheckCron    string           `json:"self_update_check_cron" yaml:"self_update_check_cron"`
 	SelfUpdateAutoRestart  bool             `json:"self_update_auto_restart" yaml:"self_update_auto_restart"`
+	IP2RegionV4XdbURL      string           `json:"ip2region_v4_xdb_url" yaml:"ip2region_v4_xdb_url"`
+	IP2RegionV6XdbURL      string           `json:"ip2region_v6_xdb_url" yaml:"ip2region_v6_xdb_url"`
 }
 
 func DefaultConfig() *Config {

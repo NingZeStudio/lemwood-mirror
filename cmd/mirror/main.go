@@ -22,6 +22,7 @@ import (
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
+	"lemwood_mirror/internal/geoip"
 	"lemwood_mirror/internal/gitmirror"
 	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/server"
@@ -258,6 +259,12 @@ func main() {
 	}
 
 	go auth.CleanupTokens()
+
+	// 加载 ip2region 离线 IP 归属地数据库（缺失时自动下载 v4/v6 两份）。
+	// 失败不影响主流程，统计会降级为空地域字段。
+	v4XdbPath := filepath.Join(base, "ip2region_v4.xdb")
+	v6XdbPath := filepath.Join(base, "ip2region_v6.xdb")
+	geoip.Init(v4XdbPath, cfg.IP2RegionV4XdbURL, v6XdbPath, cfg.IP2RegionV6XdbURL)
 
 	stats.InitWritePool(4, 1000)
 

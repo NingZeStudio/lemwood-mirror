@@ -6,6 +6,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gocolly/colly/v2 v2.1.0
 	github.com/google/go-github/v50 v50.1.0
+	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260630140118-a99989343ebd
 	github.com/pquerna/otp v1.5.0
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5

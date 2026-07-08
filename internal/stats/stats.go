@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/geoip"
 	"lemwood_mirror/internal/netutil"
 	"log"
 	"net"
@@ -17,22 +18,15 @@ import (
 )
 
 type IPInfo struct {
-	Status  string `json:"status"`
-	Country string `json:"country"`
-	Region  string `json:"regionName"`
-	City    string `json:"city"`
-	Query   string `json:"query"`
+	Country string
+	Region  string
+	City    string
 	Expires time.Time
 }
 
 type writeTask struct {
 	query string
 	args  []interface{}
-}
-
-type ipInfoTask struct {
-	ip       string
-	callback func(info *IPInfo)
 }
 
 var (
@@ -44,10 +38,9 @@ var (
 	snapshotMu       sync.RWMutex
 	refreshInFlight  sync.Mutex
 
-	writeQueue   chan *writeTask
-	ipInfoQueue  chan *ipInfoTask
-	workerWg     sync.WaitGroup
-	workerCtx    context.Context
+	writeQueue  chan *writeTask
+	workerWg    sync.WaitGroup
+	workerCtx   context.Context
 	workerCancel context.CancelFunc
 
 	droppedCount int64
@@ -57,7 +50,6 @@ const (
 	defaultWorkers   = 4
 	defaultQueueSize = 1000
 	maxIPCacheSize   = 50000
-	cacheTTL         = 5 * time.Minute
 	snapshotTTL      = 15 * time.Minute
 )
 
@@ -80,15 +72,11 @@ func InitWritePool(workers int, queueSize int) {
 
 	workerCtx, workerCancel = context.WithCancel(context.Background())
 	writeQueue = make(chan *writeTask, queueSize)
-	ipInfoQueue = make(chan *ipInfoTask, queueSize)
 
 	for i := 0; i < workers; i++ {
 		workerWg.Add(1)
 		go writeWorker()
 	}
-
-	workerWg.Add(1)
-	go ipInfoWorker()
 
 	// 启动 IP 流量记录定期清理 goroutine（每小时清理 24 小时前的 IP 级流量数据）
 	workerWg.Add(1)
@@ -126,21 +114,15 @@ func trafficCleanupWorker() {
 }
 
 func CloseWritePool() {
-	if writeQueue == nil && ipInfoQueue == nil {
+	if writeQueue == nil {
 		return
 	}
-	// 先取消 ctx：让 ipInfoWorker / trafficCleanupWorker 能立即停止 HTTP 限流与远程请求，
-	// 进入"仅排空队列"模式，从而在 close 之前快速 drain ipInfoQueue 剩余任务。
+	// 先取消 ctx：让 trafficCleanupWorker 能立即停止周期任务。
 	if workerCancel != nil {
 		workerCancel()
 	}
 	// 再关闭队列：writeWorker 不会感知 ctx，会继续把 writeQueue 剩余任务写入库后退出。
-	if writeQueue != nil {
-		close(writeQueue)
-	}
-	if ipInfoQueue != nil {
-		close(ipInfoQueue)
-	}
+	close(writeQueue)
 
 	done := make(chan struct{})
 	go func() {
@@ -164,44 +146,6 @@ func writeWorker() {
 	for task := range writeQueue {
 		if _, err := db.DB.Exec(task.query, task.args...); err != nil {
 			log.Printf("数据库写入失败: %v", err)
-		}
-	}
-}
-
-func ipInfoWorker() {
-	defer workerWg.Done()
-	client := &http.Client{Timeout: 5 * time.Second}
-	var lastReq time.Time
-	minInterval := 2 * time.Second
-
-	for task := range ipInfoQueue {
-		// 关闭中：跳过限流 sleep 和网络请求，仅快速排空队列。
-		// 此时 callback（RecordVisit/RecordDownload 等）写入 writeQueue 的写入路径会
-		// 被 enqueueWrite 的 panic/recover 丢弃，无需在此调用以免无谓的资源消耗。
-		if workerCtx.Err() != nil {
-			continue
-		}
-
-		if elapsed := time.Since(lastReq); elapsed < minInterval {
-			select {
-			case <-workerCtx.Done():
-				continue
-			case <-time.After(minInterval - elapsed):
-			}
-		}
-
-		info := fetchIPInfo(client, task.ip)
-		lastReq = time.Now()
-		if info != nil {
-			ipMutex.Lock()
-			if len(ipCache) >= maxIPCacheSize {
-				evictIPCache()
-			}
-			ipCache[task.ip] = info
-			ipMutex.Unlock()
-		}
-		if task.callback != nil {
-			task.callback(info)
 		}
 	}
 }
@@ -239,77 +183,36 @@ func isPrivateIP(ipStr string) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
-func fetchIPInfo(client *http.Client, ip string) *IPInfo {
-	if isPrivateIP(ip) {
-		return &IPInfo{
-			Country: "Local",
-			Region:  "Local",
-			City:    "Local",
-		}
-	}
-
-	resp, err := client.Get("https://ip-api.com/json/" + ip + "?lang=zh-CN")
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		log.Printf("[Stats] ip-api.com 429 限流，暂停 IP 查询: ip=%s", ip)
-		return nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[Stats] ip-api.com 返回异常状态: %d, ip=%s", resp.StatusCode, ip)
-		return nil
-	}
-
-	var info IPInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		log.Printf("[Stats] ip-api.com 响应解析失败: %v, ip=%s", err, ip)
-		return nil
-	}
-
-	if info.Status == "success" {
-		info.Expires = time.Now().Add(24 * time.Hour)
-		return &info
-	}
-	return nil
-}
-
-func getIPInfoAsync(ip string, callback func(info *IPInfo)) {
+// lookupIPInfo 同步查询 IP 归属地，使用内存中的 ip2region xdb 数据库（微秒级）。
+// 未加载 xdb 时对公网 IP 返回 nil，私有 IP 返回占位信息，调用方应降级存储空字段。
+func lookupIPInfo(ip string) *IPInfo {
 	ipMutex.RLock()
 	if info, ok := ipCache[ip]; ok {
 		if time.Now().Before(info.Expires) {
 			ipMutex.RUnlock()
-			if callback != nil {
-				callback(info)
-			}
-			return
+			return info
 		}
 	}
 	ipMutex.RUnlock()
 
-	if ipInfoQueue == nil {
-		if callback != nil {
-			callback(nil)
-		}
-		return
+	info := &IPInfo{Expires: time.Now().Add(24 * time.Hour)}
+	if isPrivateIP(ip) {
+		info.Country = "Local"
+		info.Region = "Local"
+		info.City = "Local"
+	} else if gi := geoip.Lookup(ip); gi != nil {
+		info.Country = gi.Country
+		info.Region = gi.Province
+		info.City = gi.City
 	}
 
-	defer func() {
-		if r := recover(); r != nil {
-			if callback != nil {
-				callback(nil)
-			}
-		}
-	}()
-	select {
-	case ipInfoQueue <- &ipInfoTask{ip: ip, callback: callback}:
-	default:
-		if callback != nil {
-			callback(nil)
-		}
+	ipMutex.Lock()
+	if len(ipCache) >= maxIPCacheSize {
+		evictIPCache()
 	}
+	ipCache[ip] = info
+	ipMutex.Unlock()
+	return info
 }
 
 func enqueueWrite(task *writeTask) {
@@ -347,18 +250,17 @@ func RecordVisit(r *http.Request) {
 	}
 
 	// 解析 IP 属地后只存储地域信息，不存储 IP 本身
-	getIPInfoAsync(ip, func(info *IPInfo) {
-		country, region, city := "", "", ""
-		if info != nil {
-			country = info.Country
-			region = info.Region
-			city = info.City
-		}
+	info := lookupIPInfo(ip)
+	country, region, city := "", "", ""
+	if info != nil {
+		country = info.Country
+		region = info.Region
+		city = info.City
+	}
 
-		enqueueWrite(&writeTask{
-			query: `INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			args:  []interface{}{"", path, ua, referer, country, region, city},
-		})
+	enqueueWrite(&writeTask{
+		query: `INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		args:  []interface{}{"", path, ua, referer, country, region, city},
 	})
 }
 
@@ -370,16 +272,15 @@ func RecordDownload(r *http.Request, fileName, launcher, version string) {
 	}
 
 	// 解析 IP 属地后只存储国家，不存储 IP 本身
-	getIPInfoAsync(ip, func(info *IPInfo) {
-		country := ""
-		if info != nil {
-			country = info.Country
-		}
+	info := lookupIPInfo(ip)
+	country := ""
+	if info != nil {
+		country = info.Country
+	}
 
-		enqueueWrite(&writeTask{
-			query: `INSERT INTO downloads (file_name, launcher, version, ip, country) VALUES (?, ?, ?, ?, ?)`,
-			args:  []interface{}{fileName, launcher, version, "", country},
-		})
+	enqueueWrite(&writeTask{
+		query: `INSERT INTO downloads (file_name, launcher, version, ip, country) VALUES (?, ?, ?, ?, ?)`,
+		args:  []interface{}{fileName, launcher, version, "", country},
 	})
 }
 
@@ -391,16 +292,15 @@ func RecordRepoDownload(r *http.Request, repoName, repoPath string) {
 	}
 
 	// 解析 IP 属地后只存储国家，不存储 IP 本身
-	getIPInfoAsync(ip, func(info *IPInfo) {
-		country := ""
-		if info != nil {
-			country = info.Country
-		}
+	info := lookupIPInfo(ip)
+	country := ""
+	if info != nil {
+		country = info.Country
+	}
 
-		enqueueWrite(&writeTask{
-			query: `INSERT INTO repo_downloads (repo_name, repo_path, ip, country) VALUES (?, ?, ?, ?)`,
-			args:  []interface{}{repoName, repoPath, "", country},
-		})
+	enqueueWrite(&writeTask{
+		query: `INSERT INTO repo_downloads (repo_name, repo_path, ip, country) VALUES (?, ?, ?, ?)`,
+		args:  []interface{}{repoName, repoPath, "", country},
 	})
 }
 
