@@ -129,14 +129,17 @@ func CloseWritePool() {
 	if writeQueue == nil && ipInfoQueue == nil {
 		return
 	}
+	// 先取消 ctx：让 ipInfoWorker / trafficCleanupWorker 能立即停止 HTTP 限流与远程请求，
+	// 进入"仅排空队列"模式，从而在 close 之前快速 drain ipInfoQueue 剩余任务。
+	if workerCancel != nil {
+		workerCancel()
+	}
+	// 再关闭队列：writeWorker 不会感知 ctx，会继续把 writeQueue 剩余任务写入库后退出。
 	if writeQueue != nil {
 		close(writeQueue)
 	}
 	if ipInfoQueue != nil {
 		close(ipInfoQueue)
-	}
-	if workerCancel != nil {
-		workerCancel()
 	}
 
 	done := make(chan struct{})
@@ -172,9 +175,21 @@ func ipInfoWorker() {
 	minInterval := 2 * time.Second
 
 	for task := range ipInfoQueue {
-		if elapsed := time.Since(lastReq); elapsed < minInterval {
-			time.Sleep(minInterval - elapsed)
+		// 关闭中：跳过限流 sleep 和网络请求，仅快速排空队列。
+		// 此时 callback（RecordVisit/RecordDownload 等）写入 writeQueue 的写入路径会
+		// 被 enqueueWrite 的 panic/recover 丢弃，无需在此调用以免无谓的资源消耗。
+		if workerCtx.Err() != nil {
+			continue
 		}
+
+		if elapsed := time.Since(lastReq); elapsed < minInterval {
+			select {
+			case <-workerCtx.Done():
+				continue
+			case <-time.After(minInterval - elapsed):
+			}
+		}
+
 		info := fetchIPInfo(client, task.ip)
 		lastReq = time.Now()
 		if info != nil {
