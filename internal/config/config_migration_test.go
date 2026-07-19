@@ -35,7 +35,6 @@ func TestLoadConfig_LegacyJSONMigration(t *testing.T) {
 			{
 				"name":               "mirror",
 				"source_url":         "https://github.com/owner/repo",
-				"repo_selector":      "",
 				"include_prerelease": true,
 				"max_versions":       3,
 				// 故意不写 mode，验证归一化为 release

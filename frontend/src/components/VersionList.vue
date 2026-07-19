@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Download, GitFork, History, Package } from 'lucide-vue-next'
+import { Download, History, Package } from 'lucide-vue-next'
 import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
 import { globalConfig } from '@/lib/globalConfig'
 import Card from '@/components/ui/Card.vue'
@@ -28,8 +28,6 @@ const launcherList = computed(() => {
       ? getAssetUrl(name, latestObj, latestObj.assets[0])
       : '#'
 
-    const cloneUrl = versions[0]?.clone_url || ''
-
     return {
       name,
       displayName: info.displayName,
@@ -39,8 +37,7 @@ const launcherList = computed(() => {
       lastUpdated: versions.length ? versions[0].published_at : null,
       hasAssets: Boolean(latestObj?.assets?.length),
       latestObj,
-      latestDownloadUrl,
-      cloneUrl
+      latestDownloadUrl
     }
   })
 })
@@ -110,10 +107,6 @@ const handleDownload = async (item) => {
   }
 
   router.push(`/verify?file=${encodeURIComponent(filePath)}&return_url=${encodeURIComponent(returnUrl)}&source=${encodeURIComponent(source)}`)
-}
-
-const copyCloneUrl = (url) => {
-  navigator.clipboard.writeText(`git clone ${url}`)
 }
 
 onMounted(() => {
@@ -198,15 +191,6 @@ defineExpose({ refresh: loadData })
           >
             <History class="mr-1.5 h-3.5 w-3.5" />
             历史版本
-          </Button>
-          <Button
-            v-if="item.cloneUrl"
-            variant="outline"
-            size="sm"
-            @click="copyCloneUrl(item.cloneUrl)"
-          >
-            <GitFork class="mr-1.5 h-3.5 w-3.5" />
-            克隆仓库
           </Button>
         </div>
       </Card>

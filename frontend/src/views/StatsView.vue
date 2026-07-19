@@ -47,7 +47,7 @@ const mapLoaded = ref(false)
 const isDark = useDark()
 
 const formatBytes = (bytes) => {
-  if (!bytes) return '0 B'
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB']
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1)
@@ -69,11 +69,6 @@ const avgDailyDownloads = computed(() => {
   return stats.value.total_downloads / stats.value.total_days
 })
 
-const avgDailyRepoDownloads = computed(() => {
-  if (!stats.value.total_days || stats.value.total_days === 0) return 0
-  return (stats.value.total_repo_downloads || 0) / stats.value.total_days
-})
-
 const visitGrowth = computed(() => {
   const avg = avgDailyVisits.value
   const recent = (stats.value.last_30_visits || 0) / 30
@@ -84,13 +79,6 @@ const visitGrowth = computed(() => {
 const downloadGrowth = computed(() => {
   const avg = avgDailyDownloads.value
   const recent = (stats.value.last_30_downloads || 0) / 30
-  if (avg === 0) return 0
-  return ((recent - avg) / avg * 100)
-})
-
-const repoDownloadGrowth = computed(() => {
-  const avg = avgDailyRepoDownloads.value
-  const recent = (stats.value.last_30_repo_downloads || 0) / 30
   if (avg === 0) return 0
   return ((recent - avg) / avg * 100)
 })
@@ -166,9 +154,7 @@ const trendOption = computed(() => {
   const dates = rawData.map(d => d.date.slice(5))
   const visits = rawData.map(d => d.visit_count)
   const downloads = rawData.map(d => d.download_count)
-  const repoDownloads = rawData.map(d => d.repo_download_count || 0)
   const traffic = rawData.map(d => d.traffic_bytes || 0)
-  const repoTraffic = rawData.map(d => d.repo_traffic_bytes || 0)
 
   return {
     backgroundColor: 'transparent',
@@ -188,7 +174,7 @@ const trendOption = computed(() => {
       }
     },
     legend: {
-      data: ['访问量', '下载量', 'Repo 拉取量', '下载流量', 'Repo 流量'],
+      data: ['访问量', '下载量', '下载流量'],
       textStyle: { color: textColor },
       bottom: 0
     },
@@ -245,14 +231,6 @@ const trendOption = computed(() => {
         itemStyle: { color: '#0ea5e9', borderRadius: [4, 4, 0, 0] }
       },
       {
-        name: 'Repo 拉取量',
-        type: 'line',
-        smooth: true,
-        symbol: 'none',
-        data: repoDownloads,
-        itemStyle: { color: '#8b5cf6' }
-      },
-      {
         name: '下载流量',
         type: 'line',
         smooth: true,
@@ -260,15 +238,6 @@ const trendOption = computed(() => {
         yAxisIndex: 1,
         data: traffic,
         itemStyle: { color: '#10b981' }
-      },
-      {
-        name: 'Repo 流量',
-        type: 'line',
-        smooth: true,
-        symbol: 'none',
-        yAxisIndex: 1,
-        data: repoTraffic,
-        itemStyle: { color: '#f59e0b' }
       }
     ]
   }
@@ -382,28 +351,6 @@ onMounted(async () => {
 
         <Card class="shadow-sm transition-shadow hover:shadow-md">
           <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle class="text-sm font-medium">Repo 拉取量</CardTitle>
-            <Download class="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div class="flex items-baseline gap-2">
-              <span class="text-2xl font-bold">{{ stats.total_repo_downloads?.toLocaleString() || '-' }}</span>
-              <span
-                v-if="repoDownloadGrowth !== 0"
-                class="inline-flex items-center gap-0.5 text-xs font-medium"
-                :class="repoDownloadGrowth >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"
-              >
-                <ArrowUp v-if="repoDownloadGrowth >= 0" class="h-3 w-3" />
-                <ArrowDown v-else class="h-3 w-3" />
-                {{ Math.abs(repoDownloadGrowth).toFixed(1) }}%
-              </span>
-            </div>
-            <p class="mt-1 text-xs text-muted-foreground">近 30 日 {{ stats.last_30_repo_downloads?.toLocaleString() || 0 }} 次拉取</p>
-          </CardContent>
-        </Card>
-
-        <Card class="shadow-sm transition-shadow hover:shadow-md">
-          <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle class="text-sm font-medium">磁盘占用</CardTitle>
             <Server class="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -435,22 +382,11 @@ onMounted(async () => {
 
         <Card class="shadow-sm transition-shadow hover:shadow-md">
           <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle class="text-sm font-medium">Repo 流量</CardTitle>
-            <HardDrive class="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div class="text-2xl font-bold">{{ formatBytes(stats.total_repo_traffic_bytes) }}</div>
-            <p class="mt-1 text-xs text-muted-foreground">近 30 日 {{ formatBytes(stats.last_30_repo_traffic_bytes) }} 拉取流量</p>
-          </CardContent>
-        </Card>
-
-        <Card class="shadow-sm transition-shadow hover:shadow-md">
-          <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle class="text-sm font-medium">运行天数</CardTitle>
             <Activity class="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div class="text-2xl font-bold">{{ stats.total_days || '-' }}</div>
+            <div class="text-2xl font-bold">{{ stats.total_days ?? '-' }}</div>
             <p class="mt-1 text-xs text-muted-foreground">自系统上线以来</p>
           </CardContent>
         </Card>
@@ -502,32 +438,6 @@ onMounted(async () => {
                 </div>
                 <div class="min-w-0 flex-1 space-y-0.5">
                   <p class="truncate text-sm font-medium leading-none">{{ item.launcher }}</p>
-                </div>
-                <div class="shrink-0 text-sm font-bold tabular-nums">{{ item.count.toLocaleString() }}</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card class="col-span-7 lg:col-span-3 flex flex-col shadow-sm">
-          <CardHeader>
-            <CardTitle class="flex items-center gap-2 text-base">
-              <TrendingUp class="h-4 w-4 text-violet-500" />
-              热门 Repo 排行
-            </CardTitle>
-            <CardDescription>拉取量最高的 Git 镜像仓库</CardDescription>
-          </CardHeader>
-          <CardContent class="flex-1 overflow-hidden">
-            <div class="h-[168px] space-y-3 overflow-y-auto pr-2 custom-scrollbar">
-              <div v-for="(item, i) in stats.top_repo_downloads" :key="`repo-${i}`" class="flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50">
-                <div
-                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
-                  :class="i < 3 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'"
-                >
-                  {{ i + 1 }}
-                </div>
-                <div class="min-w-0 flex-1 space-y-0.5">
-                  <p class="truncate text-sm font-medium leading-none">{{ item.repo_name }}</p>
                 </div>
                 <div class="shrink-0 text-sm font-bold tabular-nums">{{ item.count.toLocaleString() }}</div>
               </div>

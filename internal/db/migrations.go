@@ -148,9 +148,11 @@ func migrateV1SchemaBaseline(d *sql.DB) error {
 	return nil
 }
 
-// migrateV2AggregateTraffic 将 ip_daily_traffic / repo_ip_daily_traffic 历史数据
-// 聚合到无 IP 聚合表 daily_traffic / daily_repo_traffic。
+// migrateV2AggregateTraffic 将 ip_daily_traffic 历史数据
+// 聚合到无 IP 聚合表 daily_traffic。
 // 幂等：使用 INSERT IGNORE / INSERT OR IGNORE，重复执行不产生重复行。
+// 注：repo 镜像功能已移除，本迁移不再聚合 repo_ip_daily_traffic；
+// 已应用过 v2 的库（schema_version>=2）不会重复执行本迁移。
 func migrateV2AggregateTraffic(d *sql.DB) error {
 	var insertPrefix string
 	if isMySQL {
@@ -168,11 +170,6 @@ func migrateV2AggregateTraffic(d *sql.DB) error {
 	if _, err := tx.Exec(insertPrefix + ` daily_traffic (date, bytes_downloaded)
 		SELECT date, SUM(bytes_downloaded) FROM ip_daily_traffic GROUP BY date`); err != nil {
 		return fmt.Errorf("聚合 daily_traffic 失败: %w", err)
-	}
-
-	if _, err := tx.Exec(insertPrefix + ` daily_repo_traffic (date, bytes_downloaded)
-		SELECT date, SUM(bytes_downloaded) FROM repo_ip_daily_traffic GROUP BY date`); err != nil {
-		return fmt.Errorf("聚合 daily_repo_traffic 失败: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

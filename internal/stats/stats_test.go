@@ -55,17 +55,6 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 		t.Fatalf("insert yesterday daily_traffic error = %v", err)
 	}
 
-	// 写入 Repo 流量
-	if err := db.RecordRepoTraffic("1.1.1.1", 512); err != nil {
-		t.Fatalf("RecordRepoTraffic() error = %v", err)
-	}
-	if _, err := db.DB.Exec("INSERT INTO repo_ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)", "4.4.4.4", yesterday, 1024); err != nil {
-		t.Fatalf("insert yesterday repo traffic error = %v", err)
-	}
-	if _, err := db.DB.Exec("INSERT INTO daily_repo_traffic (date, bytes_downloaded) VALUES (?, ?)", yesterday, 1024); err != nil {
-		t.Fatalf("insert yesterday daily_repo_traffic error = %v", err)
-	}
-
 	// 清除可能存在的快照缓存
 	snapshotMu.Lock()
 	lastSnapshot = nil
@@ -87,23 +76,12 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 		t.Fatalf("Last30TrafficBytes = %d, want 7168", data.Last30TrafficBytes)
 	}
 
-	// Repo 总流量 = 512 + 1024 = 1536
-	if data.TotalRepoTrafficBytes != 1536 {
-		t.Fatalf("TotalRepoTrafficBytes = %d, want 1536", data.TotalRepoTrafficBytes)
-	}
-
-	if data.Last30RepoTrafficBytes != 1536 {
-		t.Fatalf("Last30RepoTrafficBytes = %d, want 1536", data.Last30RepoTrafficBytes)
-	}
-
 	// 验证 DailyStats 中今日流量
 	todayTraffic := int64(0)
-	todayRepoTraffic := int64(0)
 	yesterdayTraffic := int64(0)
 	for _, ds := range data.DailyStats {
 		if ds.Date == today {
 			todayTraffic = ds.TrafficBytes
-			todayRepoTraffic = ds.RepoTrafficBytes
 		}
 		if ds.Date == yesterday {
 			yesterdayTraffic = ds.TrafficBytes
@@ -114,12 +92,82 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 	if todayTraffic != 3072 {
 		t.Fatalf("today traffic = %d, want 3072", todayTraffic)
 	}
-	// 今日 Repo 流量 = 512
-	if todayRepoTraffic != 512 {
-		t.Fatalf("today repo traffic = %d, want 512", todayRepoTraffic)
-	}
 	// 昨日普通流量 = 4096
 	if yesterdayTraffic != 4096 {
 		t.Fatalf("yesterday traffic = %d, want 4096", yesterdayTraffic)
+	}
+}
+
+// TestComputeTotalDaysFromVisits 有访问记录时，运行天数取 visits 最早记录至今，至少为 1。
+func TestComputeTotalDaysFromVisits(t *testing.T) {
+	setupStatsTestDB(t)
+
+	if _, err := db.DB.Exec("INSERT INTO visits (ip, path) VALUES (?, ?)", "1.1.1.1", "/"); err != nil {
+		t.Fatalf("insert visit error = %v", err)
+	}
+
+	data := &StatsData{}
+	computeTotalDays(data)
+	if data.TotalDays < 1 {
+		t.Fatalf("TotalDays = %d, want >= 1", data.TotalDays)
+	}
+}
+
+// TestComputeTotalDaysFallbackStartTime 无访问记录时回退到 system_info.start_time，至少为 1。
+func TestComputeTotalDaysFallbackStartTime(t *testing.T) {
+	setupStatsTestDB(t)
+
+	data := &StatsData{}
+	computeTotalDays(data)
+	if data.TotalDays < 1 {
+		t.Fatalf("TotalDays = %d, want >= 1 (start_time fallback)", data.TotalDays)
+	}
+}
+
+// TestComputeTotalDaysOldVisit 最早的访问记录在 N 天前时，TotalDays = N+1。
+func TestComputeTotalDaysOldVisit(t *testing.T) {
+	setupStatsTestDB(t)
+
+	tenDaysAgo := time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05")
+	if _, err := db.DB.Exec("INSERT INTO visits (ip, path, created_at) VALUES (?, ?, ?)", "1.1.1.1", "/", tenDaysAgo); err != nil {
+		t.Fatalf("insert old visit error = %v", err)
+	}
+
+	data := &StatsData{}
+	computeTotalDays(data)
+	if data.TotalDays != 11 {
+		t.Fatalf("TotalDays = %d, want 11", data.TotalDays)
+	}
+}
+
+// TestParseStatsTime 兼容多种历史时间格式。
+func TestParseStatsTime(t *testing.T) {
+	cases := []string{
+		"2006-01-02 15:04:05",
+		"2026-07-19 06:50:43",
+		"2026-07-19T06:50:43Z",
+		"2026-07-19T06:50:43",
+		"2026-07-19",
+		"2026-07-19 06:50:43.123456",
+	}
+	for _, s := range cases {
+		if _, ok := parseStatsTime(s); !ok {
+			t.Errorf("parseStatsTime(%q) failed, want success", s)
+		}
+	}
+	for _, s := range []string{"", "not-a-time", "2026/07/19"} {
+		if _, ok := parseStatsTime(s); ok {
+			t.Errorf("parseStatsTime(%q) succeeded, want failure", s)
+		}
+	}
+}
+
+// TestDaysSinceClamp 起始时间略在未来（时区偏差）时，天数至少为 1。
+func TestDaysSinceClamp(t *testing.T) {
+	if d := daysSince(time.Now().Add(8 * time.Hour)); d != 1 {
+		t.Fatalf("daysSince(future) = %d, want 1", d)
+	}
+	if d := daysSince(time.Now().AddDate(0, 0, -2)); d != 3 {
+		t.Fatalf("daysSince(-2d) = %d, want 3", d)
 	}
 }

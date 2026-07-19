@@ -93,22 +93,18 @@ func TestShouldSyncByMode(t *testing.T) {
 		name        string
 		mode        string
 		wantRelease bool
-		wantClone   bool
 	}{
-		{name: "default", mode: "", wantRelease: true, wantClone: false},
-		{name: "release", mode: "release", wantRelease: true, wantClone: false},
-		{name: "clone", mode: "clone", wantRelease: false, wantClone: true},
-		{name: "all", mode: "all", wantRelease: true, wantClone: true},
-		{name: "invalid", mode: "invalid", wantRelease: false, wantClone: false},
+		{name: "default", mode: "", wantRelease: true},
+		{name: "release", mode: "release", wantRelease: true},
+		{name: "clone (deprecated, syncs nothing)", mode: "clone", wantRelease: false},
+		{name: "all (deprecated clone, still syncs release)", mode: "all", wantRelease: true},
+		{name: "invalid", mode: "invalid", wantRelease: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ShouldSyncRelease(tt.mode); got != tt.wantRelease {
 				t.Fatalf("ShouldSyncRelease(%q) = %v, want %v", tt.mode, got, tt.wantRelease)
-			}
-			if got := ShouldSyncClone(tt.mode); got != tt.wantClone {
-				t.Fatalf("ShouldSyncClone(%q) = %v, want %v", tt.mode, got, tt.wantClone)
 			}
 		})
 	}

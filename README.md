@@ -4,7 +4,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.24-blue)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-面向 Minecraft 启动器分发场景的 GitHub Release / Git 仓库镜像服务 — 自动同步、版本管理、下载加速、统计风控，开箱即用。
+面向 Minecraft 启动器分发场景的 GitHub Release 镜像服务 — 自动同步、版本管理、下载加速、统计风控，开箱即用。
 
 ![站点截图](screenshot.jpg)
 
@@ -36,15 +36,15 @@ go build -o mirror ./cmd/mirror
 
 打开 `http://localhost:8080`，看到启动器版本列表即运行成功。
 
-> **前置依赖：** Go 1.21+、Node.js 18+、Git 2.x（启用 `clone` / `all` 模式时必需）
+> **前置依赖：** Go 1.21+、Node.js 18+
 
 ## 功能
 
-- **定时同步** — 按 Cron 表达式定时扫描上游 GitHub 仓库，按模式自动同步 Release 资产和/或 Git 仓库镜像
+- **定时同步** — 按 Cron 表达式定时扫描上游 GitHub 仓库，自动同步 Release 资产
 - **版本保留** — 每个启动器可独立配置保留版本数，自动清理旧版本
 - **下载加速** — 支持 xget 代理、HTTP 代理、自定义 CDN 前缀，加速国内下载
 - **验证码保护** — 可选极验 GeeTest 人机验证，防止滥用
-- **统计面板** — 访问量、下载量、Repo 拉取量、热门资源、地区分布、每日趋势
+- **统计面板** — 访问量、下载量、热门资源、地区分布、每日趋势
 - **流量控制** — 单 IP 每日流量上限，超限自动封禁
 - **黑名单** — 本地 + 外部黑名单同步，公开封禁记录
 - **后台管理** — Web 管理面板，支持配置、黑名单、文件管理、TOTP 两步验证
@@ -117,8 +117,7 @@ mysql_migration: false
 launchers:
   - name: "fcl"
     source_url: "https://github.com/FCL-Team/FoldCraftLauncher"
-    repo_selector: ""
-    mode: "all"
+    mode: "release"
     include_prerelease: false
     max_versions: 2
 ```
@@ -141,7 +140,7 @@ launchers:
 |------|------|--------|------|
 | `github_token` | string | `""` | GitHub Token（**强烈建议填写**，否则每小时仅 60 次 API 调用）。支持 `GITHUB_TOKEN` 环境变量覆盖 |
 | `check_cron` | string | `"*/10 * * * *"` | 扫描 Cron 表达式（分钟粒度） |
-| `download_timeout_minutes` | int | — | 单文件下载超时（分钟），也作为 Git 镜像同步超时 |
+| `download_timeout_minutes` | int | — | 单文件下载超时（分钟） |
 | `concurrent_downloads` | int | `3` | 并发下载数 |
 
 ### 管理员
@@ -188,26 +187,11 @@ launchers:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `name` | string | — | 启动器唯一标识，用于 API 路径、目录名和 Git 镜像名 |
-| `source_url` | string | — | GitHub 仓库地址或包含仓库链接的网页 |
-| `repo_selector` | string | `""` | 页面仓库链接提取规则：留空匹配第一个 GitHub 链接；`"regex:..."` 正则匹配；其他作 CSS 选择器 |
-| `mode` | string | `"release"` | 同步模式：`release` 仅同步 Release，`clone` 仅同步 Git 仓库，`all` 同步两者 |
+| `name` | string | — | 启动器唯一标识，用于 API 路径和目录名 |
+| `source_url` | string | — | GitHub 仓库地址（`https://github.com/<owner>/<repo>`） |
+| `mode` | string | `"release"` | 同步模式：`release` 仅同步 Release；`clone` / `all` 已废弃（Git 镜像功能已移除），仅为兼容旧配置保留 |
 | `include_prerelease` | bool | `false` | 包含预发布版本 |
-| `max_versions` | int | `0` (=3) | 保留最大版本数，≤0 时自动修正为 3；仅对 `release` / `all` 模式生效 |
-
-### Git 仓库克隆
-
-当某个 launcher 的 `mode` 为 `clone` 或 `all` 时，服务会在项目根目录生成 `repo/{launcher}.git` 镜像仓库，并暴露只读 HTTP 克隆地址：
-
-```bash
-git clone https://mirror.example.com/repo/fcl.git
-```
-
-- Git 镜像不占用 `storage_path`，固定存放在项目根目录 `repo/`。
-- `clone` 模式不依赖 Release 存在；只要 `source_url` 能解析到 GitHub 仓库即可。
-- `/repo/...` 使用与 `/download/...` 类似的受控只读入口，但采用**独立的 repo 流量计量与 repo 拉取统计**。
-- repo 流量写入 `repo_ip_daily_traffic`，repo 拉取记录写入 `repo_downloads`，不会与普通下载统计混算。
-- `/repo/...` 不走下载验证码与下载令牌，适用于标准 `git clone` / `git fetch`。
+| `max_versions` | int | `0` (=3) | 保留最大版本数，≤0 时自动修正为 3 |
 
 ## 下载流程
 
@@ -298,7 +282,6 @@ lemwood-mirror/
 ├── internal/
 │   ├── auth/            # 管理员认证与 TOTP
 │   ├── blacklist/       # 黑名单同步
-│   ├── browser/         # 网页仓库链接解析
 │   ├── captcha/         # 极验验证码集成
 │   ├── config/          # 配置加载与保存
 │   ├── db/              # 数据库抽象（SQLite/MySQL）

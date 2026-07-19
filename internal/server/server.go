@@ -58,28 +58,6 @@ type State struct {
 	selfUpdateCheckFunc func()
 }
 
-func (s *State) cloneRepoURL(r *http.Request, launcher string) string {
-	baseURL := ""
-	if s.Config != nil {
-		if s.Config.DownloadUrlBase != "" {
-			baseURL = s.Config.DownloadUrlBase
-		} else if s.Config.ServerAddress != "" {
-			baseURL = s.Config.ServerAddress
-		}
-	}
-	if baseURL == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		baseURL = fmt.Sprintf("%s://%s", scheme, r.Host)
-	} else if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-		baseURL = "http://" + baseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-	return fmt.Sprintf("%s/repo/%s.git", baseURL, launcher)
-}
-
 func NewState(base string, projectRoot string, cfg *config.Config) *State {
 	s := &State{
 		BasePath:    base,
@@ -311,146 +289,10 @@ func (s *State) getFrontendThemeDir() string {
 	return filepath.Join("web", "default")
 }
 
-// RepoDirEntry 是 /repo/ 目录下列出的一个条目。
-type RepoDirEntry struct {
-	Name    string    `json:"name"`
-	Type    string    `json:"type"`
-	Size    int64     `json:"size,omitempty"`
-	ModTime time.Time `json:"mod_time"`
-}
-
-// listRepoDirectory 将目录内容以 v2 信封格式返回。
-func listRepoDirectory(w http.ResponseWriter, r *http.Request, dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "读取目录失败", nil)
-		return
-	}
-
-	items := make([]RepoDirEntry, 0, len(entries))
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		typ := "file"
-		if entry.IsDir() {
-			typ = "dir"
-		}
-		items = append(items, RepoDirEntry{
-			Name:    entry.Name(),
-			Type:    typ,
-			Size:    info.Size(),
-			ModTime: info.ModTime(),
-		})
-	}
-
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Type == items[j].Type {
-			return items[i].Name < items[j].Name
-		}
-		if items[i].Type == "dir" {
-			return true
-		}
-		return false
-	})
-
-	writeV2Success(w, r, items, false)
-}
-
-// handleRepo 处理 /repo/ 下的请求：目录返回 v2 信封格式的条目列表，
-// 文件按原逻辑下载（保持原始字节以兼容 git clone）。
-func (s *State) handleRepo(w http.ResponseWriter, r *http.Request, repoDir string) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
-		return
-	}
-
-	path := r.URL.Path
-	if containsDotDot(path) {
-		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
-		return
-	}
-
-	relPath := strings.TrimPrefix(path, "/repo/")
-	fullPath := filepath.Join(repoDir, relPath)
-	cleanPath := filepath.Clean(fullPath)
-
-	absBase, _ := filepath.Abs(repoDir)
-	absPath, _ := filepath.Abs(cleanPath)
-	if !strings.HasPrefix(absPath, absBase) {
-		log.Printf("安全警告：拦截到来自 %s 的 repo 路径逃逸尝试，请求路径：%s", r.RemoteAddr, path)
-		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
-		return
-	}
-
-	info, err := os.Stat(cleanPath)
-	if err != nil {
-		writeV2Error(w, r, http.StatusNotFound, "not_found", "Not Found", nil)
-		return
-	}
-
-	if info.IsDir() {
-		if r.Method == http.MethodHead {
-			writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
-			return
-		}
-		listRepoDirectory(w, r, cleanPath)
-		return
-	}
-
-	// 文件：HEAD 直接返回原始内容，GET 走流量控制
-	if r.Method == http.MethodHead {
-		http.ServeFile(w, r, cleanPath)
-		return
-	}
-
-	clientIP := netutil.ExtractClientIP(r)
-	estimatedBytes := traffic.EstimateTransferBytes(info.Size(), r.Header.Get("Range"))
-	repoTracker := traffic.GetRepoTracker()
-	allowed, _, projectedBytes, reason := true, int64(0), estimatedBytes, ""
-	if repoTracker != nil {
-		allowed, _, projectedBytes, reason = repoTracker.ReserveTraffic(clientIP, estimatedBytes)
-	}
-	if !allowed {
-		message := reason
-		if message == "" {
-			message = "已超过当日 repo 流量限制"
-		}
-		if s.Config.AppealContact != "" {
-			message = fmt.Sprintf("%s，如有误封请联系 %s", message, s.Config.AppealContact)
-		}
-		writeV2Error(w, r, http.StatusForbidden, "traffic_exceeded", message, nil)
-		log.Printf("[Repo防刷墙] 拒绝请求: ip=%s path=%s projected=%.2fGB reason=%s", clientIP, relPath, traffic.ToGB(projectedBytes), reason)
-		return
-	}
-
-	counter := &traffic.CountingWriter{}
-	countingWriter := &responseWriterCounter{ResponseWriter: w, counter: counter}
-	http.ServeFile(countingWriter, r, cleanPath)
-
-	if repoTracker != nil {
-		if banned, reason, trafficGB, err := repoTracker.FinalizeTraffic(clientIP, estimatedBytes, counter.Total); err != nil {
-			log.Printf("[Repo防刷墙] 记录流量失败: %v", err)
-		} else if banned {
-			log.Printf("[Repo防刷墙] IP %s 因 %s 被封禁，当日流量: %.2fGB", clientIP, reason, trafficGB)
-		}
-	}
-
-	if counter.Total > 0 && isSuccessfulDownloadStatus(countingWriter.statusCode) {
-		repoName := relPath
-		if idx := strings.Index(repoName, ".git/"); idx >= 0 {
-			repoName = repoName[:idx+4]
-		}
-		stats.RecordRepoDownload(r, repoName, relPath)
-	}
-}
-
 func (s *State) Routes(mux *http.ServeMux) {
 	// 静态 UI — 使用 v2 主题目录
 	staticDir := s.getFrontendThemeDir()
 	adminStaticDir := filepath.Join("web", "admin")
-	repoDir := filepath.Join(s.ProjectRoot, "repo")
 
 	// 统一静态资源服务函数
 	serveStatic := func(w http.ResponseWriter, r *http.Request, baseDir string, prefix string) {
@@ -496,11 +338,6 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
 		// assets 通常在 dist/assets 下
 		serveStatic(w, r, filepath.Join(staticDir, "assets"), "/assets/")
-	})
-
-	// Git 仓库镜像处理器（独立统计/流量，支持目录列表与文件下载）
-	mux.HandleFunc("/repo/", func(w http.ResponseWriter, r *http.Request) {
-		s.handleRepo(w, r, repoDir)
 	})
 
 	// 根路径处理器 - 处理静态文件和 SPA fallback

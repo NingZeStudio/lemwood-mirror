@@ -208,15 +208,6 @@ func TestRunMigrations_MaySchemaAggregate(t *testing.T) {
 		}
 	}
 
-	// 校验 daily_repo_traffic 为空（5月库无 repo_ip_daily_traffic 数据，新建空表聚合 0 行）
-	var repoCount int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM daily_repo_traffic").Scan(&repoCount); err != nil {
-		t.Fatalf("count daily_repo_traffic error = %v", err)
-	}
-	if repoCount != 0 {
-		t.Fatalf("daily_repo_traffic should be empty, got %d", repoCount)
-	}
-
 	// 校验 stats_snapshot 表存在且为空
 	var snapCount int
 	if err := DB.QueryRow("SELECT COUNT(*) FROM stats_snapshot").Scan(&snapCount); err != nil {

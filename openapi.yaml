@@ -548,57 +548,6 @@ paths:
         '405':
           description: Method not allowed
 
-  /repo/{launcher}.git/{path}:
-    get:
-      tags: [Public]
-      summary: Git mirror read-only endpoint
-      description: |
-        Serves Git mirror files for `git clone` / `git fetch`. File and HEAD
-        requests return raw bytes; directory requests return a v2 envelope
-        listing entries. Uses independent repo traffic metering and repo
-        download statistics.
-      operationId: getV2RepoMirror
-      security: []
-      parameters:
-        - name: launcher
-          in: path
-          required: true
-          description: Launcher identifier whose Git mirror is being accessed
-          schema:
-            type: string
-        - name: path
-          in: path
-          required: true
-          description: Path inside the `.git` mirror
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Raw Git object or directory listing
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/V2Envelope'
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/RepoEntry'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '405':
-          $ref: '#/components/responses/MethodNotAllowed'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
   # ============================================================
   # Admin: config
   # ============================================================
@@ -1471,11 +1420,6 @@ components:
         body:
           type: string
           description: Optional release notes body
-        clone_url:
-          type: string
-          example: https://miawa.cn/repo/fcl.git
-          description: |
-            Git clone URL. Present only when the launcher's `mode` is `clone` or `all`.
         assets:
           type: array
           items:
@@ -1520,19 +1464,6 @@ components:
           example: 120
       required: [launcher, count]
 
-    RepoDownloadRank:
-      type: object
-      description: Top repo download rank entry.
-      properties:
-        repo_name:
-          type: string
-          example: fcl.git
-        count:
-          type: integer
-          format: int64
-          example: 66
-      required: [repo_name, count]
-
     GeoStat:
       type: object
       description: Geographic distribution entry.
@@ -1564,22 +1495,12 @@ components:
           format: int64
           example: 22
           description: Normal download count for the day
-        repo_download_count:
-          type: integer
-          format: int64
-          example: 7
-          description: Repo download count for the day
         traffic_bytes:
           type: integer
           format: int64
           example: 5368709120
           description: Normal download traffic in bytes for the day
-        repo_traffic_bytes:
-          type: integer
-          format: int64
-          example: 1073741824
-          description: Repo download traffic in bytes for the day
-      required: [date, visit_count, download_count, repo_download_count, traffic_bytes, repo_traffic_bytes]
+      required: [date, visit_count, download_count, traffic_bytes]
 
     StatsData:
       type: object
@@ -1595,11 +1516,6 @@ components:
           format: int64
           example: 450
           description: Cumulative normal download count (200/206 responses)
-        total_repo_downloads:
-          type: integer
-          format: int64
-          example: 120
-          description: Cumulative repo download count (200/206 responses on /repo/...)
         total_days:
           type: integer
           format: int64
@@ -1615,31 +1531,16 @@ components:
           format: int64
           example: 80
           description: Normal downloads in the last 30 days
-        last_30_repo_downloads:
-          type: integer
-          format: int64
-          example: 26
-          description: Repo downloads in the last 30 days
         total_traffic_bytes:
           type: integer
           format: int64
           example: 536870912000
           description: Cumulative normal download traffic in bytes
-        total_repo_traffic_bytes:
-          type: integer
-          format: int64
-          example: 107374182400
-          description: Cumulative repo download traffic in bytes
         last_30_traffic_bytes:
           type: integer
           format: int64
           example: 53687091200
           description: Normal download traffic in bytes over the last 30 days
-        last_30_repo_traffic_bytes:
-          type: integer
-          format: int64
-          example: 10737418240
-          description: Repo download traffic in bytes over the last 30 days
         disk:
           allOf:
             - $ref: '#/components/schemas/DiskInfo'
@@ -1650,11 +1551,6 @@ components:
           items:
             $ref: '#/components/schemas/DownloadRank'
           description: Top 10 normal downloads ranked by count
-        top_repo_downloads:
-          type: array
-          items:
-            $ref: '#/components/schemas/RepoDownloadRank'
-          description: Top 10 repo downloads ranked by count
         geo_distribution:
           type: array
           items:
@@ -1673,17 +1569,12 @@ components:
       required:
         - total_visits
         - total_downloads
-        - total_repo_downloads
         - total_days
         - last_30_visits
         - last_30_downloads
-        - last_30_repo_downloads
         - total_traffic_bytes
-        - total_repo_traffic_bytes
         - last_30_traffic_bytes
-        - last_30_repo_traffic_bytes
         - top_downloads
-        - top_repo_downloads
         - geo_distribution
         - daily_stats
         - dropped_records
@@ -1860,14 +1751,11 @@ components:
           type: string
           example: https://github.com/FCL-Team/FoldCraftLauncher
           description: GitHub source URL
-        repo_selector:
-          type: string
-          description: Optional repo selector
         mode:
           type: string
           enum: [release, clone, all]
           example: release
-          description: Sync mode
+          description: Sync mode (clone/all are deprecated no-ops kept for backward compatibility)
         include_prerelease:
           type: boolean
           example: false
@@ -2044,32 +1932,6 @@ components:
           type: string
           example: manual ban
       required: [ip]
-
-    # ----------------------------------------------------------
-    # Repo
-    # ----------------------------------------------------------
-    RepoEntry:
-      type: object
-      description: A single entry in a Git mirror directory listing.
-      properties:
-        name:
-          type: string
-          example: objects
-        type:
-          type: string
-          enum: [dir, file]
-          example: dir
-        size:
-          type: integer
-          format: int64
-          example: 0
-          description: Size in bytes (0 for directories)
-        mod_time:
-          type: string
-          format: date-time
-          example: 2026-06-18T12:00:00Z
-          description: Last modification time
-      required: [name, type, size, mod_time]
 
     # ----------------------------------------------------------
     # Files

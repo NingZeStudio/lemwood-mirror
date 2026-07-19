@@ -2,6 +2,7 @@ package stats
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"lemwood_mirror/internal/db"
@@ -97,7 +98,7 @@ func InitWritePool(workers int, queueSize int) {
 	log.Printf("[Stats] 写入工作池已初始化: %d workers, queue size: %d", workers, queueSize)
 }
 
-// trafficCleanupWorker 每小时清理一次 ip_daily_traffic / repo_ip_daily_traffic 中
+// trafficCleanupWorker 每小时清理一次 ip_daily_traffic 中
 // 超过 24 小时的记录。IP 级数据仅保留当日用于防刷墙，历史流量已聚合到无 IP 的 daily_traffic 表。
 func trafficCleanupWorker() {
 	defer workerWg.Done()
@@ -383,54 +384,23 @@ func RecordDownload(r *http.Request, fileName, launcher, version string) {
 	})
 }
 
-func RecordRepoDownload(r *http.Request, repoName, repoPath string) {
-	ip := netutil.ExtractClientIP(r)
-
-	if writeQueue == nil {
-		return
-	}
-
-	// 解析 IP 属地后只存储国家，不存储 IP 本身
-	getIPInfoAsync(ip, func(info *IPInfo) {
-		country := ""
-		if info != nil {
-			country = info.Country
-		}
-
-		enqueueWrite(&writeTask{
-			query: `INSERT INTO repo_downloads (repo_name, repo_path, ip, country) VALUES (?, ?, ?, ?)`,
-			args:  []interface{}{repoName, repoPath, "", country},
-		})
-	})
-}
-
 type StatsData struct {
-	TotalVisits            int64              `json:"total_visits"`
-	TotalDownloads         int64              `json:"total_downloads"`
-	TotalRepoDownloads     int64              `json:"total_repo_downloads"`
-	TotalDays              int64              `json:"total_days"`
-	Last30Visits           int64              `json:"last_30_visits"`
-	Last30Downloads        int64              `json:"last_30_downloads"`
-	Last30RepoDownloads    int64              `json:"last_30_repo_downloads"`
-	TotalTrafficBytes      int64              `json:"total_traffic_bytes"`
-	TotalRepoTrafficBytes  int64              `json:"total_repo_traffic_bytes"`
-	Last30TrafficBytes     int64              `json:"last_30_traffic_bytes"`
-	Last30RepoTrafficBytes int64              `json:"last_30_repo_traffic_bytes"`
-	Disk                   *DiskInfo          `json:"disk"`
-	TopDownloads           []DownloadRank     `json:"top_downloads"`
-	TopRepoDownloads       []RepoDownloadRank `json:"top_repo_downloads"`
-	GeoDistribution        []GeoStat          `json:"geo_distribution"`
-	DailyStats             []DailyStat        `json:"daily_stats"`
-	DroppedRecords         int64              `json:"dropped_records"`
+	TotalVisits        int64          `json:"total_visits"`
+	TotalDownloads     int64          `json:"total_downloads"`
+	TotalDays          int64          `json:"total_days"`
+	Last30Visits       int64          `json:"last_30_visits"`
+	Last30Downloads    int64          `json:"last_30_downloads"`
+	TotalTrafficBytes  int64          `json:"total_traffic_bytes"`
+	Last30TrafficBytes int64          `json:"last_30_traffic_bytes"`
+	Disk               *DiskInfo      `json:"disk"`
+	TopDownloads       []DownloadRank `json:"top_downloads"`
+	GeoDistribution    []GeoStat      `json:"geo_distribution"`
+	DailyStats         []DailyStat    `json:"daily_stats"`
+	DroppedRecords     int64          `json:"dropped_records"`
 }
 
 type DownloadRank struct {
 	Launcher string `json:"launcher"`
-	Count    int64  `json:"count"`
-}
-
-type RepoDownloadRank struct {
-	RepoName string `json:"repo_name"`
 	Count    int64  `json:"count"`
 }
 
@@ -440,12 +410,10 @@ type GeoStat struct {
 }
 
 type DailyStat struct {
-	Date              string `json:"date"`
-	VisitCount        int64  `json:"visit_count"`
-	DownloadCount     int64  `json:"download_count"`
-	RepoDownloadCount int64  `json:"repo_download_count"`
-	TrafficBytes      int64  `json:"traffic_bytes"`
-	RepoTrafficBytes  int64  `json:"repo_traffic_bytes"`
+	Date          string `json:"date"`
+	VisitCount    int64  `json:"visit_count"`
+	DownloadCount int64  `json:"download_count"`
+	TrafficBytes  int64  `json:"traffic_bytes"`
 }
 
 func GetStats(storagePath string) (*StatsData, error) {
@@ -476,21 +444,19 @@ func GetStats(storagePath string) (*StatsData, error) {
 	// Cold start: no snapshot yet, compute synchronously
 	if err := RefreshSnapshot(); err != nil {
 		return &StatsData{
-			TopDownloads:     []DownloadRank{},
-			TopRepoDownloads: []RepoDownloadRank{},
-			GeoDistribution:  []GeoStat{},
-			DailyStats:       []DailyStat{},
-			DroppedRecords:   DroppedCount(),
+			TopDownloads:    []DownloadRank{},
+			GeoDistribution: []GeoStat{},
+			DailyStats:      []DailyStat{},
+			DroppedRecords:  DroppedCount(),
 		}, err
 	}
 
 	snapshot, _ = loadSnapshot()
 	if snapshot == nil {
 		snapshot = &StatsData{
-			TopDownloads:     []DownloadRank{},
-			TopRepoDownloads: []RepoDownloadRank{},
-			GeoDistribution:  []GeoStat{},
-			DailyStats:       []DailyStat{},
+			TopDownloads:    []DownloadRank{},
+			GeoDistribution: []GeoStat{},
+			DailyStats:      []DailyStat{},
 		}
 	}
 	if storagePath != "" {
@@ -555,11 +521,10 @@ func loadSnapshot() (*StatsData, time.Time) {
 
 func computeStatsData() *StatsData {
 	data := &StatsData{
-		TopDownloads:     []DownloadRank{},
-		TopRepoDownloads: []RepoDownloadRank{},
-		GeoDistribution:  []GeoStat{},
-		DailyStats:       []DailyStat{},
-		DroppedRecords:   DroppedCount(),
+		TopDownloads:    []DownloadRank{},
+		GeoDistribution: []GeoStat{},
+		DailyStats:      []DailyStat{},
+		DroppedRecords:  DroppedCount(),
 	}
 
 	if db.DB == nil {
@@ -582,11 +547,6 @@ func computeStatsData() *StatsData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data.TotalRepoDownloads = scanCount("total_repo_downloads", "SELECT COUNT(*) FROM repo_downloads")
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
 			data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
 		}()
 		wg.Add(1)
@@ -597,12 +557,7 @@ func computeStatsData() *StatsData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data.Last30RepoDownloads = scanCount("last_30_repo_downloads", "SELECT COUNT(*) FROM repo_downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			computeTotalDaysMySQL(data)
+			computeTotalDays(data)
 		}()
 		wg.Add(1)
 		go func() {
@@ -612,91 +567,60 @@ func computeStatsData() *StatsData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			queryTopRepoDownloads(data)
+			queryGeoDistribution(data)
 		}()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			queryGeoDistribution(data)
+			queryDailyStats(data)
+		}()
+
+		// 流量统计：goroutine 中只计算总量和构建 date→bytes map，
+		// DailyStats 合并放到 wg.Wait() 后顺序执行，避免与 queryDailyStats 竞争。
+		var dailyTrafficMap map[string]int64
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if v, err := db.GetTotalTraffic(); err == nil {
+				data.TotalTrafficBytes = v
+			}
 		}()
 		wg.Add(1)
-	go func() {
-		defer wg.Done()
-		queryDailyStats(data)
-	}()
+		go func() {
+			defer wg.Done()
+			stats, err := db.GetDailyTrafficStats(30)
+			if err != nil {
+				return
+			}
+			dailyTrafficMap = make(map[string]int64, len(stats))
+			for _, s := range stats {
+				dailyTrafficMap[s.Date] = s.Bytes
+				data.Last30TrafficBytes += s.Bytes
+			}
+		}()
 
-	// 流量统计：goroutine 中只计算总量和构建 date→bytes map，
-	// DailyStats 合并放到 wg.Wait() 后顺序执行，避免与 queryDailyStats 竞争。
-	var dailyTrafficMap, dailyRepoTrafficMap map[string]int64
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if v, err := db.GetTotalTraffic(); err == nil {
-			data.TotalTrafficBytes = v
-		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if v, err := db.GetTotalRepoTraffic(); err == nil {
-			data.TotalRepoTrafficBytes = v
-		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stats, err := db.GetDailyTrafficStats(30)
-		if err != nil {
-			return
-		}
-		dailyTrafficMap = make(map[string]int64, len(stats))
-		for _, s := range stats {
-			dailyTrafficMap[s.Date] = s.Bytes
-			data.Last30TrafficBytes += s.Bytes
-		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stats, err := db.GetDailyRepoTrafficStats(30)
-		if err != nil {
-			return
-		}
-		dailyRepoTrafficMap = make(map[string]int64, len(stats))
-		for _, s := range stats {
-			dailyRepoTrafficMap[s.Date] = s.Bytes
-			data.Last30RepoTrafficBytes += s.Bytes
-		}
-	}()
+		wg.Wait()
 
-	wg.Wait()
+		// 顺序合并每日流量到 DailyStats
+		mergeDailyTraffic(data, dailyTrafficMap)
 
-	// 顺序合并每日流量到 DailyStats
-	mergeDailyTraffic(data, dailyTrafficMap, dailyRepoTrafficMap)
-
-	return data
-}
+		return data
+	}
 
 	data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
 	data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
-	data.TotalRepoDownloads = scanCount("total_repo_downloads", "SELECT COUNT(*) FROM repo_downloads")
 
 	data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')")
 	data.Last30Downloads = scanCount("last_30_downloads", "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')")
-	data.Last30RepoDownloads = scanCount("last_30_repo_downloads", "SELECT COUNT(*) FROM repo_downloads WHERE created_at > datetime('now', '-30 days')")
 
-	computeTotalDaysSQLite(data)
+	computeTotalDays(data)
 	queryTopDownloads(data)
-	queryTopRepoDownloads(data)
 	queryGeoDistribution(data)
 	queryDailyStats(data)
 
 	// 流量统计（SQLite 顺序执行）
 	if v, err := db.GetTotalTraffic(); err == nil {
 		data.TotalTrafficBytes = v
-	}
-	if v, err := db.GetTotalRepoTraffic(); err == nil {
-		data.TotalRepoTrafficBytes = v
 	}
 	dailyTrafficMap := make(map[string]int64)
 	if stats, err := db.GetDailyTrafficStats(30); err == nil {
@@ -705,27 +629,17 @@ func computeStatsData() *StatsData {
 			data.Last30TrafficBytes += s.Bytes
 		}
 	}
-	dailyRepoTrafficMap := make(map[string]int64)
-	if stats, err := db.GetDailyRepoTrafficStats(30); err == nil {
-		for _, s := range stats {
-			dailyRepoTrafficMap[s.Date] = s.Bytes
-			data.Last30RepoTrafficBytes += s.Bytes
-		}
-	}
-	mergeDailyTraffic(data, dailyTrafficMap, dailyRepoTrafficMap)
+	mergeDailyTraffic(data, dailyTrafficMap)
 
 	return data
 }
 
 // mergeDailyTraffic 将每日流量 map 合并到 DailyStats 中对应的日期。
-func mergeDailyTraffic(data *StatsData, trafficMap, repoTrafficMap map[string]int64) {
+func mergeDailyTraffic(data *StatsData, trafficMap map[string]int64) {
 	for i := range data.DailyStats {
 		date := data.DailyStats[i].Date
 		if trafficMap != nil {
 			data.DailyStats[i].TrafficBytes = trafficMap[date]
-		}
-		if repoTrafficMap != nil {
-			data.DailyStats[i].RepoTrafficBytes = repoTrafficMap[date]
 		}
 	}
 }
@@ -767,45 +681,77 @@ func RefreshSnapshot() error {
 	return nil
 }
 
-func computeTotalDaysMySQL(data *StatsData) {
-	var minDate string
-	if err := db.DB.QueryRow("SELECT MIN(DATE(created_at)) FROM visits").Scan(&minDate); err != nil || minDate == "" {
-		if err != nil {
-			log.Printf("[Stats] min_visit_date 查询失败: %v", err)
-		}
-		var startTimeStr string
-		if err := db.DB.QueryRow("SELECT value FROM system_info WHERE `key` = 'start_time'").Scan(&startTimeStr); err == nil {
-			if t, err := time.Parse("2006-01-02 15:04:05", startTimeStr); err == nil {
-				data.TotalDays = int64(time.Since(t).Hours()/24) + 1
-			}
-		} else {
-			log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
-		}
-		return
+// minVisitDateQuery 返回按数据库类型定制的"最早访问日期"查询，
+// 结果为 'YYYY-MM-DD' 字符串，无记录时为 NULL。
+// MySQL 必须用 DATE_FORMAT 强制返回字符串：DSN 开启 parseTime=True 后，
+// DATE 类型结果会被驱动转成 time.Time，无法 Scan 进 string（旧实现的隐患）。
+func minVisitDateQuery() string {
+	if db.IsMySQL() {
+		return "SELECT DATE_FORMAT(MIN(created_at), '%Y-%m-%d') FROM visits"
 	}
-	if t, err := time.Parse("2006-01-02", minDate); err == nil {
-		data.TotalDays = int64(time.Since(t).Hours()/24) + 1
-	}
+	return "SELECT date(MIN(created_at)) FROM visits"
 }
 
-func computeTotalDaysSQLite(data *StatsData) {
-	var minDate string
-	if err := db.DB.QueryRow("SELECT date(MIN(created_at)) FROM visits").Scan(&minDate); err != nil || minDate == "" {
-		if err != nil {
-			log.Printf("[Stats] min_visit_date 查询失败: %v", err)
+// parseStatsTime 兼容解析历史数据里可能出现的多种时间格式。
+// 无时区的格式按 UTC 解析（写入侧统一为 UTC，见 db.createTables）。
+func parseStatsTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04:05.999999999",
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
 		}
-		var startTimeStr string
-		if err := db.DB.QueryRow("SELECT value FROM system_info WHERE key = 'start_time'").Scan(&startTimeStr); err == nil {
-			if t, err := time.Parse("2006-01-02 15:04:05", startTimeStr); err == nil {
-				data.TotalDays = int64(time.Since(t).Hours()/24) + 1
-			}
-		} else {
-			log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
+	}
+	return time.Time{}, false
+}
+
+// daysSince 计算自 t 至今的天数，至少为 1（运行当天即算第 1 天），
+// 容忍写入/读取时区差异导致的轻微"未来时间"。
+func daysSince(t time.Time) int64 {
+	days := int64(time.Since(t).Hours()/24) + 1
+	if days < 1 {
+		days = 1
+	}
+	return days
+}
+
+// computeTotalDays 计算站点运行天数：优先取 visits 表最早记录的日期，
+// 无访问记录（或查询失败）时回退到 system_info.start_time（服务首次启动时间）。
+// 只要能确定任一有效起始时间，TotalDays 至少为 1；两者都不可用时保持 0。
+func computeTotalDays(data *StatsData) {
+	var minDate sql.NullString
+	if err := db.DB.QueryRow(minVisitDateQuery()).Scan(&minDate); err != nil {
+		log.Printf("[Stats] min_visit_date 查询失败: %v", err)
+	} else if minDate.Valid {
+		if t, ok := parseStatsTime(minDate.String); ok {
+			data.TotalDays = daysSince(t)
+			return
 		}
+		log.Printf("[Stats] min_visit_date 解析失败: %q", minDate.String)
+	}
+
+	// 回退：系统首次启动时间
+	keyRef := "key"
+	if db.IsMySQL() {
+		keyRef = "`key`"
+	}
+	var startTimeStr string
+	if err := db.DB.QueryRow("SELECT value FROM system_info WHERE " + keyRef + " = 'start_time'").Scan(&startTimeStr); err != nil {
+		log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
 		return
 	}
-	if t, err := time.Parse("2006-01-02", minDate); err == nil {
-		data.TotalDays = int64(time.Since(t).Hours()/24) + 1
+	if t, ok := parseStatsTime(startTimeStr); ok {
+		data.TotalDays = daysSince(t)
+	} else {
+		log.Printf("[Stats] system_info.start_time 解析失败: %q", startTimeStr)
 	}
 }
 
@@ -832,29 +778,6 @@ func queryTopDownloads(data *StatsData) {
 	data.TopDownloads = ranks
 }
 
-func queryTopRepoDownloads(data *StatsData) {
-	rows, err := db.DB.Query(`
-		SELECT repo_name, COUNT(*) as c
-		FROM repo_downloads
-		GROUP BY repo_name
-		ORDER BY c DESC
-		LIMIT 10`)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-
-	var ranks []RepoDownloadRank
-	for rows.Next() {
-		var r RepoDownloadRank
-		if err := rows.Scan(&r.RepoName, &r.Count); err != nil {
-			continue
-		}
-		ranks = append(ranks, r)
-	}
-	data.TopRepoDownloads = ranks
-}
-
 func queryGeoDistribution(data *StatsData) {
 	rows, err := db.DB.Query(`
 		SELECT country, COUNT(*) as c
@@ -879,25 +802,23 @@ func queryGeoDistribution(data *StatsData) {
 	data.GeoDistribution = geos
 }
 
-func dailyQueryFlavor() (visitQ, downloadQ, repoQ string) {
+func dailyQueryFlavor() (visitQ, downloadQ string) {
 	if db.IsMySQL() {
 		visitQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM visits GROUP BY d LIMIT 30"
 		downloadQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM downloads GROUP BY d LIMIT 30"
-		repoQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM repo_downloads GROUP BY d LIMIT 30"
 	} else {
 		visitQ = "SELECT date(created_at) as d, COUNT(*) FROM visits GROUP BY d LIMIT 30"
 		downloadQ = "SELECT date(created_at) as d, COUNT(*) FROM downloads GROUP BY d LIMIT 30"
-		repoQ = "SELECT date(created_at) as d, COUNT(*) FROM repo_downloads GROUP BY d LIMIT 30"
 	}
 	return
 }
 
 func queryDailyStats(data *StatsData) {
-	visitQ, downloadQ, repoQ := dailyQueryFlavor()
-	fillDailyStats(data, visitQ, downloadQ, repoQ)
+	visitQ, downloadQ := dailyQueryFlavor()
+	fillDailyStats(data, visitQ, downloadQ)
 }
 
-func fillDailyStats(data *StatsData, visitQ, downloadQ, repoQ string) {
+func fillDailyStats(data *StatsData, visitQ, downloadQ string) {
 	dailyMap := make(map[string]*DailyStat)
 
 	vRows, err := db.DB.Query(visitQ)
@@ -929,22 +850,6 @@ func fillDailyStats(data *StatsData, visitQ, downloadQ, repoQ string) {
 				dailyMap[d] = &DailyStat{Date: d}
 			}
 			dailyMap[d].DownloadCount = c
-		}
-	}
-
-	rRows, err := db.DB.Query(repoQ)
-	if err == nil {
-		defer rRows.Close()
-		for rRows.Next() {
-			var d string
-			var c int64
-			if err := rRows.Scan(&d, &c); err != nil {
-				continue
-			}
-			if dailyMap[d] == nil {
-				dailyMap[d] = &DailyStat{Date: d}
-			}
-			dailyMap[d].RepoDownloadCount = c
 		}
 	}
 

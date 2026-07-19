@@ -17,12 +17,10 @@ import (
 	"lemwood_mirror/internal/assets"
 	"lemwood_mirror/internal/auth"
 	"lemwood_mirror/internal/blacklist"
-	"lemwood_mirror/internal/browser"
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/downloader"
 	gh "lemwood_mirror/internal/github"
-	"lemwood_mirror/internal/gitmirror"
 	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/server"
 	"lemwood_mirror/internal/stats"
@@ -33,7 +31,6 @@ var Version = "dev"
 
 type LauncherState struct {
 	Name     string
-	RepoURL  string
 	Version  string
 	LastScan time.Time
 }
@@ -84,32 +81,17 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 	defer cancel()
 	effectiveMaxVersions := config.NormalizeMaxVersions(lcfg.MaxVersions)
 
-	repoURL, err := browser.ResolveRepoURL(lcfg.SourceURL, lcfg.RepoSelector)
-	if err != nil {
-		log.Printf("%s: 解析仓库地址失败: %v", lcfg.Name, err)
-		return
-	}
-	log.Printf("%s: 使用仓库 %s", lcfg.Name, repoURL)
-
 	mode, err := config.NormalizeLauncherMode(lcfg.Mode)
 	if err != nil {
 		log.Printf("%s: 模式配置无效: %v", lcfg.Name, err)
 		return
 	}
 
-	if config.ShouldSyncClone(string(mode)) {
-		if err := gitmirror.Sync(ctx, sc.s.ProjectRoot, lcfg.Name, repoURL); err != nil {
-			log.Printf("%s: 同步 Git 镜像失败: %v", lcfg.Name, err)
-		} else {
-			log.Printf("%s: Git 镜像同步完成", lcfg.Name)
-		}
-	}
-
 	if !config.ShouldSyncRelease(string(mode)) {
 		return
 	}
 
-	owner, repo, err := gh.ParseOwnerRepo(repoURL)
+	owner, repo, err := gh.ParseOwnerRepo(lcfg.SourceURL)
 	if err != nil {
 		log.Printf("%s: 解析 owner/repo 失败: %v", lcfg.Name, err)
 		return
@@ -163,7 +145,6 @@ func (sc *Scanner) scanLauncher(lcfg config.LauncherConfig) {
 		if isLatest {
 			sc.mu.Lock()
 			ls := sc.launchers[lcfg.Name]
-			ls.RepoURL = repoURL
 			ls.Version = version
 			ls.LastScan = time.Now()
 			sc.mu.Unlock()
@@ -247,7 +228,6 @@ func main() {
 	}
 
 	traffic.InitTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
-	traffic.InitRepoTracker(cfg.TrafficLimitGB, cfg.BanRecordFile, cfg.AppealContact, base)
 	if cfg.TrafficLimitGB > 0 {
 		log.Printf("防刷墙已启用: 单IP每日流量限制 %dGB", cfg.TrafficLimitGB)
 		if err := traffic.SyncBanRecordNow(); err != nil {

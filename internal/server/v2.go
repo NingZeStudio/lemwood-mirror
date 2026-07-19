@@ -229,19 +229,6 @@ func (s *State) handleV2LauncherStatus(w http.ResponseWriter, r *http.Request) {
 
 	list := buildVersionList(versionsCopy, infoCacheCopy, s)
 
-	// 注入 clone_url
-	if s.Config != nil {
-		for _, lc := range s.Config.Launchers {
-			if lc.Name == launcher && config.ShouldSyncClone(lc.Mode) {
-				cloneURL := s.cloneRepoURL(r, lc.Name)
-				for i := range list {
-					list[i]["clone_url"] = cloneURL
-				}
-				break
-			}
-		}
-	}
-
 	writeV2Success(w, r, list, false)
 }
 
@@ -608,21 +595,6 @@ func (s *State) getLauncherStatusData(r *http.Request) map[string][]map[string]a
 	for launcher, versions := range indexCopy {
 		list := buildVersionList(versions, infoCacheCopy, s)
 		result[launcher] = list
-	}
-
-	// 为 clone/all 模式启动器注入 clone_url
-	if s.Config != nil {
-		for _, lc := range s.Config.Launchers {
-			if !config.ShouldSyncClone(lc.Mode) {
-				continue
-			}
-			if list, ok := result[lc.Name]; ok {
-				cloneURL := s.cloneRepoURL(r, lc.Name)
-				for i := range list {
-					list[i]["clone_url"] = cloneURL
-				}
-			}
-		}
 	}
 
 	return result

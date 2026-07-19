@@ -358,13 +358,6 @@ export function ConfigPage() {
         >
           <Switch />
         </Form.Item>
-        <Form.Item
-          name="self_update_repo_url"
-          label="更新仓库地址"
-          extra="例如: https://github.com/NingZeStudio/lemwood-mirror"
-        >
-          <Input placeholder="https://github.com/owner/repo" />
-        </Form.Item>
         <Form.Item name="self_update_channel" label="更新类型" initialValue="notify">
           <Select
             options={[
@@ -457,7 +450,7 @@ export function ConfigPage() {
                 const launchers = form.getFieldValue('launchers') || []
                 form.setFieldValue('launchers', [
                   ...launchers,
-                  { name: '', source_url: '', repo_selector: '', mode: 'release' },
+                  { name: '', source_url: '', mode: 'release' },
                 ])
               }}
             >
@@ -472,7 +465,7 @@ export function ConfigPage() {
             icon={<PlusOutlined />}
             onClick={() => {
               const launchers = form.getFieldValue('launchers') || []
-              form.setFieldValue('launchers', [...launchers, { name: '', source_url: '', repo_selector: '' }])
+              form.setFieldValue('launchers', [...launchers, { name: '', source_url: '' }])
             }}
             style={{ marginBottom: 16 }}
             block
@@ -523,37 +516,18 @@ export function ConfigPage() {
                   >
                     <Input />
                   </Form.Item>
-                  <Form.Item {...restField} name={[name, 'repo_selector']} label="版本选择器 (可选)">
-                    <Input />
-                  </Form.Item>
                   <Form.Item
                     {...restField}
                     name={[name, 'mode']}
                     label="同步模式"
                     initialValue="release"
-                    extra="release: 仅同步 Release；clone: 仅同步 Git 仓库；all: 两者都同步"
+                    extra="release: 仅同步 Release"
                   >
                     <Select
                       options={[
                         { label: 'release', value: 'release' },
-                        { label: 'clone', value: 'clone' },
-                        { label: 'all', value: 'all' },
                       ]}
                     />
-                  </Form.Item>
-                  <Form.Item noStyle shouldUpdate>
-                    {({ getFieldValue }) => {
-                      const launcherName = getFieldValue(['launchers', name, 'name'])
-                      const mode = getFieldValue(['launchers', name, 'mode']) || 'release'
-                      if (mode !== 'clone' && mode !== 'all') {
-                        return null
-                      }
-                      return (
-                        <div style={{ marginBottom: 16, color: '#666' }}>
-                          Git 克隆地址：<code>/repo/{launcherName || '{launcher}'}.git</code>
-                        </div>
-                      )
-                    }}
                   </Form.Item>
                   <Form.Item
                     {...restField}

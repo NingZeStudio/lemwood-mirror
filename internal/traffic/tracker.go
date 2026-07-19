@@ -32,14 +32,9 @@ type Tracker struct {
 }
 
 var defaultTracker *Tracker
-var defaultRepoTracker *Tracker
 
 func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
 	defaultTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath, db.RecordTraffic, db.GetDailyTraffic, db.GetTrafficOnDate)
-}
-
-func InitRepoTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
-	defaultRepoTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath, db.RecordRepoTraffic, db.GetRepoDailyTraffic, db.GetRepoTrafficOnDate)
 }
 
 func newTracker(limitGB int, banRecordFile, appealContact, storagePath string, recordTrafficFunc func(string, int64) error, getDailyTrafficFunc func(string) (int64, error), getTrafficOnDateFunc func(string, string) (int64, error)) *Tracker {
@@ -92,17 +87,10 @@ func CloseTracker() {
 	if defaultTracker != nil && defaultTracker.cancel != nil {
 		defaultTracker.cancel()
 	}
-	if defaultRepoTracker != nil && defaultRepoTracker.cancel != nil {
-		defaultRepoTracker.cancel()
-	}
 }
 
 func GetTracker() *Tracker {
 	return defaultTracker
-}
-
-func GetRepoTracker() *Tracker {
-	return defaultRepoTracker
 }
 
 func (t *Tracker) initBanRecordFile() {

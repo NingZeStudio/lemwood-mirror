@@ -75,13 +75,11 @@ self_update_auto_restart: {{ .SelfUpdateAutoRestart }}
 # 启动器列表
 # mode:
 #   - release: 仅同步 Release 资源
-#   - clone: 仅同步 Git 镜像到 repo/{name}.git
-#   - all: 同时同步 Release 和 Git 镜像
+#   - clone / all: 已废弃（Git 镜像功能已移除），仅为兼容旧配置保留
 launchers:
 {{- range .Launchers }}
   - name: {{ yaml .Name }}
     source_url: {{ yaml .SourceURL }}
-    repo_selector: {{ yaml .RepoSelector }}
     mode: {{ yaml .Mode }}
     include_prerelease: {{ .IncludePrerelease }}
     max_versions: {{ .MaxVersions }}
@@ -105,7 +103,6 @@ const (
 type LauncherConfig struct {
 	Name              string `json:"name" yaml:"name"`
 	SourceURL         string `json:"source_url" yaml:"source_url"`
-	RepoSelector      string `json:"repo_selector" yaml:"repo_selector"`
 	Mode              string `json:"mode" yaml:"mode"`
 	IncludePrerelease bool   `json:"include_prerelease" yaml:"include_prerelease"`
 	MaxVersions       int    `json:"max_versions" yaml:"max_versions"`
@@ -143,14 +140,6 @@ func ShouldSyncRelease(mode string) bool {
 		return false
 	}
 	return normalized == LauncherModeRelease || normalized == LauncherModeAll
-}
-
-func ShouldSyncClone(mode string) bool {
-	normalized, err := NormalizeLauncherMode(mode)
-	if err != nil {
-		return false
-	}
-	return normalized == LauncherModeClone || normalized == LauncherModeAll
 }
 
 type Config struct {

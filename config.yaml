@@ -24,7 +24,7 @@ check_cron: "*/10 * * * *"
 # Release 资源存储目录（相对项目根目录，默认 download）
 storage_path: "download"
 
-# 单文件下载超时（分钟），Git 镜像同步也复用此超时（默认 40）
+# 单文件下载超时（分钟），默认 40
 download_timeout_minutes: 40
 
 # 同时下载的最大并发数（默认 3）
@@ -162,22 +162,19 @@ self_update_auto_restart: false
 # -----------------------------------------------------------------------------
 # 启动器列表
 # -----------------------------------------------------------------------------
-# 每个启动器定义一个同步源，支持以下同步模式 (mode):
-#   - release: 仅同步 GitHub Release 资源文件
-#   - clone:   仅同步 Git 裸仓库镜像到 repo/{name}.git
-#   - all:     同时同步 Release 资源和 Git 镜像
+# 每个启动器定义一个同步源，同步 GitHub Release 资源文件。
 #
 # 字段说明:
 #   name              - 启动器标识（用于 URL 路径和目录名）
-#   source_url        - GitHub 仓库地址或组织地址
-#   repo_selector     - 仓库筛选关键词（组织模式下按名称过滤，留空则同步全部）
-#   mode              - 同步模式: release / clone / all
+#   source_url        - GitHub 仓库地址
+#   repo_selector     - 仓库筛选关键词（留空则同步全部）
+#   mode              - 同步模式: release
 #   include_prerelease - 是否包含预发布版本
 #   max_versions      - 最大保留版本数（0 或负值默认为 3）
 launchers:
   - name: "mirror"
     source_url: "https://github.com/ningzestudio/lemwood-mirror"
     repo_selector: ""
-    mode: "all"
+    mode: "release"
     include_prerelease: true
     max_versions: 0

@@ -15,7 +15,6 @@ export interface TOTPStatus {
 export interface LauncherConfig {
   name: string
   source_url: string
-  repo_selector: string
   mode?: 'release' | 'clone' | 'all'
   include_prerelease?: boolean
   max_versions?: number
@@ -44,7 +43,6 @@ export interface Config {
   captcha_secret_key?: string
   launchers: LauncherConfig[]
   self_update_enabled?: boolean
-  self_update_repo_url?: string
   self_update_channel?: string
   self_update_check_cron?: string
   self_update_auto_restart?: boolean
@@ -61,7 +59,6 @@ export interface TagInfo {
 
 export interface SelfUpdateStatus {
   enabled: boolean
-  repo_url: string
   channel: string
   current_version: string
   latest_version: string

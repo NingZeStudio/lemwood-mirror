@@ -30,8 +30,8 @@ func SPAFallbackMiddleware(next http.Handler, staticDir string) http.Handler {
 			return
 		}
 
-		// 跳过 /download/ 和 /repo/ 路由
-		if strings.HasPrefix(path, "/download/") || strings.HasPrefix(path, "/repo/") {
+		// 跳过 /download/ 路由
+		if strings.HasPrefix(path, "/download/") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -7,9 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
@@ -33,14 +31,6 @@ func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, co
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	repoFilePath := filepath.Join(base, "repo", "mirror.git", "info", "refs")
-	if err := os.MkdirAll(filepath.Dir(repoFilePath), 0755); err != nil {
-		t.Fatalf("MkdirAll() repo error = %v", err)
-	}
-	if err := os.WriteFile(repoFilePath, []byte("ref: refs/heads/main\n"), 0644); err != nil {
-		t.Fatalf("WriteFile() repo error = %v", err)
-	}
-
 	if db.DB != nil {
 		_ = db.DB.Close()
 		db.DB = nil
@@ -51,7 +41,6 @@ func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, co
 	}
 
 	traffic.InitTracker(limitGB, "banned_ips.txt", "test-contact", base)
-	traffic.InitRepoTracker(limitGB, "banned_ips.txt", "test-contact", base)
 	stats.InitWritePool(1, 20)
 
 	state := NewState(base, base, cfg)
@@ -86,25 +75,6 @@ func unwrapV2Envelope(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var env struct {
 		Data  map[string]any `json:"data"`
-		Error *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatalf("Unmarshal envelope error = %v, body = %s", err, string(body))
-	}
-	if env.Error != nil {
-		t.Fatalf("v2 error: %s - %s", env.Error.Code, env.Error.Message)
-	}
-	return env.Data
-}
-
-// unwrapV2EnvelopeSlice 解包 v2 信封响应中 data 为切片的情况。
-func unwrapV2EnvelopeSlice(t *testing.T, body []byte) []RepoDirEntry {
-	t.Helper()
-	var env struct {
-		Data  []RepoDirEntry `json:"data"`
 		Error *struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
@@ -340,233 +310,5 @@ func TestCLIDownloadWithoutTokenStillRequiresVerificationJSON(t *testing.T) {
 	}
 	if resp["error"] != "verification_required" {
 		t.Fatalf("error = %v, want %q", resp["error"], "verification_required")
-	}
-}
-
-func TestRepoHandlerAllowsHeadWithoutCaptcha(t *testing.T) {
-	cfg := &config.Config{
-		CaptchaEnabled:   true,
-		CaptchaAppId:     "test-app",
-		CaptchaSecretKey: "test-secret",
-		AppealContact:    "test-contact",
-	}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodHead, "/repo/mirror.git/info/refs", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-}
-
-func TestRepoHandlerDirectoryListing(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	contentType := rec.Header().Get("Content-Type")
-	if !strings.Contains(contentType, "application/json") {
-		t.Fatalf("content-type = %q, want application/json", contentType)
-	}
-
-	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
-	if len(entries) != 1 || entries[0].Name != "info" || entries[0].Type != "dir" {
-		t.Fatalf("entries = %+v, want one dir named info", entries)
-	}
-}
-
-func TestRepoHandlerDirectoryListingNested(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
-	if len(entries) != 1 || entries[0].Name != "refs" || entries[0].Type != "file" {
-		t.Fatalf("entries = %+v, want one file named refs", entries)
-	}
-}
-
-func TestRepoHandlerDirectoryListingRoot(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	entries := unwrapV2EnvelopeSlice(t, rec.Body.Bytes())
-	if len(entries) != 1 || entries[0].Name != "mirror.git" || entries[0].Type != "dir" {
-		t.Fatalf("entries = %+v, want one dir named mirror.git", entries)
-	}
-}
-
-func TestRepoHandlerNotFoundReturnsEnvelope(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/nonexistent", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-	code, _ := unwrapV2Error(t, rec.Body.Bytes())
-	if code != "not_found" {
-		t.Fatalf("error code = %q, want not_found", code)
-	}
-}
-
-func TestRepoHandlerRejectsPathTraversal(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/../config.json", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
-func TestRepoHandlerRejectsNonReadMethod(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodPost, "/repo/mirror.git/info/refs", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-	}
-	code, _ := unwrapV2Error(t, rec.Body.Bytes())
-	if code != "method_not_allowed" {
-		t.Fatalf("error code = %q, want method_not_allowed", code)
-	}
-}
-
-func TestRepoHandlerCountsPartialContentBytesSeparately(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-	ip := "127.0.0.1"
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/refs", nil)
-	req.RemoteAddr = ip + ":1234"
-	req.Header.Set("Range", "bytes=0-1")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusPartialContent {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
-	}
-
-	repoTrafficBytes, err := db.GetRepoDailyTraffic(ip)
-	if err != nil {
-		t.Fatalf("GetRepoDailyTraffic() error = %v", err)
-	}
-	if repoTrafficBytes != 2 {
-		t.Fatalf("repo daily traffic = %d, want %d", repoTrafficBytes, 2)
-	}
-
-	downloadTrafficBytes, err := db.GetDailyTraffic(ip)
-	if err != nil {
-		t.Fatalf("GetDailyTraffic() error = %v", err)
-	}
-	if downloadTrafficBytes != 0 {
-		t.Fatalf("download daily traffic = %d, want %d", downloadTrafficBytes, 0)
-	}
-}
-
-func TestRepoHandlerRecordsRepoDownloadSeparately(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/mirror.git/info/refs", nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var repoCount int
-		if err := db.DB.QueryRow("SELECT COUNT(*) FROM repo_downloads WHERE repo_name = ?", "mirror.git").Scan(&repoCount); err != nil {
-			t.Fatalf("query repo_downloads error = %v", err)
-		}
-		if repoCount > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("repo_downloads should contain at least one record")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	var downloadCount int
-	if err := db.DB.QueryRow("SELECT COUNT(*) FROM downloads WHERE launcher = ?", "mirror.git").Scan(&downloadCount); err != nil {
-		t.Fatalf("query downloads error = %v", err)
-	}
-	if downloadCount != 0 {
-		t.Fatalf("downloads count = %d, want 0", downloadCount)
-	}
-}
-
-func TestRepoHandlerAllowsLauncherNamesEndingWithGit(t *testing.T) {
-	cfg := &config.Config{AppealContact: "test-contact"}
-	base, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
-	_ = base
-
-	repoFilePath := filepath.Join(base.ProjectRoot, "repo", "miawa.git", "readme")
-	if err := os.MkdirAll(filepath.Dir(repoFilePath), 0755); err != nil {
-		t.Fatalf("MkdirAll() repo error = %v", err)
-	}
-	if err := os.WriteFile(repoFilePath, []byte("repo readme"), 0644); err != nil {
-		t.Fatalf("WriteFile() repo error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/repo/miawa.git/readme", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec.Body.String() != "repo readme" {
-		t.Fatalf("body = %q, want %q", rec.Body.String(), "repo readme")
 	}
 }
