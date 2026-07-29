@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/geoip"
 	"lemwood_mirror/internal/netutil"
 	"log"
 	"net"
@@ -171,28 +172,17 @@ func writeWorker() {
 
 func ipInfoWorker() {
 	defer workerWg.Done()
-	client := &http.Client{Timeout: 5 * time.Second}
-	var lastReq time.Time
-	minInterval := 2 * time.Second
+	if err := geoip.Init(); err != nil {
+		log.Printf("[Stats] GeoIP 初始化失败: %v", err)
+	}
 
 	for task := range ipInfoQueue {
-		// 关闭中：跳过限流 sleep 和网络请求，仅快速排空队列。
-		// 此时 callback（RecordVisit/RecordDownload 等）写入 writeQueue 的写入路径会
-		// 被 enqueueWrite 的 panic/recover 丢弃，无需在此调用以免无谓的资源消耗。
+		// 关闭中：直接排空队列，不发起本地查询。
 		if workerCtx.Err() != nil {
 			continue
 		}
 
-		if elapsed := time.Since(lastReq); elapsed < minInterval {
-			select {
-			case <-workerCtx.Done():
-				continue
-			case <-time.After(minInterval - elapsed):
-			}
-		}
-
-		info := fetchIPInfo(client, task.ip)
-		lastReq = time.Now()
+		info := fetchIPInfo(task.ip)
 		if info != nil {
 			ipMutex.Lock()
 			if len(ipCache) >= maxIPCacheSize {
@@ -240,41 +230,28 @@ func isPrivateIP(ipStr string) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
-func fetchIPInfo(client *http.Client, ip string) *IPInfo {
+func fetchIPInfo(ip string) *IPInfo {
 	if isPrivateIP(ip) {
 		return &IPInfo{
+			Status:  "success",
 			Country: "Local",
 			Region:  "Local",
 			City:    "Local",
+			Expires: time.Now().Add(24 * time.Hour),
 		}
 	}
 
-	resp, err := client.Get("https://ip-api.com/json/" + ip + "?lang=zh-CN")
-	if err != nil {
+	country, region, city, ok := geoip.Lookup(ip)
+	if !ok {
 		return nil
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		log.Printf("[Stats] ip-api.com 429 限流，暂停 IP 查询: ip=%s", ip)
-		return nil
+	return &IPInfo{
+		Status:  "success",
+		Country: country,
+		Region:  region,
+		City:    city,
+		Expires: time.Now().Add(24 * time.Hour),
 	}
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[Stats] ip-api.com 返回异常状态: %d, ip=%s", resp.StatusCode, ip)
-		return nil
-	}
-
-	var info IPInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		log.Printf("[Stats] ip-api.com 响应解析失败: %v, ip=%s", err, ip)
-		return nil
-	}
-
-	if info.Status == "success" {
-		info.Expires = time.Now().Add(24 * time.Hour)
-		return &info
-	}
-	return nil
 }
 
 func getIPInfoAsync(ip string, callback func(info *IPInfo)) {
