@@ -67,8 +67,16 @@ export const globalConfig = {
       logoUrl: new URL('../assets/images/dc5e0ee14d8f54f0.png', import.meta.url).href
     },
     FCL_Turnip: {
-      displayName: 'FCL_Turnip Plugin',
-      logoUrl: new URL('../assets/images/Image_1770256620866_693.webp', import.meta.url).href
+      displayName: 'Turnip 驱动插件列表',
+      logoUrl: new URL('../assets/images/Image_1770256620866_693.webp', import.meta.url).href,
+      isPluginList: true
+    },
+    NativeLibPlugin: {
+      displayName: '原生插件列表',
+      isPluginList: true
+    },
+    amcl: {
+      displayName: 'Axe Minecraft Launcher'
     },
     shizuku: {
       displayName: 'Shizuku',

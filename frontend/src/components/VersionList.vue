@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Download, History, Package } from 'lucide-vue-next'
+import { Download, History, List, Package } from 'lucide-vue-next'
 import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
 import { globalConfig } from '@/lib/globalConfig'
 import Card from '@/components/ui/Card.vue'
@@ -18,11 +18,11 @@ const loading = ref(true)
 const captchaConfig = ref({ enabled: false, app_id: '' })
 
 const launcherList = computed(() => {
-  return Object.keys(rawLaunchers.value).map((name) => {
+  const list = Object.keys(rawLaunchers.value).map((name) => {
     const versions = rawLaunchers.value[name]
     const latestVersion = latestMap.value[name]
     const latestObj = versions.find((v) => (v.tag_name || v.name) === latestVersion) || versions[0]
-    const info = globalConfig.launchers[name] || { displayName: name, logoUrl: launcherDefaultLogo }
+    const info = globalConfig.launchers[name] || { displayName: name }
 
     const latestDownloadUrl = latestObj?.assets?.length
       ? getAssetUrl(name, latestObj, latestObj.assets[0])
@@ -31,7 +31,8 @@ const launcherList = computed(() => {
     return {
       name,
       displayName: info.displayName,
-      logoUrl: info.logoUrl,
+      logoUrl: info.logoUrl || launcherDefaultLogo,
+      isPluginList: Boolean(info.isPluginList),
       versions,
       latest: latestVersion,
       lastUpdated: versions.length ? versions[0].published_at : null,
@@ -40,6 +41,8 @@ const launcherList = computed(() => {
       latestDownloadUrl
     }
   })
+  // 插件列表卡片置顶，其余保持原有顺序
+  return list.sort((a, b) => Number(b.isPluginList) - Number(a.isPluginList))
 })
 
 const loadData = async () => {
@@ -168,30 +171,41 @@ defineExpose({ refresh: loadData })
           </div>
         </div>
         <div class="flex items-center justify-end gap-2 border-t px-4 py-3">
-          <Button
-            v-if="item.hasAssets"
-            size="sm"
-            @click="handleDownload(item)"
-          >
-            <Download class="mr-1.5 h-3.5 w-3.5" />
-            下载最新版
-          </Button>
-          <Button
-            v-else
-            size="sm"
-            disabled
-          >
-            <Download class="mr-1.5 h-3.5 w-3.5" />
-            暂无资源
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            @click="$router.push(`/files/${item.name}`)"
-          >
-            <History class="mr-1.5 h-3.5 w-3.5" />
-            历史版本
-          </Button>
+          <template v-if="item.isPluginList">
+            <Button
+              size="sm"
+              @click="$router.push(`/files/${item.name}`)"
+            >
+              <List class="mr-1.5 h-3.5 w-3.5" />
+              浏览插件列表
+            </Button>
+          </template>
+          <template v-else>
+            <Button
+              v-if="item.hasAssets"
+              size="sm"
+              @click="handleDownload(item)"
+            >
+              <Download class="mr-1.5 h-3.5 w-3.5" />
+              下载最新版
+            </Button>
+            <Button
+              v-else
+              size="sm"
+              disabled
+            >
+              <Download class="mr-1.5 h-3.5 w-3.5" />
+              暂无资源
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              @click="$router.push(`/files/${item.name}`)"
+            >
+              <History class="mr-1.5 h-3.5 w-3.5" />
+              历史版本
+            </Button>
+          </template>
         </div>
       </Card>
     </div>
