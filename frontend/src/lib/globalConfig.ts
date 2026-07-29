@@ -76,7 +76,8 @@ export const globalConfig = {
       isPluginList: true
     },
     amcl: {
-      displayName: 'Axe Minecraft Launcher'
+      displayName: 'Axe Minecraft Launcher',
+      logoUrl: new URL('../assets/images/amcl_axe.png', import.meta.url).href
     },
     shizuku: {
       displayName: 'Shizuku',
