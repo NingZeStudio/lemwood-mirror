@@ -245,7 +245,7 @@ func migrateV3CompletedTraffic(d *sql.DB) error {
 // daily_completed_traffic 基线承载。回填借助 (source, source_id) 唯一索引去重，重复执行
 // 不产生重复行。
 func migrateV4DownloadStatusTables(d *sql.DB) error {
-	var createAuthz, createEvents, backfill string
+	var createAuthz, createEvents, backfillInsert, maxIDSQL string
 	if isMySQL {
 		createAuthz = `CREATE TABLE IF NOT EXISTS download_authorizations (
 			authorization_id VARCHAR(64) PRIMARY KEY,
@@ -284,9 +284,10 @@ func migrateV4DownloadStatusTables(d *sql.DB) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE KEY uq_dlevents_source_id (source, source_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
-		backfill = `INSERT IGNORE INTO download_events
+		backfillInsert = `INSERT IGNORE INTO download_events
 			(authorization_id, file_path, file_name, launcher, version, client_ip, country, bytes_served, completed, status_code, date, source, source_id, created_at)
-			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, DATE_FORMAT(created_at, '%Y-%m-%d'), 'downloads_import', id, created_at FROM downloads`
+			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, DATE_FORMAT(created_at, '%Y-%m-%d'), 'downloads_import', id, created_at FROM downloads WHERE id > ? ORDER BY id LIMIT ?`
+		maxIDSQL = `SELECT COALESCE(MAX(id), 0) FROM (SELECT id FROM downloads WHERE id > ? ORDER BY id LIMIT ?) t`
 	} else {
 		createAuthz = `CREATE TABLE IF NOT EXISTS download_authorizations (
 			authorization_id TEXT PRIMARY KEY,
@@ -324,9 +325,10 @@ func migrateV4DownloadStatusTables(d *sql.DB) error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(source, source_id)
 		)`
-		backfill = `INSERT OR IGNORE INTO download_events
+		backfillInsert = `INSERT OR IGNORE INTO download_events
 			(authorization_id, file_path, file_name, launcher, version, client_ip, country, bytes_served, completed, status_code, date, source, source_id, created_at)
-			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, date(created_at), 'downloads_import', id, created_at FROM downloads`
+			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, date(created_at), 'downloads_import', id, created_at FROM downloads WHERE id > ? ORDER BY id LIMIT ?`
+		maxIDSQL = `SELECT COALESCE(MAX(id), 0) FROM (SELECT id FROM downloads WHERE id > ? ORDER BY id LIMIT ?) t`
 	}
 
 	tx, err := d.Begin()
@@ -367,13 +369,28 @@ func migrateV4DownloadStatusTables(d *sql.DB) error {
 		}
 	}
 
-	if _, err := tx.Exec(backfill); err != nil {
-		// 生产环境 createTables() 在迁移前已建 downloads 表；此处兜底：
-		// 若 downloads 表确实不存在（如单元测试的最小 schema），跳过回填而非失败。
-		if !tableExistsTx(tx, "downloads") {
-			log.Println("[数据库迁移] v4: downloads 表不存在，跳过事件回填")
-		} else {
-			return fmt.Errorf("回填 download_events 失败: %w", err)
+	// 回填：downloads 每行生成一条 download_events，bytes_served=0、completed=0，
+	// 历史字节总量仍由冻结的 daily_traffic/daily_completed_traffic 基线承载。
+	// 大表不能一条 INSERT...SELECT 全量搬（MySQL 单次大查询会超过 readTimeout=30s 触发
+	// i/o timeout 且连接失效），改为按主键 id 分批 keyset 分页，保证每条 SQL 都短小。
+	// 幂等：回填以 (source, source_id) 唯一索引去重，重复执行不产生重复行。
+	if !tableExistsTx(tx, "downloads") {
+		log.Println("[数据库迁移] v4: downloads 表不存在，跳过事件回填")
+	} else {
+		const backfillBatch = 5000
+		var lastID int64
+		for {
+			var maxID int64
+			if err := tx.QueryRow(maxIDSQL, lastID, backfillBatch).Scan(&maxID); err != nil {
+				return fmt.Errorf("查询回填批次上界失败: %w", err)
+			}
+			if maxID == 0 {
+				break
+			}
+			if _, err := tx.Exec(backfillInsert, lastID, backfillBatch); err != nil {
+				return fmt.Errorf("回填 download_events 失败 (id>%d): %w", lastID, err)
+			}
+			lastID = maxID
 		}
 	}
 
