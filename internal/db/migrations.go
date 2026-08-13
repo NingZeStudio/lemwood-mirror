@@ -343,20 +343,25 @@ func migrateV4DownloadStatusTables(d *sql.DB) error {
 	}
 
 	// 索引：唯一索引保证回填去重；查询索引服务于防刷墙（按 IP+日）与统计（按日/启动器）。
-	// MySQL 重复创建已存在索引会报 1061，这里忽略该错误以保证幂等。
-	indexStmts := []string{
-		"CREATE INDEX IF NOT EXISTS idx_dlauthz_status_expires ON download_authorizations(status, expires_at)",
-		"CREATE INDEX IF NOT EXISTS idx_dlevents_ip_date ON download_events(client_ip, date)",
-		"CREATE INDEX IF NOT EXISTS idx_dlevents_date ON download_events(date)",
-		"CREATE INDEX IF NOT EXISTS idx_dlevents_launcher ON download_events(launcher)",
+	// MySQL 不支持 CREATE INDEX IF NOT EXISTS（报 1064 语法错误），故按方言分别构造：
+	// MySQL 用裸 CREATE INDEX 并在下方忽略 1061 重复索引错误以保证幂等；
+	// SQLite 用 CREATE INDEX IF NOT EXISTS 原生幂等。
+	baseIndexStmts := []string{
+		"idx_dlauthz_status_expires ON download_authorizations(status, expires_at)",
+		"idx_dlevents_ip_date ON download_events(client_ip, date)",
+		"idx_dlevents_date ON download_events(date)",
+		"idx_dlevents_launcher ON download_events(launcher)",
 	}
-	for _, stmt := range indexStmts {
+	for _, idx := range baseIndexStmts {
+		var stmt string
+		if isMySQL {
+			stmt = "CREATE INDEX " + idx
+		} else {
+			stmt = "CREATE INDEX IF NOT EXISTS " + idx
+		}
 		if _, err := tx.Exec(stmt); err != nil {
 			if isMySQL && isDuplicateIndexErr(err) {
 				continue
-			}
-			if !isMySQL {
-				return fmt.Errorf("创建索引失败: %w, query: %s", err, stmt)
 			}
 			return fmt.Errorf("创建索引失败: %w, query: %s", err, stmt)
 		}
