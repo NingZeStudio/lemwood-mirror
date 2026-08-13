@@ -41,8 +41,8 @@ export const globalConfig = {
       powConfig: '/pow/config',
       downloadChallenge: '/downloads/challenge',
       downloadAuthorize: '/downloads/authorize',
-      downloadPrepare: '/download/prepare',
-      downloadLanding: '/download/landing'
+      downloadPrepare: '/downloads/prepare',
+      downloadLanding: '/downloads/landing'
     }
   },
 
