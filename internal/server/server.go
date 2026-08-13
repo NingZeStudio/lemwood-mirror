@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io/fs"
 	"lemwood_mirror/internal/blacklist"
 	"lemwood_mirror/internal/config"
@@ -423,7 +422,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 		// PoW 关闭时无 token 直接放行（无门控，等同旧 captcha_enabled=false 行为）。
 		if token == "" && s.Config.PowEnabled {
 			if isBrowserRequest(r) {
-				s.servePowPage(w, r, relPath)
+				http.Redirect(w, r, "/verify?file="+url.QueryEscape(relPath), http.StatusFound)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -445,7 +444,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			validated, ok := s.authzMgr.Peek(token)
 			if !ok {
 				if isBrowserRequest(r) && s.Config.PowEnabled {
-					s.servePowPage(w, r, relPath)
+					http.Redirect(w, r, "/verify?file="+url.QueryEscape(relPath), http.StatusFound)
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -694,15 +693,15 @@ func SecurityMiddleware(next http.Handler) http.Handler {
 
 		// 检查本地黑名单
 		if banned, createdAt, _ := db.GetIPBlacklistInfo(ip); banned {
-			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 %s", ip, createdAt, "https://qm.qq.com/q/FOGt99aayY")
-			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip, createdAt), http.StatusForbidden)
+			log.Printf("[防刷墙] 拒绝来自黑名单 IP 的访问: %s，封禁时间: %s，如有误封请联系 QQ群 %s", ip, createdAt, "1104690837")
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s was banned at %s. 如有误封，请加 QQ群 1104690837 申诉", ip, createdAt), http.StatusForbidden)
 			return
 		}
 
 		// 检查外部黑名单
 		if blacklist.IsExternalBlacklisted(ip) {
 			log.Printf("[防刷墙] 拒绝来自外部黑名单 IP 的访问: %s", ip)
-			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请点击链接加入群聊申诉: https://qm.qq.com/q/FOGt99aayY", ip), http.StatusForbidden)
+			http.Error(w, fmt.Sprintf("Access Denied: Your IP %s is in the external blacklist. 如有误封，请加 QQ群 1104690837 申诉", ip), http.StatusForbidden)
 			return
 		}
 
@@ -1028,106 +1027,6 @@ func isBrowserRequest(r *http.Request) bool {
 	}
 
 	return false
-}
-
-// servePowPage 返回浏览器直连下载时的工作量证明页面（替代极验验证页）。
-// 页面 JS 使用 Web Crypto PBKDF2 在浏览器本地求解 PoW：GET challenge -> 暴力搜索 counter ->
-// POST authorize 领取下载授权 -> 跳转 download_url。无第三方 CDN，自包含。
-func (s *State) servePowPage(w http.ResponseWriter, r *http.Request, filePath string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "private, no-store")
-
-	page := `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>下载验证 - 柠泽资源站</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#f5f7fa 0%,#e4e8ec 100%);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:20px}
-@media (prefers-color-scheme:dark){body{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%)}.card{background:#1f2937}.desc,.file-path{color:#9ca3af}h1{color:#f3f4f6}.bar{background:#374151}.bar>i{background:#60a5fa}}
-.card{background:#fff;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,.1);max-width:460px;width:100%;overflow:hidden}
-.header{text-align:center;padding:32px 24px 20px;border-bottom:1px solid #e5e7eb}
-@media (prefers-color-scheme:dark){.header{border-bottom-color:#374151}}
-h1{font-size:22px;color:#111827;margin-bottom:6px}
-.desc{color:#6b7280;font-size:13px}
-.content{padding:28px 24px;text-align:center}
-.file-path{font-size:12px;color:#6b7280;word-break:break-all;margin-bottom:18px}
-.bar{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin:14px 0}
-.bar>i{display:block;height:100%;background:#3b82f6;width:0;transition:width .15s}
-.status{font-size:13px;color:#6b7280;min-height:20px}
-.err{color:#ef4444}
-.ok{color:#22c55e}
-.btn{margin-top:18px;padding:10px 20px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px}
-.btn:hover{opacity:.9}
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="header"><h1>下载验证</h1><p class="desc">完成工作量证明后自动开始下载</p></div>
-  <div class="content">
-    <div class="file-path">文件: ` + html.EscapeString(filepath.Base(filePath)) + `</div>
-    <div class="bar"><i id="prog"></i></div>
-    <div class="status" id="status">正在获取挑战…</div>
-    <button class="btn" id="dlbtn" style="display:none" onclick="go()">直接下载</button>
-  </div>
-</div>
-<script>
-const filePath = ` + "`" + `"` + html.EscapeString(filePath) + `"` + "`" + `;
-let downloadUrl = "";
-const $status = document.getElementById('status');
-const $prog = document.getElementById('prog');
-function setStatus(t,cls){$status.textContent=t;$status.className='status'+(cls?''+cls:'');}
-function base64urlDecode(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const b=atob(s);const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a;}
-function base64urlEncode(bytes){let b='';for(let i=0;i<bytes.length;i++)b+=String.fromCharCode(bytes[i]);return btoa(b).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
-function leadingZeroBits(bytes){let bits=0;for(let i=0;i<bytes.length;i++){const b=bytes[i];if(b===0){bits+=8;continue;}for(let j=7;j>=0;j--){if(b&(1<<j))return bits;bits++;}}return bits;}
-async function solve(p){
-  const salt = base64urlDecode(p.salt);
-  const total = Math.min(Math.pow(2, p.difficulty+4), 4000000); // 进度估算上限
-  for(let counter=0; counter<total; counter++){
-    const pw = new TextEncoder().encode(String(counter));
-    const km = await crypto.subtle.importKey("raw", pw, {name:"PBKDF2"}, false, ["deriveBits"]);
-    const dk = new Uint8Array(await crypto.subtle.deriveBits({name:"PBKDF2", salt:salt, iterations:p.cost, hash:"SHA-256"}, km, p.keyLength*8));
-    if(leadingZeroBits(dk) >= p.difficulty){
-      return {counter: counter, derivedKey: base64urlEncode(dk)};
-    }
-    if(counter % 64 === 0){
-      $prog.style.width = Math.min(99, (counter/total*100)).toFixed(1) + '%';
-      setStatus('正在计算证明… ' + counter);
-      await new Promise(r=>setTimeout(r,0));
-    }
-  }
-  return null;
-}
-async function run(){
-  try{
-    setStatus('正在获取挑战…');
-    const r1 = await fetch('/api/v2/downloads/challenge?file_path=' + encodeURIComponent(filePath));
-    const j1 = await r1.json();
-    const ch = j1.data || j1;
-    if(!ch || !ch.parameters){ setStatus('获取挑战失败: '+(j1.error&&j1.error.message||r1.status), ' err'); return; }
-    setStatus('正在计算证明…');
-    const sol = await solve(ch.parameters);
-    if(!sol){ setStatus('未能在限定迭代内求出解，请刷新重试', ' err'); return; }
-    setStatus('正在领取下载授权…');
-    const r2 = await fetch('/api/v2/downloads/authorize', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({challenge: ch, solution: sol})});
-    const j2 = await r2.json();
-    const d = j2.data || j2;
-    if(!d || !d.download_url){ setStatus('授权失败: '+(j2.error&&j2.error.message||r2.status), ' err'); return; }
-    downloadUrl = d.download_url;
-    $prog.style.width = '100%';
-    setStatus('验证成功，开始下载…', ' ok');
-    document.getElementById('dlbtn').style.display='';
-    setTimeout(go, 300);
-  }catch(e){ setStatus('错误: '+e.message, ' err'); }
-}
-function go(){ if(downloadUrl) window.location.href = downloadUrl; }
-run();
-</script>
-</body>
-</html>`
-	w.Write([]byte(page))
 }
 
 // responseWriterCounter 包装 http.ResponseWriter 以统计实际写入的字节数

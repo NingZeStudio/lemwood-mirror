@@ -211,7 +211,7 @@ func DefaultConfig() *Config {
 		AdminLockDuration:      120,
 		TrafficLimitGB:         0,
 		BanRecordFile:          "banned_ips.txt",
-		AppealContact:          "QQ群 https://qm.qq.com/q/FOGt99aayY",
+		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
 		SelfUpdateChannel:      string(SelfUpdateChannelNotify),
 		Launchers:              []LauncherConfig{},
@@ -343,7 +343,7 @@ func NormalizeConfig(cfg *Config) error {
 		cfg.BanRecordFile = "banned_ips.txt"
 	}
 	if cfg.AppealContact == "" {
-		cfg.AppealContact = "QQ群 https://qm.qq.com/q/FOGt99aayY"
+		cfg.AppealContact = "QQ群 1104690837"
 	}
 	if cfg.PowAlgorithm == "" {
 		cfg.PowAlgorithm = "PBKDF2-SHA256"

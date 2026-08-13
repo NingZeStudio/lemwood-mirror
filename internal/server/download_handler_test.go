@@ -515,21 +515,18 @@ func TestServePowPageForBrowserDirectHit(t *testing.T) {
 	cfg := powTestCfg()
 	_, handler, path := setupDownloadHandlerState(t, cfg, 1, "hello")
 
-	// 浏览器直连（无 token）→ 返回 PoW 页面 HTML
+	// 浏览器直连（无 token）→ 302 重定向到前端验证页 /verify?file=...
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("browser direct status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("browser direct status = %d, want 302", rec.Code)
 	}
-	ct := rec.Header().Get("Content-Type")
-	if !strings.HasPrefix(ct, "text/html") {
-		t.Fatalf("browser direct Content-Type = %q, want text/html", ct)
-	}
-	if !strings.Contains(rec.Body.String(), "/api/v2/downloads/challenge") {
-		t.Fatal("PoW page should reference the challenge endpoint")
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/verify?file=") || !strings.Contains(loc, "file.txt") {
+		t.Fatalf("redirect Location = %q, want /verify?file=...", loc)
 	}
 
 	// CLI 直连（无 token）→ 403 JSON verification_required

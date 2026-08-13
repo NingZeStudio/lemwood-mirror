@@ -130,7 +130,7 @@ ban_record_file: "banned_ips.txt"
 external_blacklist_url: "https://bcr.pbh-btn.ghorg.ghostchu-services.top/combine/all.txt"
 
 # 误封申诉联系方式（会在封禁提示中展示给用户）
-appeal_contact: "QQ群 https://qm.qq.com/q/FOGt99aayY"
+appeal_contact: "QQ群 1104690837"
 
 # -----------------------------------------------------------------------------
 # MySQL 数据库设置（可选）

@@ -17,7 +17,7 @@ export const globalConfig = {
   },
 
   links: {
-    qqGroup: 'https://qm.qq.com/q/WMXCSUhU4O',
+    qqGroup: 'https://qun.qq.com/universal-share/share?ac=1&authKey=4tb0yflRdC0FjWZGhKHxfTxijnNc0crs399pxm782Lipx%2BoV6xmV%2BoA8%2BcQBUn7m&busi_data=eyJncm91cENvZGUiOiIxMTA0NjkwODM3IiwidG9rZW4iOiIrU2owaDFCMDRmVjJKaUdmdXA5M1RZNHlpVXZaYkZRTUh1bVA4V0ZVNlpGcUpuRjBrbHFRei9CeHI3NXZFb2xBIiwidWluIjoiMzQzNjQ2NDE4MSJ9&data=wr1XZ8qxXdkFazXoz2cuv1qBridVSJ8kVaDYI3vpZxTBbZNezhedFRTuCSeM_-GlzZRIeUHhE36zD5VXan3JqA&svctype=4&tempid=h5_group_info',
     githubRepo: 'https://github.com/leemwood/lemwood_mirror/',
     githubRepoNewWeb: 'https://github.com/JanePHPDev/lemwood_mirror_NewWeb',
     githubOrg: 'https://github.com/NingZeStudio/lemwood-mirror',
