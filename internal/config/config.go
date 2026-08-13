@@ -50,9 +50,18 @@ admin_lock_duration: {{ .AdminLockDuration }}
 two_factor_enabled: {{ .TwoFactorEnabled }}
 two_factor_secret: {{ yaml .TwoFactorSecret }}
 
-captcha_enabled: {{ .CaptchaEnabled }}
-captcha_app_id: {{ yaml .CaptchaAppId }}
-captcha_secret_key: {{ yaml .CaptchaSecretKey }}
+# PoW 下载验证（替代极验，自动验证客户端正规性）
+pow_enabled: {{ .PowEnabled }}
+pow_algorithm: {{ yaml .PowAlgorithm }}
+pow_cost: {{ .PowCost }}
+pow_key_length: {{ .PowKeyLength }}
+pow_difficulty: {{ .PowDifficulty }}
+pow_challenge_ttl: {{ yaml .PowChallengeTTL }}
+# PoW HMAC 签名密钥；留空时启动随机生成（挑战内存态+短 TTL，重启即失效，无需持久化）
+pow_hmac_secret: {{ yaml .PowHMACSecret }}
+
+# 下载授权令牌有效期（解析为 Go duration，如 5m / 30s）
+download_token_ttl: {{ yaml .DownloadTokenTTL }}
 
 traffic_limit_gb: {{ .TrafficLimitGB }}
 ban_record_file: {{ yaml .BanRecordFile }}
@@ -162,9 +171,14 @@ type Config struct {
 	DownloadUrlBase        string           `json:"download_url_base,omitempty" yaml:"download_url_base,omitempty"`
 	TwoFactorEnabled       bool             `json:"two_factor_enabled" yaml:"two_factor_enabled"`
 	TwoFactorSecret        string           `json:"two_factor_secret" yaml:"two_factor_secret"`
-	CaptchaEnabled         bool             `json:"captcha_enabled" yaml:"captcha_enabled"`
-	CaptchaAppId           string           `json:"captcha_app_id" yaml:"captcha_app_id"`
-	CaptchaSecretKey       string           `json:"captcha_secret_key" yaml:"captcha_secret_key"`
+	PowEnabled             bool             `json:"pow_enabled" yaml:"pow_enabled"`
+	PowAlgorithm            string           `json:"pow_algorithm" yaml:"pow_algorithm"`
+	PowCost                 int              `json:"pow_cost" yaml:"pow_cost"`
+	PowKeyLength            int              `json:"pow_key_length" yaml:"pow_key_length"`
+	PowDifficulty           int              `json:"pow_difficulty" yaml:"pow_difficulty"`
+	PowChallengeTTL         string           `json:"pow_challenge_ttl" yaml:"pow_challenge_ttl"`
+	PowHMACSecret           string           `json:"pow_hmac_secret,omitempty" yaml:"pow_hmac_secret,omitempty"`
+	DownloadTokenTTL        string           `json:"download_token_ttl,omitempty" yaml:"download_token_ttl,omitempty"`
 	Launchers              []LauncherConfig `json:"launchers" yaml:"launchers"`
 	TrafficLimitGB         int              `json:"traffic_limit_gb" yaml:"traffic_limit_gb"`
 	BanRecordFile          string           `json:"ban_record_file" yaml:"ban_record_file"`
@@ -197,10 +211,17 @@ func DefaultConfig() *Config {
 		AdminLockDuration:      120,
 		TrafficLimitGB:         0,
 		BanRecordFile:          "banned_ips.txt",
-		AppealContact:          "QQ群 https://qm.qq.com/q/FOGt99aayY",
+		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
 		SelfUpdateChannel:      string(SelfUpdateChannelNotify),
 		Launchers:              []LauncherConfig{},
+		PowEnabled:             true,
+		PowAlgorithm:           "PBKDF2-SHA256",
+		PowCost:                500,
+		PowKeyLength:           32,
+		PowDifficulty:          6,
+		PowChallengeTTL:        "10m",
+		DownloadTokenTTL:       "10m",
 	}
 }
 
@@ -322,7 +343,25 @@ func NormalizeConfig(cfg *Config) error {
 		cfg.BanRecordFile = "banned_ips.txt"
 	}
 	if cfg.AppealContact == "" {
-		cfg.AppealContact = "QQ群 https://qm.qq.com/q/FOGt99aayY"
+		cfg.AppealContact = "QQ群 1104690837"
+	}
+	if cfg.PowAlgorithm == "" {
+		cfg.PowAlgorithm = "PBKDF2-SHA256"
+	}
+	if cfg.PowCost <= 0 {
+		cfg.PowCost = 500
+	}
+	if cfg.PowKeyLength <= 0 {
+		cfg.PowKeyLength = 32
+	}
+	if cfg.PowDifficulty <= 0 {
+		cfg.PowDifficulty = 6
+	}
+	if cfg.PowChallengeTTL == "" {
+		cfg.PowChallengeTTL = "10m"
+	}
+	if cfg.DownloadTokenTTL == "" {
+		cfg.DownloadTokenTTL = "10m"
 	}
 	return nil
 }

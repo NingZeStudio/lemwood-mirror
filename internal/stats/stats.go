@@ -369,6 +369,8 @@ type StatsData struct {
 	Last30Downloads    int64          `json:"last_30_downloads"`
 	TotalTrafficBytes  int64          `json:"total_traffic_bytes"`
 	Last30TrafficBytes int64          `json:"last_30_traffic_bytes"`
+	TotalServedBytes   int64          `json:"total_served_bytes"`
+	Last30ServedBytes  int64          `json:"last_30_served_bytes"`
 	Disk               *DiskInfo      `json:"disk"`
 	TopDownloads       []DownloadRank `json:"top_downloads"`
 	GeoDistribution    []GeoStat      `json:"geo_distribution"`
@@ -519,17 +521,7 @@ func computeStatsData() *StatsData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
 			data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			data.Last30Downloads = scanCount("last_30_downloads", "SELECT COUNT(*) FROM downloads WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
 		}()
 		wg.Add(1)
 		go func() {
@@ -552,61 +544,25 @@ func computeStatsData() *StatsData {
 			queryDailyStats(data)
 		}()
 
-		// 流量统计：goroutine 中只计算总量和构建 date→bytes map，
-		// DailyStats 合并放到 wg.Wait() 后顺序执行，避免与 queryDailyStats 竞争。
-		var dailyTrafficMap map[string]int64
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if v, err := db.GetTotalTraffic(); err == nil {
-				data.TotalTrafficBytes = v
-			}
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			stats, err := db.GetDailyTrafficStats(30)
-			if err != nil {
-				return
-			}
-			dailyTrafficMap = make(map[string]int64, len(stats))
-			for _, s := range stats {
-				dailyTrafficMap[s.Date] = s.Bytes
-				data.Last30TrafficBytes += s.Bytes
-			}
-		}()
-
 		wg.Wait()
 
-		// 顺序合并每日流量到 DailyStats
-		mergeDailyTraffic(data, dailyTrafficMap)
+		// 下载次数与流量 = 冻结基线（daily_traffic/daily_completed_traffic）+ 事件表（download_events）。
+		// 下载次数/top 完全来自事件表（含历史回填）；流量字节 = 基线 SUM + 事件 SUM。
+		applyDownloadAndTrafficStats(data)
 
 		return data
 	}
 
 	data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
-	data.TotalDownloads = scanCount("total_downloads", "SELECT COUNT(*) FROM downloads")
-
 	data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')")
-	data.Last30Downloads = scanCount("last_30_downloads", "SELECT COUNT(*) FROM downloads WHERE created_at > datetime('now', '-30 days')")
 
 	computeTotalDays(data)
 	queryTopDownloads(data)
 	queryGeoDistribution(data)
 	queryDailyStats(data)
 
-	// 流量统计（SQLite 顺序执行）
-	if v, err := db.GetTotalTraffic(); err == nil {
-		data.TotalTrafficBytes = v
-	}
-	dailyTrafficMap := make(map[string]int64)
-	if stats, err := db.GetDailyTrafficStats(30); err == nil {
-		for _, s := range stats {
-			dailyTrafficMap[s.Date] = s.Bytes
-			data.Last30TrafficBytes += s.Bytes
-		}
-	}
-	mergeDailyTraffic(data, dailyTrafficMap)
+	// 下载次数与流量 = 冻结基线 + 事件表（见 applyDownloadAndTrafficStats）
+	applyDownloadAndTrafficStats(data)
 
 	return data
 }
@@ -619,6 +575,64 @@ func mergeDailyTraffic(data *StatsData, trafficMap map[string]int64) {
 			data.DailyStats[i].TrafficBytes = trafficMap[date]
 		}
 	}
+}
+
+// applyDownloadAndTrafficStats 计算下载次数与流量字节：
+//   - 下载次数/top 完全来自 download_events（含历史回填）；
+//   - 流量字节 = 冻结基线（daily_traffic/daily_completed_traffic）SUM + 事件表 SUM。
+//
+// 历史字节无法逐事件回填（基线是按日聚合），故基线表冻结为只读历史总量，新数据由事件表承载。
+func applyDownloadAndTrafficStats(data *StatsData) {
+	// 下载次数（事件表，含历史回填）
+	if v, err := db.GetTotalDownloadsFromEvents(); err == nil {
+		data.TotalDownloads = v
+	}
+
+	// 每日事件聚合（served/completed/count）
+	evtStats, _ := db.GetDailyEventStats(30)
+	var last30EvtCount, last30EvtCompleted, last30EvtServed int64
+	evtCompleted := map[string]int64{}
+	for _, s := range evtStats {
+		last30EvtCount += s.Count
+		last30EvtCompleted += s.Completed
+		last30EvtServed += s.Served
+		evtCompleted[s.Date] = s.Completed
+	}
+	data.Last30Downloads = last30EvtCount
+
+	// 流量总量 = 冻结基线 + 事件
+	if bv, err := db.GetTotalCompletedTraffic(); err == nil {
+		data.TotalTrafficBytes = bv
+	}
+	if ev, err := db.GetTotalCompletedFromEvents(); err == nil {
+		data.TotalTrafficBytes += ev
+	}
+	if bv, err := db.GetTotalTraffic(); err == nil {
+		data.TotalServedBytes = bv
+	}
+	if ev, err := db.GetTotalServedFromEvents(); err == nil {
+		data.TotalServedBytes += ev
+	}
+
+	// last30 每日：baseline + events
+	baseCompleted, _ := db.GetDailyCompletedTrafficStats(30)
+	baseServed, _ := db.GetDailyTrafficStats(30)
+	var last30BaseCompleted, last30BaseServed int64
+	dailyCompletedMap := map[string]int64{}
+	for _, s := range baseCompleted {
+		last30BaseCompleted += s.Bytes
+		dailyCompletedMap[s.Date] += s.Bytes
+	}
+	for _, s := range baseServed {
+		last30BaseServed += s.Bytes
+	}
+	for date, c := range evtCompleted {
+		dailyCompletedMap[date] += c
+	}
+	data.Last30TrafficBytes = last30BaseCompleted + last30EvtCompleted
+	data.Last30ServedBytes = last30BaseServed + last30EvtServed
+
+	mergeDailyTraffic(data, dailyCompletedMap)
 }
 
 func saveSnapshot(data *StatsData) error {
@@ -733,26 +747,15 @@ func computeTotalDays(data *StatsData) {
 }
 
 func queryTopDownloads(data *StatsData) {
-	rows, err := db.DB.Query(`
-		SELECT launcher, COUNT(*) as c
-		FROM downloads
-		GROUP BY launcher
-		ORDER BY c DESC
-		LIMIT 10`)
+	ranks, err := db.GetTopDownloadsFromEvents(10)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
-
-	var ranks []DownloadRank
-	for rows.Next() {
-		var r DownloadRank
-		if err := rows.Scan(&r.Launcher, &r.Count); err != nil {
-			continue
-		}
-		ranks = append(ranks, r)
+	converted := make([]DownloadRank, 0, len(ranks))
+	for _, r := range ranks {
+		converted = append(converted, DownloadRank{Launcher: r.Launcher, Count: r.Count})
 	}
-	data.TopDownloads = ranks
+	data.TopDownloads = converted
 }
 
 func queryGeoDistribution(data *StatsData) {

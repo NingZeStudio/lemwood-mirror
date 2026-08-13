@@ -19,16 +19,16 @@ export const getStatus = () => api.get(globalConfig.api.endpoints.status)
 export const getLatest = () => api.get(globalConfig.api.endpoints.latest)
 export const getStats = () => api.get(globalConfig.api.endpoints.stats)
 export const scan = () => api.post(globalConfig.api.endpoints.scan)
-export const getCaptchaConfig = () => api.get(globalConfig.api.endpoints.captchaConfig)
-export const verifyDownload = (lotNumber, captchaOutput, passToken, genTime, filePath, returnUrl, source) =>
-    api.post(globalConfig.api.endpoints.downloadVerify, {
-        lot_number: lotNumber,
-        captcha_output: captchaOutput,
-        pass_token: passToken,
-        gen_time: genTime,
-        file_path: filePath,
-        ...(returnUrl && { return_url: returnUrl }),
-        ...(source && { source: source })
+export const getPowConfig = () => api.get(globalConfig.api.endpoints.powConfig)
+
+// PoW 下载验证（替代极验）：创建挑战 → 浏览器求解 → 提交授权
+export const createDownloadChallenge = (filePath) =>
+    api.get(`${globalConfig.api.endpoints.downloadChallenge}?file_path=${encodeURIComponent(filePath)}`)
+
+export const authorizeDownload = (challenge, solution) =>
+    api.post(globalConfig.api.endpoints.downloadAuthorize, {
+        challenge,
+        solution
     })
 
 export const prepareDownload = (filePath, returnUrl, source) =>

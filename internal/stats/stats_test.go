@@ -40,7 +40,7 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 		t.Fatalf("insert yesterday visit error = %v", err)
 	}
 
-	// 写入普通下载流量
+	// 写入普通下载流量（served 口径）
 	if err := db.RecordTraffic("1.1.1.1", 1024); err != nil {
 		t.Fatalf("RecordTraffic() error = %v", err)
 	}
@@ -55,6 +55,17 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 		t.Fatalf("insert yesterday daily_traffic error = %v", err)
 	}
 
+	// 写入完整传输流量（completed 展示口径）：今日 512 + 1024 = 1536，昨日 2048
+	if err := db.RecordCompletedTraffic(512); err != nil {
+		t.Fatalf("RecordCompletedTraffic() error = %v", err)
+	}
+	if err := db.RecordCompletedTraffic(1024); err != nil {
+		t.Fatalf("RecordCompletedTraffic() error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO daily_completed_traffic (date, bytes_downloaded) VALUES (?, ?)", yesterday, 2048); err != nil {
+		t.Fatalf("insert yesterday daily_completed_traffic error = %v", err)
+	}
+
 	// 清除可能存在的快照缓存
 	snapshotMu.Lock()
 	lastSnapshot = nil
@@ -66,17 +77,25 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 
 	data := computeStatsData()
 
-	// 总流量 = 1024 + 2048 + 4096 = 7168
-	if data.TotalTrafficBytes != 7168 {
-		t.Fatalf("TotalTrafficBytes = %d, want 7168", data.TotalTrafficBytes)
+	// 展示口径（completed）总流量 = 512 + 1024 + 2048 = 3584
+	if data.TotalTrafficBytes != 3584 {
+		t.Fatalf("TotalTrafficBytes = %d, want 3584", data.TotalTrafficBytes)
 	}
 
-	// 最近30天流量 = 7168（全部在30天内）
-	if data.Last30TrafficBytes != 7168 {
-		t.Fatalf("Last30TrafficBytes = %d, want 7168", data.Last30TrafficBytes)
+	// 展示口径最近30天流量 = 3584（全部在30天内）
+	if data.Last30TrafficBytes != 3584 {
+		t.Fatalf("Last30TrafficBytes = %d, want 3584", data.Last30TrafficBytes)
 	}
 
-	// 验证 DailyStats 中今日流量
+	// served 口径总流量 = 1024 + 2048 + 4096 = 7168
+	if data.TotalServedBytes != 7168 {
+		t.Fatalf("TotalServedBytes = %d, want 7168", data.TotalServedBytes)
+	}
+	if data.Last30ServedBytes != 7168 {
+		t.Fatalf("Last30ServedBytes = %d, want 7168", data.Last30ServedBytes)
+	}
+
+	// 验证 DailyStats 中的流量（展示口径）
 	todayTraffic := int64(0)
 	yesterdayTraffic := int64(0)
 	for _, ds := range data.DailyStats {
@@ -88,13 +107,81 @@ func TestComputeStatsDataTraffic(t *testing.T) {
 		}
 	}
 
-	// 今日普通流量 = 1024 + 2048 = 3072
-	if todayTraffic != 3072 {
-		t.Fatalf("today traffic = %d, want 3072", todayTraffic)
+	// 今日完整传输流量 = 512 + 1024 = 1536
+	if todayTraffic != 1536 {
+		t.Fatalf("today traffic = %d, want 1536", todayTraffic)
 	}
-	// 昨日普通流量 = 4096
-	if yesterdayTraffic != 4096 {
-		t.Fatalf("yesterday traffic = %d, want 4096", yesterdayTraffic)
+	// 昨日完整传输流量 = 2048
+	if yesterdayTraffic != 2048 {
+		t.Fatalf("yesterday traffic = %d, want 2048", yesterdayTraffic)
+	}
+}
+
+// TestComputeStatsDataEventsMerge 验证流量字节 = 冻结基线 + 事件表的合并口径。
+// 基线表（daily_traffic/daily_completed_traffic）承载历史字节；download_events 承载新字节。
+func TestComputeStatsDataEventsMerge(t *testing.T) {
+	setupStatsTestDB(t)
+
+	today := time.Now().UTC().Format("2006-01-02")
+
+	// 今日访问，使 DailyStats 包含今日行
+	if _, err := db.DB.Exec("INSERT INTO visits (ip, path, created_at) VALUES (?, ?, ?)", "1.1.1.1", "/", today+" 12:00:00"); err != nil {
+		t.Fatalf("insert visit error = %v", err)
+	}
+
+	// 冻结基线：completed today 1000, served today 2000
+	if _, err := db.DB.Exec("INSERT INTO daily_completed_traffic (date, bytes_downloaded) VALUES (?, ?)", today, 1000); err != nil {
+		t.Fatalf("insert baseline completed error = %v", err)
+	}
+	if _, err := db.DB.Exec("INSERT INTO daily_traffic (date, bytes_downloaded) VALUES (?, ?)", today, 2000); err != nil {
+		t.Fatalf("insert baseline served error = %v", err)
+	}
+
+	// 事件表新数据：一次下载 bytes_served=500 completed=1
+	if err := db.RecordDownloadEvent(db.DownloadEvent{
+		FilePath: "fcl/1.0/a.apk", Launcher: "fcl", Version: "1.0",
+		ClientIP: "1.1.1.1", BytesServed: 500, Completed: true, StatusCode: 200,
+	}); err != nil {
+		t.Fatalf("RecordDownloadEvent error = %v", err)
+	}
+
+	snapshotMu.Lock()
+	lastSnapshot = nil
+	lastSnapshotTime = time.Time{}
+	snapshotMu.Unlock()
+	if _, err := db.DB.Exec("DELETE FROM stats_snapshot"); err != nil {
+		t.Fatalf("clear snapshot error = %v", err)
+	}
+
+	data := computeStatsData()
+
+	// completed 总 = 基线 1000 + 事件 500 = 1500
+	if data.TotalTrafficBytes != 1500 {
+		t.Fatalf("TotalTrafficBytes = %d, want 1500", data.TotalTrafficBytes)
+	}
+	if data.Last30TrafficBytes != 1500 {
+		t.Fatalf("Last30TrafficBytes = %d, want 1500", data.Last30TrafficBytes)
+	}
+	// served 总 = 基线 2000 + 事件 500 = 2500
+	if data.TotalServedBytes != 2500 {
+		t.Fatalf("TotalServedBytes = %d, want 2500", data.TotalServedBytes)
+	}
+	if data.Last30ServedBytes != 2500 {
+		t.Fatalf("Last30ServedBytes = %d, want 2500", data.Last30ServedBytes)
+	}
+	// 下载次数来自事件表（=1），downloads 表冻结为 0 行
+	if data.TotalDownloads != 1 {
+		t.Fatalf("TotalDownloads = %d, want 1 (from events)", data.TotalDownloads)
+	}
+	// top downloads 来自事件：fcl=1
+	if len(data.TopDownloads) != 1 || data.TopDownloads[0].Launcher != "fcl" || data.TopDownloads[0].Count != 1 {
+		t.Fatalf("TopDownloads = %+v, want fcl=1", data.TopDownloads)
+	}
+	// DailyStats 今日 completed = 1000 + 500 = 1500
+	for _, ds := range data.DailyStats {
+		if ds.Date == today && ds.TrafficBytes != 1500 {
+			t.Fatalf("today TrafficBytes = %d, want 1500", ds.TrafficBytes)
+		}
 	}
 }
 

@@ -69,8 +69,8 @@ func TestReserveTrafficRejectsWhenProjectedExceedsLimit(t *testing.T) {
 	tracker := setupTrackerTest(t, 1)
 	ip := "127.0.0.1"
 
-	if err := db.RecordTraffic(ip, testGB); err != nil {
-		t.Fatalf("RecordTraffic() error = %v", err)
+	if err := db.RecordDownloadEvent(db.DownloadEvent{ClientIP: ip, BytesServed: testGB}); err != nil {
+		t.Fatalf("RecordDownloadEvent() error = %v", err)
 	}
 
 	allowed, currentBytes, projectedBytes, reason := tracker.ReserveTraffic(ip, 128)

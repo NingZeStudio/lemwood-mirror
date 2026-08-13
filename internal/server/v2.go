@@ -13,13 +13,13 @@ import (
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
 	"lemwood_mirror/internal/netutil"
+	"lemwood_mirror/internal/pow"
 	"lemwood_mirror/internal/selfupdate"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 	"lemwood_mirror/internal/version"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -96,7 +96,9 @@ func writeV2Success(w http.ResponseWriter, r *http.Request, data any, cached boo
 			for _, v := range strings.Split(inm, ",") {
 				if strings.TrimSpace(v) == etag {
 					w.Header().Set("ETag", etag)
-					w.Header().Set("Cache-Control", v2CacheControl)
+					if w.Header().Get("Cache-Control") == "" {
+						w.Header().Set("Cache-Control", v2CacheControl)
+					}
 					w.WriteHeader(http.StatusNotModified)
 					return
 				}
@@ -119,7 +121,9 @@ func writeV2Success(w http.ResponseWriter, r *http.Request, data any, cached boo
 	}
 
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", v2CacheControl)
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", v2CacheControl)
+	}
 	w.Header().Set("Content-Type", "application/json")
 
 	// gzip 压缩（仅对足够大的响应）
@@ -158,6 +162,12 @@ func writeV2Error(w http.ResponseWriter, r *http.Request, statusCode int, code, 
 // acceptsGzip 检查客户端是否接受 gzip 压缩。
 func acceptsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+}
+
+// markNoStore 标记响应不可缓存。挑战/授权/令牌等一次性凭证响应必须 no-store，
+// 否则浏览器缓存会导致重试拿到已消费的挑战（401 challenge not found）。
+func markNoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "private, no-store")
 }
 
 // ============================================================
@@ -273,11 +283,20 @@ func (s *State) handleV2Stats(w http.ResponseWriter, r *http.Request) {
 	writeV2Success(w, r, data, true)
 }
 
-// handleV2CaptchaConfig 返回验证码配置（信封包裹）。
-func (s *State) handleV2CaptchaConfig(w http.ResponseWriter, r *http.Request) {
+// handleV2PowConfig 返回 PoW 公开参数（算法/迭代数/难度），供客户端预知求解成本，信封包裹。
+func (s *State) handleV2PowConfig(w http.ResponseWriter, r *http.Request) {
+	if s.powMgr == nil {
+		writeV2Success(w, r, map[string]any{"enabled": false}, false)
+		return
+	}
+	cfg := s.powMgr.PublicConfig()
+	markNoStore(w)
 	writeV2Success(w, r, map[string]any{
-		"enabled": s.Config.CaptchaEnabled,
-		"app_id":  s.Config.CaptchaAppId,
+		"enabled":    true,
+		"algorithm":  cfg.Algorithm,
+		"cost":       cfg.Cost,
+		"key_length": cfg.KeyLength,
+		"difficulty": cfg.Difficulty,
 	}, false)
 }
 
@@ -412,7 +431,8 @@ func (s *State) handleV2Login(w http.ResponseWriter, r *http.Request) {
 // v2 下载 Handler
 // ============================================================
 
-// handleV2DownloadPrepare 准备下载（无验证码），信封包裹。
+// handleV2DownloadPrepare 准备下载（无 PoW，CLI/API 直发授权），信封包裹。
+// 替代旧内存 token：现签发 DB 授权（download_authorizations），客户端可见 token 仍为 43 字符 base64url。
 func (s *State) handleV2DownloadPrepare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
@@ -430,23 +450,24 @@ func (s *State) handleV2DownloadPrepare(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
+	_, info, validationErr := s.validateDownloadFile(req.FilePath)
+	if validationErr != nil {
 		writeV2Error(w, r, validationErr.StatusCode, validationErr.Code, validationErr.Message, nil)
 		return
 	}
 
-	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "prepare")
+	clientIP := netutil.ExtractClientIP(r)
+	resp, err := s.issueAuthz(req.FilePath, req.ReturnURL, req.Source, "prepare", clientIP, "api", info.Size())
 	if err != nil {
 		writeV2Error(w, r, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token", nil)
 		return
 	}
 
-	// v2 landing_url 指向 v2 端点
-	resp.LandingURL = fmt.Sprintf("/api/v2/downloads/landing?token=%s", url.QueryEscape(resp.DownloadToken))
+	markNoStore(w)
 	writeV2Success(w, r, resp, false)
 }
 
-// handleV2DownloadLanding 获取下载引导信息，信封包裹。
+// handleV2DownloadLanding 获取下载引导信息（Peek 授权，不消费），信封包裹。
 func (s *State) handleV2DownloadLanding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
@@ -459,71 +480,121 @@ func (s *State) handleV2DownloadLanding(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	entry, valid := s.downloadTokenMgr.Peek(token)
+	auth, valid := s.authzMgr.Peek(token)
 	if !valid {
 		writeV2Error(w, r, http.StatusForbidden, "expired_token", "Download token is invalid or expired", nil)
 		return
 	}
 
+	markNoStore(w)
 	writeV2Success(w, r, map[string]string{
-		"download_url": buildDownloadURL(token, entry.FilePath),
-		"return_url":   entry.ReturnURL,
-		"source":       entry.Source,
-		"file_name":    filepath.Base(entry.FilePath),
-		"file_path":    entry.FilePath,
-		"flow":         entry.Flow,
+		"download_url": buildDownloadURL(token, auth.FilePath),
+		"return_url":   auth.ReturnURL,
+		"source":       auth.Source,
+		"file_name":    filepath.Base(auth.FilePath),
+		"file_path":    auth.FilePath,
+		"flow":         auth.Flow,
 	}, false)
 }
 
-// handleV2DownloadVerify 验证码验证后生成下载令牌，信封包裹。
-func (s *State) handleV2DownloadVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+// handleV2DownloadChallenge 创建 PoW 挑战（浏览器验证页用），信封包裹。
+// file_path 绑定进挑战 data 并由签名保护，授权时必须一致。
+func (s *State) handleV2DownloadChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
 		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
 		return
 	}
-
-	if !s.Config.CaptchaEnabled || s.captchaValidator == nil {
-		writeV2Error(w, r, http.StatusBadRequest, "captcha_not_enabled", "Captcha not enabled", nil)
+	if s.powMgr == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "pow_disabled", "PoW verification is disabled", nil)
 		return
 	}
 
-	var req downloadVerifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeV2Error(w, r, http.StatusBadRequest, "bad_request", "Bad Request", nil)
+	filePath := r.URL.Query().Get("file_path")
+	if filePath == "" {
+		writeV2Error(w, r, http.StatusBadRequest, "missing_required_parameters", "Missing file_path", nil)
 		return
 	}
 
-	if req.LotNumber == "" || req.CaptchaOutput == "" || req.PassToken == "" || req.GenTime == "" || req.FilePath == "" {
-		writeV2Error(w, r, http.StatusBadRequest, "missing_required_parameters", "Missing required parameters", nil)
-		return
-	}
-
-	ip := netutil.ExtractClientIP(r)
-	result, err := s.captchaValidator.Verify(req.LotNumber, req.CaptchaOutput, req.PassToken, req.GenTime, ip)
-	if err != nil {
-		log.Printf("验证码验证失败: %v", err)
-		writeV2Error(w, r, http.StatusInternalServerError, "verification_failed", "Failed to verify captcha", nil)
-		return
-	}
-
-	if result.Result != "success" {
-		log.Printf("验证码验证不成功: result=%s, reason=%s", result.Result, result.Reason)
-		writeV2Error(w, r, http.StatusForbidden, "verification_failed", result.Reason, nil)
-		return
-	}
-
-	if _, _, validationErr := s.validateDownloadFile(req.FilePath); validationErr != nil {
+	// 校验文件存在且路径合法，避免为不存在的资产签发挑战
+	if _, _, validationErr := s.validateDownloadFile(filePath); validationErr != nil {
 		writeV2Error(w, r, validationErr.StatusCode, validationErr.Code, validationErr.Message, nil)
 		return
 	}
 
-	resp, err := s.issueDownloadToken(req.FilePath, req.ReturnURL, req.Source, "verify")
+	clientIP := netutil.ExtractClientIP(r)
+	challenge, err := s.powMgr.CreateChallenge(filePath, clientIP, "web")
+	if err != nil {
+		log.Printf("[PoW] 创建挑战失败: %v", err)
+		writeV2Error(w, r, http.StatusServiceUnavailable, "pow_busy", "Failed to create challenge", nil)
+		return
+	}
+
+	markNoStore(w)
+	writeV2Success(w, r, challenge, false)
+}
+
+// handleV2DownloadAuthorize 提交 PoW 解并领取下载授权，信封包裹。
+// 成功后返回 download_token + download_url（同 prepare 响应结构）。
+func (s *State) handleV2DownloadAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	if s.powMgr == nil {
+		writeV2Error(w, r, http.StatusNotImplemented, "pow_disabled", "PoW verification is disabled", nil)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var payload pow.Payload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeV2Error(w, r, http.StatusBadRequest, "bad_request", "Invalid request body", nil)
+		return
+	}
+
+	// 从挑战 data 中取绑定的 file_path（签名保护，不可被客户端篡改）
+	filePath, _ := payload.Challenge.Parameters.Data["file_path"].(string)
+	if filePath == "" {
+		writeV2Error(w, r, http.StatusBadRequest, "missing_required_parameters", "Challenge is missing file binding", nil)
+		return
+	}
+
+	if err := s.powMgr.VerifyAndConsume(payload, filePath); err != nil {
+		log.Printf("[PoW] 授权失败: nonce=%s file=%s challenges=%d err=%v",
+			payload.Challenge.Parameters.Nonce, filePath, s.powMgr.ChallengeCount(), err)
+		switch {
+		case errors.Is(err, pow.ErrChallengeNotFound), errors.Is(err, pow.ErrChallengeExpired):
+			writeV2Error(w, r, http.StatusUnauthorized, "challenge_required", "Challenge not found, expired or already consumed", nil)
+		case errors.Is(err, pow.ErrChallengeConsumed):
+			writeV2Error(w, r, http.StatusConflict, "challenge_in_progress", "Challenge is already being used", nil)
+		case errors.Is(err, pow.ErrSignatureInvalid):
+			writeV2Error(w, r, http.StatusForbidden, "challenge_failed", "Challenge signature invalid", nil)
+		case errors.Is(err, pow.ErrFileBindingMismatch):
+			writeV2Error(w, r, http.StatusForbidden, "challenge_failed", "Challenge file binding mismatch", nil)
+		case errors.Is(err, pow.ErrSolutionInvalid):
+			writeV2Error(w, r, http.StatusForbidden, "challenge_failed", "PoW solution invalid", nil)
+		default:
+			log.Printf("[PoW] 授权失败: %v", err)
+			writeV2Error(w, r, http.StatusInternalServerError, "internal_error", "Authorization failed", nil)
+		}
+		return
+	}
+
+	// PoW 通过后再校验文件并签发 DB 授权
+	_, info, validationErr := s.validateDownloadFile(filePath)
+	if validationErr != nil {
+		writeV2Error(w, r, validationErr.StatusCode, validationErr.Code, validationErr.Message, nil)
+		return
+	}
+
+	clientIP := netutil.ExtractClientIP(r)
+	resp, err := s.issueAuthz(filePath, "", "pow", "authorize", clientIP, "web", info.Size())
 	if err != nil {
 		writeV2Error(w, r, http.StatusInternalServerError, "token_generation_failed", "Failed to generate download token", nil)
 		return
 	}
 
-	resp.LandingURL = fmt.Sprintf("/api/v2/downloads/landing?token=%s", url.QueryEscape(resp.DownloadToken))
+	markNoStore(w)
 	writeV2Success(w, r, resp, false)
 }
 

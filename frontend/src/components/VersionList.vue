@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Download, History, List, Package } from 'lucide-vue-next'
-import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
+import { getStatus, getLatest, getPowConfig, prepareDownload } from '@/services/api'
 import { globalConfig } from '@/lib/globalConfig'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -15,7 +15,7 @@ const launcherDefaultLogo = globalConfig.launchers.fcl?.logoUrl
 const rawLaunchers = ref({})
 const latestMap = ref({})
 const loading = ref(true)
-const captchaConfig = ref({ enabled: false, app_id: '' })
+const powConfig = ref({ enabled: false })
 
 const launcherList = computed(() => {
   const list = Object.keys(rawLaunchers.value).map((name) => {
@@ -48,10 +48,10 @@ const launcherList = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const [statusRes, latestRes, captchaRes] = await Promise.all([
+    const [statusRes, latestRes, powRes] = await Promise.all([
       getStatus(),
       getLatest(),
-      getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
+      getPowConfig().catch(() => ({ data: { enabled: false } }))
     ])
 
     const data = statusRes.data
@@ -61,7 +61,7 @@ const loadData = async () => {
 
     rawLaunchers.value = data
     latestMap.value = latestRes.data
-    captchaConfig.value = captchaRes.data
+    powConfig.value = powRes.data
   } catch (error) {
     console.error(error)
   } finally {
@@ -93,7 +93,7 @@ const handleDownload = async (item) => {
   const returnUrl = window.location.href
   const source = globalConfig.download.sourceLabels.home
 
-  if (!captchaConfig.value.enabled) {
+  if (!powConfig.value.enabled) {
     try {
       const response = await prepareDownload(filePath, returnUrl, source)
       const token = response.data.download_token

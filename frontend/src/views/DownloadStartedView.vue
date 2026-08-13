@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getDownloadLanding } from '@/services/api'
 import { globalConfig } from '@/lib/globalConfig'
-import { Download, Home, ArrowLeft, Loader2, XCircle } from 'lucide-vue-next'
+import { Download, Home, ArrowLeft, Loader2, Heart, Users, XCircle } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
@@ -44,21 +44,51 @@ const triggerDownload = () => {
   downloadTriggered.value = true
 }
 
+// 返回来源网站（集成站）：优先外部 referrer，其次外部 return_url，兜底首页。
+// 不 router.back() 回验证页。
 const goBack = () => {
-  if (window.history.length > 1) {
-    router.back()
-  } else if (fileInfo.value?.return_url) {
-    window.location.href = fileInfo.value.return_url
-  } else {
-    router.push('/')
+  const externalReferrer = getExternalReferrer()
+  if (externalReferrer) {
+    window.location.href = externalReferrer
+    return
   }
+  const returnUrl = route.query.return_url || fileInfo.value?.return_url
+  if (returnUrl && isExternal(returnUrl)) {
+    window.location.href = returnUrl
+    return
+  }
+  router.push('/')
 }
 
 const goToWebsite = () => {
-  if (fileInfo.value?.return_url) {
-    window.location.href = fileInfo.value.return_url
-  } else {
-    router.push('/')
+  const externalReferrer = getExternalReferrer()
+  if (externalReferrer) {
+    window.location.href = externalReferrer
+    return
+  }
+  const returnUrl = route.query.return_url || fileInfo.value?.return_url
+  if (returnUrl && isExternal(returnUrl)) {
+    window.location.href = returnUrl
+    return
+  }
+  router.push('/')
+}
+
+// getExternalReferrer 返回外部来源站点 URL（不同源才返回，避免回到本站）。
+const getExternalReferrer = () => {
+  const ref = document.referrer
+  if (ref && isExternal(ref)) {
+    return ref
+  }
+  return ''
+}
+
+// isExternal 判断 URL 是否来自其他源（站外）。
+const isExternal = (url) => {
+  try {
+    return new URL(url, window.location.origin).origin !== window.location.origin
+  } catch (e) {
+    return false
   }
 }
 
@@ -69,7 +99,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-[calc(100vh-10rem)] items-center justify-center py-8">
+  <div class="flex min-h-[calc(100vh-10rem)] flex-col items-center justify-center gap-4 py-8">
     <Card class="w-full max-w-lg">
       <CardHeader class="items-center text-center">
         <div class="mb-2 rounded-full bg-primary/10 p-3 text-primary">
@@ -100,8 +130,17 @@ onMounted(() => {
         </div>
 
         <div v-else class="space-y-5">
+          <!-- 真实 <a> 用户手势触发下载：Chrome/Android 会拦截非手势的自动下载 -->
+          <a
+            :href="fileInfo.download_url"
+            :download="fileInfo.file_name || undefined"
+            class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
+          >
+            <Download class="h-5 w-5" />
+            开始下载
+          </a>
           <p class="text-center text-sm text-muted-foreground">
-            如果没有自动开始下载，您可以<a :href="fileInfo.download_url" class="text-primary hover:underline" target="_blank">点击这里手动下载</a>。
+            验证已完成。Android 浏览器会拦截自动下载，<span class="font-medium text-foreground">请点击上方按钮开始下载</span>。
           </p>
 
           <div class="grid gap-2 sm:grid-cols-2">
@@ -121,5 +160,36 @@ onMounted(() => {
         </div>
       </CardContent>
     </Card>
+
+    <!-- 赞助请求：收款码在关于页 -->
+    <Card class="w-full max-w-lg">
+      <CardContent class="flex items-center justify-between gap-3 p-5">
+        <div class="min-w-0">
+          <p class="text-sm font-semibold text-foreground">喜欢本站？请考虑赞助支持</p>
+          <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            您的支持会用于服务器、带宽与镜像存储等基础设施支出，收款码在关于页
+          </p>
+        </div>
+        <RouterLink
+          to="/about"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+        >
+          <Heart class="h-4 w-4" />
+          查看收款码
+        </RouterLink>
+      </CardContent>
+    </Card>
+
+    <!-- 官方用户群 -->
+    <a
+      :href="globalConfig.links.qqGroup"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="inline-flex items-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-medium text-foreground hover:bg-muted/60"
+    >
+      <Users class="h-4 w-4 text-primary" />
+      进入官方用户群
+      <span class="text-xs font-normal text-muted-foreground">柠泽资源站用户群</span>
+    </a>
   </div>
 </template>

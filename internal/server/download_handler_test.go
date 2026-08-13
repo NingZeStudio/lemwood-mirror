@@ -3,14 +3,17 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
+	"lemwood_mirror/internal/pow"
 	"lemwood_mirror/internal/stats"
 	"lemwood_mirror/internal/traffic"
 )
@@ -63,7 +66,7 @@ func setupDownloadHandlerTest(t *testing.T, limitGB int, content string) (http.H
 	t.Helper()
 
 	cfg := &config.Config{
-		CaptchaEnabled: false,
+		PowEnabled:    false,
 		AppealContact:  "test-contact",
 	}
 	_, handler, path := setupDownloadHandlerState(t, cfg, limitGB, content)
@@ -111,8 +114,9 @@ func TestDownloadHandlerRejectsBeforeServingWhenLimitWouldBeExceeded(t *testing.
 	handler, path := setupDownloadHandlerTest(t, 1, "hello")
 	ip := "127.0.0.1"
 
-	if err := db.RecordTraffic(ip, serverTestGB); err != nil {
-		t.Fatalf("RecordTraffic() error = %v", err)
+	// 预置当日 served 流量到事件表（防刷墙现读 download_events）
+	if err := db.RecordDownloadEvent(db.DownloadEvent{ClientIP: ip, BytesServed: serverTestGB}); err != nil {
+		t.Fatalf("RecordDownloadEvent() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -125,12 +129,12 @@ func TestDownloadHandlerRejectsBeforeServingWhenLimitWouldBeExceeded(t *testing.
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 
-	trafficBytes, err := db.GetDailyTraffic(ip)
+	trafficBytes, err := db.GetDailyServedByIPFromEventsToday(ip)
 	if err != nil {
-		t.Fatalf("GetDailyTraffic() error = %v", err)
+		t.Fatalf("GetDailyServedByIPFromEventsToday() error = %v", err)
 	}
 	if trafficBytes != serverTestGB {
-		t.Fatalf("daily traffic = %d, want %d", trafficBytes, serverTestGB)
+		t.Fatalf("daily served = %d, want %d", trafficBytes, serverTestGB)
 	}
 }
 
@@ -148,12 +152,12 @@ func TestDownloadHandlerDoesNotCountHeadRequests(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	trafficBytes, err := db.GetDailyTraffic(ip)
+	trafficBytes, err := db.GetDailyServedByIPFromEventsToday(ip)
 	if err != nil {
-		t.Fatalf("GetDailyTraffic() error = %v", err)
+		t.Fatalf("GetDailyServedByIPFromEventsToday() error = %v", err)
 	}
 	if trafficBytes != 0 {
-		t.Fatalf("daily traffic = %d, want 0", trafficBytes)
+		t.Fatalf("daily served = %d, want 0", trafficBytes)
 	}
 }
 
@@ -172,18 +176,105 @@ func TestDownloadHandlerCountsPartialContentBytes(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPartialContent)
 	}
 
-	trafficBytes, err := db.GetDailyTraffic(ip)
+	trafficBytes, err := db.GetDailyServedByIPFromEventsToday(ip)
 	if err != nil {
-		t.Fatalf("GetDailyTraffic() error = %v", err)
+		t.Fatalf("GetDailyServedByIPFromEventsToday() error = %v", err)
 	}
 	if trafficBytes != 2 {
-		t.Fatalf("daily traffic = %d, want 2", trafficBytes)
+		t.Fatalf("daily served = %d, want 2", trafficBytes)
+	}
+}
+
+// failAfterWriter 模拟客户端在接收 limit 字节后断开连接（Write 返回错误）。
+type failAfterWriter struct {
+	header    http.Header
+	remaining int
+	status    int
+}
+
+func newFailAfterWriter(limit int) *failAfterWriter {
+	return &failAfterWriter{header: make(http.Header), remaining: limit}
+}
+
+func (w *failAfterWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *failAfterWriter) WriteHeader(statusCode int) {
+	w.status = statusCode
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.remaining <= 0 {
+		return 0, errors.New("simulated client disconnect")
+	}
+	if len(p) > w.remaining {
+		n := w.remaining
+		w.remaining = 0
+		return n, errors.New("simulated client disconnect")
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
+
+// 完整 GET：写出字节数达到预估值且状态为 200，应计入完整传输（展示）口径。
+func TestDownloadHandlerRecordsCompletedTrafficOnFullDownload(t *testing.T) {
+	content := "hello"
+	handler, path := setupDownloadHandlerTest(t, 1, content)
+	ip := "127.0.0.1"
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.RemoteAddr = ip + ":1234"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	completedBytes, err := db.GetTotalCompletedFromEvents()
+	if err != nil {
+		t.Fatalf("GetTotalCompletedFromEvents() error = %v", err)
+	}
+	if completedBytes != int64(len(content)) {
+		t.Fatalf("completed traffic = %d, want %d", completedBytes, len(content))
+	}
+}
+
+// 客户端中止的部分传输：served 口径仍记录已写出字节（防刷墙），
+// 但完整传输（展示）口径不应计入。
+func TestDownloadHandlerDoesNotRecordCompletedTrafficOnAbort(t *testing.T) {
+	handler, path := setupDownloadHandlerTest(t, 1, "hello")
+	ip := "127.0.0.1"
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.RemoteAddr = ip + ":1234"
+	// 5 字节文件只接收前 2 字节即"断开"
+	w := newFailAfterWriter(2)
+
+	handler.ServeHTTP(w, req)
+
+	servedBytes, err := db.GetDailyServedByIPFromEventsToday(ip)
+	if err != nil {
+		t.Fatalf("GetDailyServedByIPFromEventsToday() error = %v", err)
+	}
+	if servedBytes != 2 {
+		t.Fatalf("daily served = %d, want 2", servedBytes)
+	}
+
+	completedBytes, err := db.GetTotalCompletedFromEvents()
+	if err != nil {
+		t.Fatalf("GetTotalCompletedFromEvents() error = %v", err)
+	}
+	if completedBytes != 0 {
+		t.Fatalf("completed traffic = %d, want 0", completedBytes)
 	}
 }
 
 func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 	cfg := &config.Config{
-		CaptchaEnabled: false,
+		PowEnabled:    false,
 		AppealContact:  "test-contact",
 	}
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
@@ -213,7 +304,7 @@ func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 
 func TestDownloadLandingReturnsContext(t *testing.T) {
 	cfg := &config.Config{
-		CaptchaEnabled: false,
+		PowEnabled:    false,
 		AppealContact:  "test-contact",
 	}
 	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
@@ -253,7 +344,7 @@ func TestDownloadLandingReturnsContext(t *testing.T) {
 
 func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
 	cfg := &config.Config{
-		CaptchaEnabled: false,
+		PowEnabled:    false,
 		AppealContact:  "test-contact",
 	}
 	state, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
@@ -270,8 +361,8 @@ func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
 		t.Fatalf("download_token missing or invalid: %v", prepareResp["download_token"])
 	}
 
-	if _, valid := state.downloadTokenMgr.Validate(token); !valid {
-		t.Fatal("Validate() should consume token successfully")
+	if _, ok := state.authzMgr.Consume(token); !ok {
+		t.Fatal("Consume() should consume token successfully")
 	}
 
 	landingURL, _ := prepareResp["landing_url"].(string)
@@ -286,10 +377,8 @@ func TestDownloadLandingRejectsConsumedToken(t *testing.T) {
 
 func TestCLIDownloadWithoutTokenStillRequiresVerificationJSON(t *testing.T) {
 	cfg := &config.Config{
-		CaptchaEnabled:   true,
-		CaptchaAppId:     "test-app",
-		CaptchaSecretKey: "test-secret",
-		AppealContact:    "test-contact",
+		PowEnabled:    true,
+		AppealContact: "test-contact",
 	}
 	_, handler, path := setupDownloadHandlerState(t, cfg, 1, "hello")
 
@@ -311,4 +400,163 @@ func TestCLIDownloadWithoutTokenStillRequiresVerificationJSON(t *testing.T) {
 	if resp["error"] != "verification_required" {
 		t.Fatalf("error = %v, want %q", resp["error"], "verification_required")
 	}
+}
+
+// powTestCfg 返回启用 PoW 的低难度配置（cost=200/difficulty=10），使测试可在毫秒级求解。
+func powTestCfg() *config.Config {
+	return &config.Config{
+		PowEnabled:     true,
+		PowAlgorithm:    "PBKDF2-SHA256",
+		PowCost:         200,
+		PowKeyLength:    32,
+		PowDifficulty:   10,
+		PowChallengeTTL: "2m",
+		AppealContact:   "test-contact",
+	}
+}
+
+func TestPowChallengeAuthorizeFlow(t *testing.T) {
+	cfg := powTestCfg()
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	// 1. 创建 PoW 挑战
+	chReq := httptest.NewRequest(http.MethodGet, "/api/v2/downloads/challenge?file_path=launcher/v1/file.txt", nil)
+	chRec := httptest.NewRecorder()
+	handler.ServeHTTP(chRec, chReq)
+	if chRec.Code != http.StatusOK {
+		t.Fatalf("challenge status = %d, want 200", chRec.Code)
+	}
+	challenge := unwrapV2Envelope(t, chRec.Body.Bytes())
+
+	// 2. 求解
+	params := decodeChallengeParams(t, challenge)
+	sol, ok := pow.Solve(params, 0)
+	if !ok {
+		t.Fatal("pow.Solve failed")
+	}
+
+	// 3. 提交解领取授权
+	authBody, _ := json.Marshal(map[string]any{
+		"challenge": challenge,
+		"solution":  map[string]any{"counter": sol.Counter, "derivedKey": sol.DerivedKey},
+	})
+	authReq := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/authorize", bytes.NewReader(authBody))
+	authReq.Header.Set("Content-Type", "application/json")
+	authRec := httptest.NewRecorder()
+	handler.ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("authorize status = %d, want 200, body=%s", authRec.Code, authRec.Body.String())
+	}
+	authResp := unwrapV2Envelope(t, authRec.Body.Bytes())
+	token, _ := authResp["download_token"].(string)
+	if token == "" {
+		t.Fatal("authorize: empty download_token")
+	}
+	downloadURL, _ := authResp["download_url"].(string)
+	if downloadURL == "" {
+		t.Fatal("authorize: empty download_url")
+	}
+
+	// 4. 用 token 下载
+	dlReq := httptest.NewRequest(http.MethodGet, downloadURL, nil)
+	dlRec := httptest.NewRecorder()
+	handler.ServeHTTP(dlRec, dlReq)
+	if dlRec.Code != http.StatusOK {
+		t.Fatalf("download status = %d, want 200", dlRec.Code)
+	}
+	if dlRec.Body.String() != "hello" {
+		t.Fatalf("download body = %q, want %q", dlRec.Body.String(), "hello")
+	}
+
+	// 5. token 在有效期内可多次使用（非单次消费）——重放应仍成功
+	dlRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(dlRec2, dlReq)
+	if dlRec2.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200 (multi-use within TTL)", dlRec2.Code)
+	}
+	if dlRec2.Body.String() != "hello" {
+		t.Fatalf("replay body = %q, want %q", dlRec2.Body.String(), "hello")
+	}
+}
+
+func TestDownloadWithBearerToken(t *testing.T) {
+	cfg := powTestCfg()
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	// prepare 取一个 token（不依赖 PoW）
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","source":"test"}`)
+	prepReq := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
+	prepReq.Header.Set("Content-Type", "application/json")
+	prepRec := httptest.NewRecorder()
+	handler.ServeHTTP(prepRec, prepReq)
+	if prepRec.Code != http.StatusOK {
+		t.Fatalf("prepare status = %d", prepRec.Code)
+	}
+	token, _ := unwrapV2Envelope(t, prepRec.Body.Bytes())["download_token"].(string)
+	if token == "" {
+		t.Fatal("prepare: empty token")
+	}
+
+	// 用 Authorization: Bearer 下载（路径不含 token）
+	dlReq := httptest.NewRequest(http.MethodGet, "/download/launcher/v1/file.txt", nil)
+	dlReq.Header.Set("Authorization", "Bearer "+token)
+	dlReq.Header.Set("Accept", "application/octet-stream")
+	dlRec := httptest.NewRecorder()
+	handler.ServeHTTP(dlRec, dlReq)
+	if dlRec.Code != http.StatusOK {
+		t.Fatalf("Bearer download status = %d, want 200", dlRec.Code)
+	}
+	if dlRec.Body.String() != "hello" {
+		t.Fatalf("Bearer download body = %q, want hello", dlRec.Body.String())
+	}
+}
+
+func TestServePowPageForBrowserDirectHit(t *testing.T) {
+	cfg := powTestCfg()
+	_, handler, path := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	// 浏览器直连（无 token）→ 302 重定向到前端验证页 /verify?file=...
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Accept", "text/html")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("browser direct status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/verify?file=") || !strings.Contains(loc, "file.txt") {
+		t.Fatalf("redirect Location = %q, want /verify?file=...", loc)
+	}
+
+	// CLI 直连（无 token）→ 403 JSON verification_required
+	cliReq := httptest.NewRequest(http.MethodGet, path, nil)
+	cliReq.Header.Set("Accept", "application/octet-stream")
+	cliReq.Header.Set("User-Agent", "curl/8.0")
+	cliRec := httptest.NewRecorder()
+	handler.ServeHTTP(cliRec, cliReq)
+	if cliRec.Code != http.StatusForbidden {
+		t.Fatalf("cli direct status = %d, want 403", cliRec.Code)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(cliRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("cli direct unmarshal: %v", err)
+	}
+	if resp["error"] != "verification_required" {
+		t.Fatalf("cli direct error = %v, want verification_required", resp["error"])
+	}
+}
+
+// decodeChallengeParams 把信封中的 challenge map 解析成 pow.ChallengeParameters。
+func decodeChallengeParams(t *testing.T, challenge map[string]any) pow.ChallengeParameters {
+	t.Helper()
+	raw, err := json.Marshal(challenge["parameters"])
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	var p pow.ChallengeParameters
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	return p
 }
