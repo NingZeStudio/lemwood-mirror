@@ -100,8 +100,17 @@ onMounted(() => {
         </div>
 
         <div v-else class="space-y-5">
+          <!-- 真实 <a> 用户手势触发下载：Chrome/Android 会拦截非手势的自动下载 -->
+          <a
+            :href="fileInfo.download_url"
+            :download="fileInfo.file_name || undefined"
+            class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
+          >
+            <Download class="h-5 w-5" />
+            开始下载
+          </a>
           <p class="text-center text-sm text-muted-foreground">
-            如果没有自动开始下载，您可以<a :href="fileInfo.download_url" class="text-primary hover:underline" target="_blank">点击这里手动下载</a>。
+            验证已完成。Android 浏览器会拦截自动下载，<span class="font-medium text-foreground">请点击上方按钮开始下载</span>。
           </p>
 
           <div class="grid gap-2 sm:grid-cols-2">

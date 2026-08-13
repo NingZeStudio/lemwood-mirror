@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // CurrentSchemaVersion 是当前代码所期望的最新 schema 版本。
 // 每次新增 Migration 时递增此常量。
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 4
 
 // Migration 描述一个版本化的数据库迁移步骤。
 // Version 必须严格递增；Up 在已应用更低版本的迁移后被调用。
@@ -31,6 +32,16 @@ var migrations = []Migration{
 		Version:     2,
 		Description: "历史流量数据聚合到无 IP 聚合表",
 		Up:          migrateV2AggregateTraffic,
+	},
+	{
+		Version:     3,
+		Description: "新建完整传输流量聚合表 daily_completed_traffic 并回填历史数据",
+		Up:          migrateV3CompletedTraffic,
+	},
+	{
+		Version:     4,
+		Description: "新建下载授权与下载事件状态表，并从 downloads 回填历史事件",
+		Up:          migrateV4DownloadStatusTables,
 	},
 }
 
@@ -178,4 +189,211 @@ func migrateV2AggregateTraffic(d *sql.DB) error {
 
 	log.Println("[数据库迁移] v2: 历史流量聚合完成")
 	return nil
+}
+
+// migrateV3CompletedTraffic 创建完整传输流量聚合表 daily_completed_traffic，
+// 并从 daily_traffic 回填历史数据。
+// 历史数据无法区分完整传输与中止传输，回填以 served 口径作为完整传输的初始近似，
+// 之后的增量由下载处理器按完整传输判定精确写入。
+// 幂等：CREATE TABLE IF NOT EXISTS + INSERT IGNORE / INSERT OR IGNORE，
+// 重复执行不产生重复行或错误。
+func migrateV3CompletedTraffic(d *sql.DB) error {
+	var createQuery, insertPrefix string
+	if isMySQL {
+		createQuery = `CREATE TABLE IF NOT EXISTS daily_completed_traffic (
+			date VARCHAR(20) PRIMARY KEY,
+			bytes_downloaded BIGINT DEFAULT 0
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		insertPrefix = "INSERT IGNORE INTO"
+	} else {
+		createQuery = `CREATE TABLE IF NOT EXISTS daily_completed_traffic (
+			date TEXT PRIMARY KEY,
+			bytes_downloaded INTEGER DEFAULT 0
+		)`
+		insertPrefix = "INSERT OR IGNORE INTO"
+	}
+
+	tx, err := d.Begin()
+	if err != nil {
+		return fmt.Errorf("开启事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(createQuery); err != nil {
+		return fmt.Errorf("创建 daily_completed_traffic 失败: %w", err)
+	}
+
+	if _, err := tx.Exec(insertPrefix + ` daily_completed_traffic (date, bytes_downloaded)
+		SELECT date, bytes_downloaded FROM daily_traffic`); err != nil {
+		return fmt.Errorf("回填 daily_completed_traffic 失败: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交回填事务失败: %w", err)
+	}
+
+	log.Println("[数据库迁移] v3: daily_completed_traffic 建表与历史回填完成")
+	return nil
+}
+
+// migrateV4DownloadStatusTables 建立下载授权（download_authorizations）和下载事件
+// （download_events）状态表，并从历史 downloads 表回填事件行用于状态表口径的统计。
+//
+// 两张表在 createTables() 中随启动幂等创建（含索引），此处用 CREATE TABLE IF NOT EXISTS
+// 兜底，随后执行一次幂等回填：downloads 每行生成一条 download_events，bytes_served=0
+// （历史下载无字节口径，无法重建），completed=0；历史字节总量仍由冻结的 daily_traffic/
+// daily_completed_traffic 基线承载。回填借助 (source, source_id) 唯一索引去重，重复执行
+// 不产生重复行。
+func migrateV4DownloadStatusTables(d *sql.DB) error {
+	var createAuthz, createEvents, backfill string
+	if isMySQL {
+		createAuthz = `CREATE TABLE IF NOT EXISTS download_authorizations (
+			authorization_id VARCHAR(64) PRIMARY KEY,
+			token_hash VARCHAR(64) NOT NULL,
+			file_path TEXT NOT NULL,
+			return_url TEXT,
+			source VARCHAR(32),
+			flow VARCHAR(32),
+			client_ip VARCHAR(64),
+			source_kind VARCHAR(16),
+			status VARCHAR(16) NOT NULL DEFAULT 'issued',
+			expires_at DATETIME NOT NULL,
+			max_bytes BIGINT,
+			range_limit INT,
+			request_id VARCHAR(64),
+			first_transfer_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			consumed_at DATETIME,
+			UNIQUE KEY uq_dlauthz_token_hash (token_hash)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		createEvents = `CREATE TABLE IF NOT EXISTS download_events (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			authorization_id VARCHAR(64),
+			file_path TEXT,
+			file_name VARCHAR(255),
+			launcher VARCHAR(255),
+			version VARCHAR(255),
+			client_ip VARCHAR(64),
+			country VARCHAR(255),
+			bytes_served BIGINT DEFAULT 0,
+			completed INT DEFAULT 0,
+			status_code INT,
+			date VARCHAR(20),
+			source VARCHAR(32),
+			source_id BIGINT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_dlevents_source_id (source, source_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		backfill = `INSERT IGNORE INTO download_events
+			(authorization_id, file_path, file_name, launcher, version, client_ip, country, bytes_served, completed, status_code, date, source, source_id, created_at)
+			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, DATE_FORMAT(created_at, '%Y-%m-%d'), 'downloads_import', id, created_at FROM downloads`
+	} else {
+		createAuthz = `CREATE TABLE IF NOT EXISTS download_authorizations (
+			authorization_id TEXT PRIMARY KEY,
+			token_hash TEXT NOT NULL UNIQUE,
+			file_path TEXT NOT NULL,
+			return_url TEXT,
+			source TEXT,
+			flow TEXT,
+			client_ip TEXT,
+			source_kind TEXT,
+			status TEXT NOT NULL DEFAULT 'issued',
+			expires_at DATETIME NOT NULL,
+			max_bytes INTEGER,
+			range_limit INTEGER,
+			request_id TEXT,
+			first_transfer_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			consumed_at DATETIME
+		)`
+		createEvents = `CREATE TABLE IF NOT EXISTS download_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			authorization_id TEXT,
+			file_path TEXT,
+			file_name TEXT,
+			launcher TEXT,
+			version TEXT,
+			client_ip TEXT,
+			country TEXT,
+			bytes_served INTEGER DEFAULT 0,
+			completed INTEGER DEFAULT 0,
+			status_code INTEGER,
+			date TEXT,
+			source TEXT,
+			source_id INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(source, source_id)
+		)`
+		backfill = `INSERT OR IGNORE INTO download_events
+			(authorization_id, file_path, file_name, launcher, version, client_ip, country, bytes_served, completed, status_code, date, source, source_id, created_at)
+			SELECT '', file_name, file_name, launcher, version, '', country, 0, 0, 200, date(created_at), 'downloads_import', id, created_at FROM downloads`
+	}
+
+	tx, err := d.Begin()
+	if err != nil {
+		return fmt.Errorf("开启事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(createAuthz); err != nil {
+		return fmt.Errorf("创建 download_authorizations 失败: %w", err)
+	}
+	if _, err := tx.Exec(createEvents); err != nil {
+		return fmt.Errorf("创建 download_events 失败: %w", err)
+	}
+
+	// 索引：唯一索引保证回填去重；查询索引服务于防刷墙（按 IP+日）与统计（按日/启动器）。
+	// MySQL 重复创建已存在索引会报 1061，这里忽略该错误以保证幂等。
+	indexStmts := []string{
+		"CREATE INDEX IF NOT EXISTS idx_dlauthz_status_expires ON download_authorizations(status, expires_at)",
+		"CREATE INDEX IF NOT EXISTS idx_dlevents_ip_date ON download_events(client_ip, date)",
+		"CREATE INDEX IF NOT EXISTS idx_dlevents_date ON download_events(date)",
+		"CREATE INDEX IF NOT EXISTS idx_dlevents_launcher ON download_events(launcher)",
+	}
+	for _, stmt := range indexStmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			if isMySQL && isDuplicateIndexErr(err) {
+				continue
+			}
+			if !isMySQL {
+				return fmt.Errorf("创建索引失败: %w, query: %s", err, stmt)
+			}
+			return fmt.Errorf("创建索引失败: %w, query: %s", err, stmt)
+		}
+	}
+
+	if _, err := tx.Exec(backfill); err != nil {
+		// 生产环境 createTables() 在迁移前已建 downloads 表；此处兜底：
+		// 若 downloads 表确实不存在（如单元测试的最小 schema），跳过回填而非失败。
+		if !tableExistsTx(tx, "downloads") {
+			log.Println("[数据库迁移] v4: downloads 表不存在，跳过事件回填")
+		} else {
+			return fmt.Errorf("回填 download_events 失败: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交 v4 事务失败: %w", err)
+	}
+
+	log.Println("[数据库迁移] v4: download_authorizations/download_events 建表与历史回填完成")
+	return nil
+}
+
+// isDuplicateIndexErr 判断是否为 MySQL "索引已存在" 错误（1061），可安全忽略以保证幂等。
+func isDuplicateIndexErr(err error) bool {
+	msg := strings.ToUpper(err.Error())
+	return strings.Contains(msg, "DUPLICATE") || strings.Contains(msg, "1061") || strings.Contains(msg, "ALREADY EXISTS")
+}
+
+// tableExistsTx 在事务内判断表是否存在（SQLite 查 sqlite_master，MySQL 查 information_schema）。
+func tableExistsTx(tx *sql.Tx, table string) bool {
+	if isMySQL {
+		var n int
+		err := tx.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?", table).Scan(&n)
+		return err == nil && n > 0
+	}
+	var name string
+	err := tx.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
+	return err == nil && name == table
 }

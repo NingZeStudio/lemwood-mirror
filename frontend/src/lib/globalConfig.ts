@@ -38,8 +38,9 @@ export const globalConfig = {
       stats: '/stats',
       files: '/files',
       scan: '/admin/scans',
-      captchaConfig: '/captcha/config',
-      downloadVerify: '/download/verify',
+      powConfig: '/pow/config',
+      downloadChallenge: '/downloads/challenge',
+      downloadAuthorize: '/downloads/authorize',
       downloadPrepare: '/download/prepare',
       downloadLanding: '/download/landing'
     }
@@ -114,7 +115,7 @@ export const globalConfig = {
   },
 
   download: {
-    baseUrl: 'https://miawa.cn',
+    baseUrl: '',
     sourceLabels: {
       home: 'home-latest-download',
       files: 'files-download',

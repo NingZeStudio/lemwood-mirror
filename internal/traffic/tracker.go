@@ -34,7 +34,10 @@ type Tracker struct {
 var defaultTracker *Tracker
 
 func InitTracker(limitGB int, banRecordFile, appealContact, storagePath string) {
-	defaultTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath, db.RecordTraffic, db.GetDailyTraffic, db.GetTrafficOnDate)
+	defaultTracker = newTracker(limitGB, banRecordFile, appealContact, storagePath,
+		func(string, int64) error { return nil }, // served 字节现由 download_events 承载，不再写聚合表
+		db.GetDailyServedByIPFromEventsToday, // 防刷墙按 IP 当日 served 读事件表
+		db.GetDailyServedByIPFromEvents) // 封禁记录文件的按日流量也取自事件表
 }
 
 func newTracker(limitGB int, banRecordFile, appealContact, storagePath string, recordTrafficFunc func(string, int64) error, getDailyTrafficFunc func(string) (int64, error), getTrafficOnDateFunc func(string, string) (int64, error)) *Tracker {
@@ -245,11 +248,10 @@ func (t *Tracker) FinalizeTraffic(ip string, estimatedBytes int64, actualBytes i
 	}
 	defer t.releasePending(ip, estimatedBytes)
 
-	if actualBytes > 0 {
-		if err := t.RecordTraffic(ip, actualBytes); err != nil {
-			return false, "", 0, err
-		}
-	}
+	// served 字节现由调用方（下载处理器）写入 download_events 状态表（全切口径）；
+	// 此处不再写 ip_daily_traffic/daily_traffic，两张聚合表冻结为历史基线。
+	// 为保证防刷墙 CheckAndBan 能读到本次下载字节，调用方须先 RecordDownloadEvent 再 FinalizeTraffic。
+	_ = actualBytes
 
 	if t.limitGB == 0 {
 		return false, "", 0, nil

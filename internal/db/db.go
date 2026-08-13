@@ -122,7 +122,7 @@ func migrateFromSQLite(sqlitePath string) error {
 	// 2. 迁移数据
 	// 注意：stats_snapshot 是缓存表（id=1, data, updated_at），由统计模块重建，不参与数据迁移。
 	// repo 镜像功能已移除，repo_downloads / repo_ip_daily_traffic / daily_repo_traffic 不再迁移。
-	tables := []string{"visits", "downloads", "ip_blacklist", "ip_daily_traffic", "daily_traffic", "system_info"}
+		tables := []string{"visits", "downloads", "ip_blacklist", "ip_daily_traffic", "daily_traffic", "daily_completed_traffic", "download_authorizations", "download_events", "system_info"}
 	for _, table := range tables {
 		if err := migrateTable(sqliteDB, DB, table); err != nil {
 			return fmt.Errorf("迁移表 %s 失败: %w", table, err)
@@ -270,6 +270,47 @@ func createTables() error {
                 date VARCHAR(20) PRIMARY KEY,
                 bytes_downloaded BIGINT DEFAULT 0
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+			`CREATE TABLE IF NOT EXISTS daily_completed_traffic (
+                date VARCHAR(20) PRIMARY KEY,
+                bytes_downloaded BIGINT DEFAULT 0
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS download_authorizations (
+                authorization_id VARCHAR(64) PRIMARY KEY,
+                token_hash VARCHAR(64) NOT NULL,
+                file_path TEXT NOT NULL,
+                return_url TEXT,
+                source VARCHAR(32),
+                flow VARCHAR(32),
+                client_ip VARCHAR(64),
+                source_kind VARCHAR(16),
+                status VARCHAR(16) NOT NULL DEFAULT 'issued',
+                expires_at DATETIME NOT NULL,
+                max_bytes BIGINT,
+                range_limit INT,
+                request_id VARCHAR(64),
+                first_transfer_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                consumed_at DATETIME,
+                UNIQUE KEY uq_dlauthz_token_hash (token_hash)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS download_events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                authorization_id VARCHAR(64),
+                file_path TEXT,
+                file_name VARCHAR(255),
+                launcher VARCHAR(255),
+                version VARCHAR(255),
+                client_ip VARCHAR(64),
+                country VARCHAR(255),
+                bytes_served BIGINT DEFAULT 0,
+                completed INT DEFAULT 0,
+                status_code INT,
+                date VARCHAR(20),
+                source VARCHAR(32),
+                source_id BIGINT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_dlevents_source_id (source, source_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 ` + "`key`" + ` VARCHAR(255) PRIMARY KEY,
                 value TEXT,
@@ -285,6 +326,10 @@ func createTables() error {
 			`CREATE INDEX idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX idx_downloads_launcher_version ON downloads(launcher, version)`,
+		`CREATE INDEX idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
+		`CREATE INDEX idx_dlevents_ip_date ON download_events(client_ip, date)`,
+		`CREATE INDEX idx_dlevents_date ON download_events(date)`,
+		`CREATE INDEX idx_dlevents_launcher ON download_events(launcher)`,
 		}
 	} else {
 		queries = []string{
@@ -326,6 +371,46 @@ func createTables() error {
                 date TEXT PRIMARY KEY,
                 bytes_downloaded INTEGER DEFAULT 0
             )`,
+			`CREATE TABLE IF NOT EXISTS daily_completed_traffic (
+                date TEXT PRIMARY KEY,
+                bytes_downloaded INTEGER DEFAULT 0
+            )`,
+		`CREATE TABLE IF NOT EXISTS download_authorizations (
+                authorization_id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                file_path TEXT NOT NULL,
+                return_url TEXT,
+                source TEXT,
+                flow TEXT,
+                client_ip TEXT,
+                source_kind TEXT,
+                status TEXT NOT NULL DEFAULT 'issued',
+                expires_at DATETIME NOT NULL,
+                max_bytes INTEGER,
+                range_limit INTEGER,
+                request_id TEXT,
+                first_transfer_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                consumed_at DATETIME
+            )`,
+		`CREATE TABLE IF NOT EXISTS download_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                authorization_id TEXT,
+                file_path TEXT,
+                file_name TEXT,
+                launcher TEXT,
+                version TEXT,
+                client_ip TEXT,
+                country TEXT,
+                bytes_served INTEGER DEFAULT 0,
+                completed INTEGER DEFAULT 0,
+                status_code INTEGER,
+                date TEXT,
+                source TEXT,
+                source_id INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source, source_id)
+            )`,
 			`CREATE TABLE IF NOT EXISTS system_info (
                 key TEXT PRIMARY KEY,
                 value TEXT,
@@ -341,6 +426,10 @@ func createTables() error {
 			`CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_launcher_version ON downloads(launcher, version)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlevents_ip_date ON download_events(client_ip, date)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlevents_date ON download_events(date)`,
+		`CREATE INDEX IF NOT EXISTS idx_dlevents_launcher ON download_events(launcher)`,
 		}
 	}
 
@@ -540,6 +629,14 @@ func RecordTraffic(ip string, bytes int64) error {
 	return updateDailyTrafficAggregate("daily_traffic", date, bytes)
 }
 
+// RecordCompletedTraffic 记录一次完整传输的流量到无 IP 聚合表
+// daily_completed_traffic（展示口径，无 IP 维度）。
+// 与 RecordTraffic 的 served 口径（含客户端中止的部分传输，用于防刷墙）相互独立。
+func RecordCompletedTraffic(bytes int64) error {
+	date := time.Now().Format("2006-01-02")
+	return updateDailyTrafficAggregate("daily_completed_traffic", date, bytes)
+}
+
 // updateDailyTrafficAggregate 更新无 IP 的每日流量聚合表。
 func updateDailyTrafficAggregate(table, date string, bytes int64) error {
 	var query string
@@ -592,6 +689,32 @@ func GetTotalTraffic() (int64, error) {
 func GetDailyTrafficStats(days int) ([]DailyTrafficStat, error) {
 	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_traffic WHERE date >= ? ORDER BY date", threshold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DailyTrafficStat
+	for rows.Next() {
+		var stat DailyTrafficStat
+		if err := rows.Scan(&stat.Date, &stat.Bytes); err != nil {
+			return nil, err
+		}
+		result = append(result, stat)
+	}
+	return result, rows.Err()
+}
+
+// GetTotalCompletedTraffic 返回完整传输总流量（字节），从 daily_completed_traffic 聚合表查询
+func GetTotalCompletedTraffic() (int64, error) {
+	var bytes int64
+	err := DB.QueryRow("SELECT COALESCE(SUM(bytes_downloaded), 0) FROM daily_completed_traffic").Scan(&bytes)
+	return bytes, err
+}
+
+// GetDailyCompletedTrafficStats 返回最近 N 天每日完整传输流量，从 daily_completed_traffic 聚合表查询
+func GetDailyCompletedTrafficStats(days int) ([]DailyTrafficStat, error) {
+	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_completed_traffic WHERE date >= ? ORDER BY date", threshold)
 	if err != nil {
 		return nil, err
 	}

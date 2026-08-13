@@ -1,9 +1,8 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { CheckCircle, Copy, Download, Home, Loader2, ShieldCheck, XCircle } from 'lucide-vue-next'
-import { getCaptchaConfig, verifyDownload } from '@/services/api'
-import { globalConfig } from '@/lib/globalConfig'
+import { CheckCircle, Loader2, RefreshCw, ShieldCheck, XCircle } from 'lucide-vue-next'
+import { getPowConfig, createDownloadChallenge, authorizeDownload } from '@/services/api'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import CardContent from '@/components/ui/CardContent.vue'
@@ -16,154 +15,80 @@ const route = useRoute()
 const router = useRouter()
 
 const filePath = ref('')
-const captchaId = ref('')
 const isLoading = ref(true)
-const isVerifying = ref(false)
-const verifyStatus = ref('pending')
+const progress = ref(0)
+const statusText = ref('正在获取挑战…')
 const errorMessage = ref('')
-const downloadUrl = ref('')
-const showCopiedTip = ref(false)
-const downloadStarted = ref(false)
+const verifyStatus = ref('pending') // pending | error
 
-const fullDownloadUrl = computed(() => {
-  if (!downloadUrl.value) return ''
-  return globalConfig.download.baseUrl + downloadUrl.value
-})
+let cancelled = false
 
-let captchaObj = null
+// ---- base64url 与 PBKDF2 求解（与后端 internal/pow 协议一致） ----
 
-const showCaptcha = () => {
-  if (captchaObj) {
-    isLoading.value = false
-    verifyStatus.value = 'pending'
-    captchaObj.showCaptcha()
+const base64urlDecode = (s) => {
+  s = s.replace(/-/g, '+').replace(/_/g, '/')
+  while (s.length % 4) s += '='
+  const bin = atob(s)
+  const a = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i)
+  return a
+}
+
+const base64urlEncode = (bytes) => {
+  let b = ''
+  for (let i = 0; i < bytes.length; i++) b += String.fromCharCode(bytes[i])
+  return btoa(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+const leadingZeroBits = (bytes) => {
+  let bits = 0
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i]
+    if (b === 0) {
+      bits += 8
+      continue
+    }
+    for (let j = 7; j >= 0; j--) {
+      if (b & (1 << j)) return bits
+      bits++
+    }
   }
+  return bits
 }
 
-const verifyCaptcha = async (lotNumber, captchaOutput, passToken, genTime) => {
-  isVerifying.value = true
-  verifyStatus.value = 'pending'
-
-  try {
-    const returnUrl = route.query.return_url || window.location.href
-    const source = route.query.source || globalConfig.download.sourceLabels.verify
-    const response = await verifyDownload(lotNumber, captchaOutput, passToken, genTime, filePath.value, returnUrl, source)
-    
-    const token = response.data.download_token
-    if (token) {
-      router.push(`/download-started?token=${token}`)
-      return
+// 迭代 counter，直到 PBKDF2 派生密钥的前导零位数满足难度要求。
+const solve = async (params, onProgress) => {
+  const salt = base64urlDecode(params.salt)
+  const total = Math.min(Math.pow(2, params.difficulty + 4), 4000000)
+  for (let counter = 0; counter < total; counter++) {
+    if (cancelled) return null
+    const pw = new TextEncoder().encode(String(counter))
+    const km = await crypto.subtle.importKey('raw', pw, { name: 'PBKDF2' }, false, ['deriveBits'])
+    const dk = new Uint8Array(
+      await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt: salt, iterations: params.cost, hash: 'SHA-256' },
+        km,
+        params.keyLength * 8
+      )
+    )
+    if (leadingZeroBits(dk) >= params.difficulty) {
+      return { counter: counter, derivedKey: base64urlEncode(dk) }
     }
-
-    downloadUrl.value = response.data.download_url
-    verifyStatus.value = 'success'
-    isLoading.value = false
-  } catch (error) {
-    console.error('Verify download error:', error)
-    errorMessage.value = error.response?.data?.message || '验证失败，请重试'
-    verifyStatus.value = 'error'
-    isLoading.value = false
-  } finally {
-    isVerifying.value = false
+    if (counter % 64 === 0) {
+      onProgress(Math.min(99, (counter / total) * 100))
+      await new Promise((r) => setTimeout(r, 0))
+    }
   }
+  return null
 }
 
-const startDownload = () => {
-  if (!downloadUrl.value) return
-  window.location.href = downloadUrl.value
-  downloadStarted.value = true
-}
-
-const goToHome = () => {
-  router.push('/')
-}
-
-const copyUrl = async () => {
-  if (!downloadUrl.value) return
-
-  try {
-    await navigator.clipboard.writeText(fullDownloadUrl.value)
-    showCopiedTip.value = true
-    setTimeout(() => {
-      showCopiedTip.value = false
-    }, 2000)
-  } catch (err) {
-    console.error('Copy failed:', err)
-  }
-}
-
-const loadCaptchaScript = () => {
-  return new Promise((resolve, reject) => {
-    if (window.initGeetest4) {
-      resolve()
-      return
-    }
-
-    const existingScript = document.querySelector('script[src*="gt4.js"]')
-    if (existingScript) {
-      const checkLoaded = setInterval(() => {
-        if (window.initGeetest4) {
-          clearInterval(checkLoaded)
-          resolve()
-        }
-      }, 100)
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://static.geetest.com/v4/gt4.js'
-    script.async = true
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Failed to load Geetest script'))
-    document.head.appendChild(script)
-  })
-}
-
-const initCaptcha = () => {
-  isLoading.value = true
-  verifyStatus.value = 'pending'
-
-  window.initGeetest4(
-    {
-      captchaId: captchaId.value,
-      product: 'bind'
-    },
-    (captcha) => {
-      captchaObj = captcha
-
-      captcha.onReady(() => {
-        isLoading.value = false
-        captcha.showCaptcha()
-      })
-
-      captcha.onSuccess(() => {
-        const result = captcha.getValidate()
-        if (result && result.lot_number) {
-          verifyCaptcha(result.lot_number, result.captcha_output, result.pass_token, result.gen_time)
-        } else {
-          isLoading.value = false
-          verifyStatus.value = 'error'
-          errorMessage.value = '验证结果获取失败，请重试'
-        }
-      })
-
-      captcha.onError((e) => {
-        isLoading.value = false
-        verifyStatus.value = 'error'
-        errorMessage.value = '验证加载失败: ' + (e.msg || '未知错误')
-      })
-
-      captcha.onClose(() => {
-        isLoading.value = false
-        verifyStatus.value = 'error'
-        errorMessage.value = '用户取消验证'
-      })
-    }
-  )
-}
+// ---- 主流程 ----
 
 const init = async () => {
   isLoading.value = true
+  progress.value = 0
+  errorMessage.value = ''
+  verifyStatus.value = 'pending'
   filePath.value = route.query.file || ''
 
   if (!filePath.value) {
@@ -174,21 +99,54 @@ const init = async () => {
   }
 
   try {
-    const [response] = await Promise.all([getCaptchaConfig(), loadCaptchaScript()])
-    captchaId.value = response.data.app_id
-
-    if (!response.data.enabled) {
+    // 1. 查询 PoW 配置；未启用则直接走原始下载路径
+    const powRes = await getPowConfig()
+    if (!powRes.data || !powRes.data.enabled) {
       window.location.href = `/download/${filePath.value}`
       return
     }
 
-    initCaptcha()
+    // 2. 创建挑战
+    statusText.value = '正在获取挑战…'
+    const chRes = await createDownloadChallenge(filePath.value)
+    const challenge = chRes.data
+    if (!challenge || !challenge.parameters) {
+      throw new Error('获取挑战失败')
+    }
+
+    // 3. 浏览器求解 PoW
+    statusText.value = '正在计算工作量证明…'
+    const solution = await solve(challenge.parameters, (pct) => {
+      progress.value = pct
+    })
+    if (!solution) {
+      throw new Error('未能在限定迭代内求出解，请刷新重试')
+    }
+
+    // 4. 提交授权
+    statusText.value = '正在领取下载授权…'
+    const authRes = await authorizeDownload(challenge, solution)
+    const token = authRes.data.download_token
+    if (token) {
+      // 显示“验证成功”，短暂停留再跳转，避免用户误以为验证未完成就出现下载页
+      verifyStatus.value = 'success'
+      statusText.value = '验证成功，正在跳转下载…'
+      progress.value = 100
+      await new Promise((r) => setTimeout(r, 500))
+      router.push(`/download-started?token=${token}`)
+      return
+    }
+    throw new Error('授权失败')
   } catch (error) {
-    console.error('Init error:', error)
-    errorMessage.value = '加载配置失败: ' + error.message
+    console.error('PoW verify error:', error)
+    errorMessage.value = error.response?.data?.error?.message || error.message || '验证失败，请重试'
     verifyStatus.value = 'error'
     isLoading.value = false
   }
+}
+
+const retry = () => {
+  init()
 }
 
 onMounted(() => {
@@ -196,64 +154,44 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (captchaObj) {
-    captchaObj.destroy()
-  }
+  cancelled = true
 })
 </script>
 
 <template>
   <div class="flex min-h-[calc(100vh-10rem)] items-center justify-center py-8">
-    <div
-      v-if="showCopiedTip"
-      class="fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-md border bg-background px-4 py-2 text-sm shadow-md"
-    >
-      已复制到剪贴板
-    </div>
-
     <Card class="w-full max-w-lg">
       <CardHeader class="items-center text-center">
         <div class="mb-2 rounded-full bg-primary/10 p-3 text-primary">
           <ShieldCheck class="h-8 w-8" />
         </div>
-        <CardTitle class="text-2xl">安全验证</CardTitle>
-        <CardDescription>请完成验证后开始下载</CardDescription>
+        <CardTitle class="text-2xl">下载验证</CardTitle>
+        <CardDescription>请稍候，正在自动完成验证</CardDescription>
       </CardHeader>
 
       <CardContent class="space-y-6">
         <div
           v-if="isLoading && verifyStatus !== 'error'"
-          class="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed py-12 text-muted-foreground"
+          class="flex flex-col items-center justify-center gap-4 rounded-lg border border-dashed px-6 py-12 text-muted-foreground"
         >
-          <Loader2 class="h-8 w-8 animate-spin" />
-          <span>{{ isVerifying ? '正在验证...' : '正在加载验证...' }}</span>
+          <Loader2 class="h-8 w-8 animate-spin text-primary" />
+          <span class="text-sm">{{ statusText }}</span>
+          <div class="h-2 w-full max-w-xs overflow-hidden rounded-full bg-muted">
+            <div
+              class="h-full rounded-full bg-primary transition-[width] duration-200"
+              :style="{ width: progress + '%' }"
+            ></div>
+          </div>
+          <span v-if="progress > 0" class="text-xs">{{ progress.toFixed(0) }}%</span>
         </div>
 
-        <div v-else-if="verifyStatus === 'success'" class="space-y-5">
-          <div class="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
-            <CheckCircle class="mx-auto mb-3 h-12 w-12 text-emerald-500" />
-            <p class="font-medium text-foreground">验证成功</p>
-            <p class="mt-1 text-sm text-muted-foreground">下载链接已生成，可以直接下载或复制。</p>
-          </div>
-
-          <div class="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground break-all">
-            {{ fullDownloadUrl }}
-          </div>
-
-          <div class="grid gap-2 sm:grid-cols-2">
-            <Button v-if="!downloadStarted" @click="startDownload">
-              <Download class="mr-2 h-4 w-4" />
-              直接下载
-            </Button>
-            <Button v-else @click="goToHome">
-              <Home class="mr-2 h-4 w-4" />
-              返回首页
-            </Button>
-            <Button variant="outline" @click="copyUrl">
-              <Copy class="mr-2 h-4 w-4" />
-              复制链接
-            </Button>
-          </div>
+        <div
+          v-else-if="verifyStatus === 'success'"
+          class="flex flex-col items-center justify-center gap-4 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-6 py-12 text-muted-foreground"
+        >
+          <CheckCircle class="h-10 w-10 text-emerald-500" />
+          <span class="font-medium text-foreground">验证成功</span>
+          <span class="text-sm">{{ statusText }}</span>
         </div>
 
         <div v-else-if="verifyStatus === 'error'" class="space-y-5">
@@ -262,8 +200,10 @@ onUnmounted(() => {
             <p class="font-medium text-foreground">验证失败</p>
             <p class="mt-1 text-sm text-muted-foreground">{{ errorMessage }}</p>
           </div>
-
-          <Button class="w-full" @click="showCaptcha">重新验证</Button>
+          <Button class="w-full" @click="retry">
+            <RefreshCw class="mr-2 h-4 w-4" />
+            重新验证
+          </Button>
         </div>
       </CardContent>
 

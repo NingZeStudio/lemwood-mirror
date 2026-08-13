@@ -17,7 +17,7 @@ const router = createRouter({
       path: '/verify',
       name: 'verify',
       component: () => import('@/views/VerifyView.vue'),
-      meta: { title: T('安全验证') }
+      meta: { title: T('下载验证') }
     },
     {
       path: '/files',

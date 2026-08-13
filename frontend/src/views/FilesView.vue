@@ -15,7 +15,7 @@ import {
   Search
 } from 'lucide-vue-next'
 import { useClipboard } from '@vueuse/core'
-import { getStatus, getLatest, getCaptchaConfig, prepareDownload } from '@/services/api'
+import { getStatus, getLatest, getPowConfig, prepareDownload } from '@/services/api'
 import { getLauncherDisplayName } from '@/lib/launcher-info'
 import { cn } from '@/lib/utils'
 import { globalConfig } from '@/lib/globalConfig'
@@ -33,7 +33,7 @@ const loading = ref(true)
 const searchQuery = ref('')
 const launchers = ref({})
 const latestData = ref({})
-const captchaConfig = ref({ enabled: false, app_id: '' })
+const powConfig = ref({ enabled: false })
 const { copy, copied } = useClipboard()
 
 const route = useRoute()
@@ -43,10 +43,10 @@ const currentPath = ref([])
 const loadData = async () => {
   loading.value = true
   try {
-    const [statusRes, latestRes, captchaRes] = await Promise.all([
+    const [statusRes, latestRes, powRes] = await Promise.all([
       getStatus(),
       getLatest(),
-      getCaptchaConfig().catch(() => ({ data: { enabled: false, app_id: '' } }))
+      getPowConfig().catch(() => ({ data: { enabled: false } }))
     ])
 
     const sortedLaunchers = {}
@@ -60,7 +60,7 @@ const loadData = async () => {
 
     launchers.value = sortedLaunchers
     latestData.value = latestRes.data
-    captchaConfig.value = captchaRes.data
+    powConfig.value = powRes.data
   } catch (error) {
     console.error(error)
   } finally {
@@ -114,7 +114,7 @@ const handleDownload = async (item) => {
   const returnUrl = window.location.href
   const source = globalConfig.download.sourceLabels.files
 
-  if (!captchaConfig.value.enabled) {
+  if (!powConfig.value.enabled) {
     try {
       const response = await prepareDownload(filePath, returnUrl, source)
       const token = response.data.download_token
