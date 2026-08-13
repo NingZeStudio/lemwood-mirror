@@ -80,13 +80,20 @@ func CreateDownloadAuthorization(a DownloadAuthorization) error {
 
 // GetDownloadAuthorizationByTokenHash 按 token_hash 查询授权记录（任意状态）。
 // 调用方负责在加载后自行判断 status 与 expires_at。
+// DATETIME 列用 SQL 直接格式化为 UTC 文本（AuthzTimeFormat），避免 go-sql-driver 在
+// parseTime=True&loc=Local 下按服务器本地时区解析再回传，导致 UTC 时间被偏移误判过期。
 func GetDownloadAuthorizationByTokenHash(tokenHash string) (DownloadAuthorization, error) {
 	var a DownloadAuthorization
 	var returnURL, flow, clientIP, sourceKind, requestID, firstTransfer, consumedAt sql.NullString
 	var maxBytes, rangeLimit sql.NullInt64
+	// MySQL DATE_FORMAT / SQLite strftime 均返回 "2006-01-02 15:04:05" 纯文本。
+	dt := `DATE_FORMAT(%s, '%%Y-%%m-%%d %%H:%%i:%%s')`
+	if !isMySQL {
+		dt = `strftime('%%Y-%%m-%%d %%H:%%M:%%S', %s)`
+	}
 	err := DB.QueryRow(`SELECT authorization_id, token_hash, file_path, return_url, source, flow,
-		client_ip, source_kind, status, expires_at, max_bytes, range_limit, request_id,
-		first_transfer_at, created_at, consumed_at
+		client_ip, source_kind, status, `+fmt.Sprintf(dt, "expires_at")+`, max_bytes, range_limit, request_id,
+		`+fmt.Sprintf(dt, "first_transfer_at")+`, `+fmt.Sprintf(dt, "created_at")+`, `+fmt.Sprintf(dt, "consumed_at")+`
 		FROM download_authorizations WHERE token_hash = ?`, tokenHash).Scan(
 		&a.AuthorizationID, &a.TokenHash, &a.FilePath, &returnURL, &a.Source, &flow,
 		&clientIP, &sourceKind, &a.Status, &a.ExpiresAt, &maxBytes, &rangeLimit, &requestID,
