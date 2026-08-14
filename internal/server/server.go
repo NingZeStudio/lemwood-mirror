@@ -942,9 +942,10 @@ type downloadPrepareRequest struct {
 }
 
 type downloadTokenResponse struct {
-	DownloadToken string `json:"download_token"`
-	DownloadURL   string `json:"download_url"`
-	LandingURL    string `json:"landing_url"`
+	DownloadToken string   `json:"download_token"`
+	DownloadURL   string   `json:"download_url"`
+	DownloadURLs  []string `json:"download_urls"`
+	LandingURL    string   `json:"landing_url"`
 }
 
 func writeJSONError(w http.ResponseWriter, statusCode int, code, message string) {
@@ -997,15 +998,28 @@ func (s *State) issueAuthz(filePath, returnURL, source, flow, clientIP, sourceKi
 	if err != nil {
 		return downloadTokenResponse{}, err
 	}
+	urls := s.buildDownloadURLs(token, filePath)
 	return downloadTokenResponse{
 		DownloadToken: token,
-		DownloadURL:   buildDownloadURL(token, filePath),
+		DownloadURL:   urls[0],
+		DownloadURLs:  urls,
 		LandingURL:    fmt.Sprintf("/api/v2/downloads/landing?token=%s", url.QueryEscape(token)),
 	}, nil
 }
 
 func buildDownloadURL(token, filePath string) string {
 	return fmt.Sprintf("/download/%s?token=%s", filePath, url.QueryEscape(token))
+}
+
+// buildDownloadURLs 返回下载候选 URL 列表，CDN 优先（配置了 cdn_base_url 时），
+// 尾部恒为同源相对路径（直前源站），供客户端探测失败后降级。
+func (s *State) buildDownloadURLs(token, filePath string) []string {
+	rel := buildDownloadURL(token, filePath)
+	cdnBase := strings.TrimRight(s.Config.CDNBaseURL, "/")
+	if cdnBase == "" {
+		return []string{rel}
+	}
+	return []string{cdnBase + rel, rel}
 }
 
 func isBrowserRequest(r *http.Request) bool {

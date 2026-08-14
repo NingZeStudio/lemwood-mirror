@@ -303,32 +303,30 @@ func (m *Manager) Apply(ctx context.Context) (Status, error) {
 		return m.Status(), fmt.Errorf("当前状态下不可应用更新")
 	}
 
-	owner, repo, err := gh.ParseOwnerRepo(repoURL)
+	candidates, err := buildUpdateCandidates(repoURL, latestVersion, assetProxyURL)
 	if err != nil {
 		status := m.SetApplyError(err)
 		return status, err
 	}
 
-	release, resp, err := m.client.GetReleaseByTag(ctx, owner, repo, latestVersion)
-	if err != nil {
-		gh.BackoffIfRateLimited(resp)
-		status := m.SetApplyError(err)
-		return status, err
+	var lastErr error
+	var appliedName string
+	for _, c := range candidates {
+		if err := downloadAndReplace(ctx, httpClient, c.url, c.name, m.binaryPath, c.isArchive); err != nil {
+			lastErr = err
+			log.Printf("自更新: 下载 %s 失败，尝试下一候选: %v", c.name, err)
+			continue
+		}
+		appliedName = c.name
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		status := m.SetApplyError(lastErr)
+		return status, lastErr
 	}
 
-	asset, isArchive := findPlatformAsset(release)
-	if asset == nil {
-		err := fmt.Errorf("未找到匹配当前平台 (%s/%s) 的资产", runtime.GOOS, runtime.GOARCH)
-		status := m.SetApplyError(err)
-		return status, err
-	}
-
-	if err := downloadAndReplace(ctx, httpClient, asset, m.binaryPath, isArchive, assetProxyURL); err != nil {
-		status := m.SetApplyError(err)
-		return status, err
-	}
-
-	status := m.MarkApplied(latestVersion, fmt.Sprintf("已从 %s 下载并安装资产 %s", latestVersion, asset.GetName()))
+	status := m.MarkApplied(latestVersion, fmt.Sprintf("已从 %s 下载并安装 %s", latestVersion, appliedName))
 
 	m.mu.RLock()
 	autoRestart := m.autoRestart
@@ -407,78 +405,77 @@ func ReplaceTargetPath(binaryPath string) string {
 	return filepath.Clean(binaryPath)
 }
 
-func findPlatformAsset(release *gh.RepositoryRelease) (*gh.ReleaseAsset, bool) {
-	patterns := platformPatterns()
-	suffixes := []string{"", ".tar.gz", ".tgz", ".zip"}
-
-	var archiveFallback *gh.ReleaseAsset
-	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.GetName())
-		for _, pat := range patterns {
-			matched := false
-			for _, suf := range suffixes {
-				if name == pat+suf || strings.Contains(name, "-"+pat+suf) || strings.Contains(name, "_"+pat+suf) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-			if isArchiveAsset(name) {
-				if archiveFallback == nil {
-					archiveFallback = asset
-				}
-				continue
-			}
-			return asset, false
-		}
-	}
-
-	if archiveFallback != nil {
-		return archiveFallback, true
-	}
-	return nil, false
-}
-
-func isArchiveAsset(name string) bool {
-	return strings.HasSuffix(name, ".tar.gz") ||
-		strings.HasSuffix(name, ".tgz") ||
-		strings.HasSuffix(name, ".zip")
-}
-
-func platformPatterns() []string {
+// platformAssetName 返回当前平台对应的 CI 裸二进制资产名（与 .github/workflows/build.yml 一致）。
+// 例如 linux/amd64 → "mirror-linux-amd64"，windows/arm64 → "mirror-windows-arm64.exe"。
+func platformAssetName() string {
 	goos := strings.ToLower(runtime.GOOS)
 	goarch := strings.ToLower(runtime.GOARCH)
 
-	base := []string{
-		goos + "-" + goarch,
-		goos + "_" + goarch,
-		goos + goarch,
+	label := goarch
+	if goarch == "386" {
+		label = "x86"
 	}
 
-	if goos == "linux" && goarch == "arm64" {
-		base = append(base, "aarch64")
-	}
-	if goos == "linux" && goarch == "amd64" {
-		base = append(base, "x86_64")
+	ext := ""
+	if goos == "windows" {
+		ext = ".exe"
 	}
 
-	return base
+	return fmt.Sprintf("mirror-%s-%s%s", goos, label, ext)
 }
 
-func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.ReleaseAsset, targetPath string, isArchive bool, assetProxyURL string) error {
-	downloadURL := asset.GetBrowserDownloadURL()
-	if downloadURL == "" {
-		return fmt.Errorf("资产 %s 没有下载链接", asset.GetName())
+// platformArchiveName 返回当前平台对应的 CI 压缩包资产名。
+// linux → .tar.gz，windows → .zip。旧版本 Release 可能只上传了压缩包。
+func platformArchiveName() string {
+	goos := strings.ToLower(runtime.GOOS)
+	goarch := strings.ToLower(runtime.GOARCH)
+
+	label := goarch
+	if goarch == "386" {
+		label = "x86"
 	}
 
-	// asset_proxy_url 不像 HTTP 代理时，作为镜像前缀拼接到下载链接前（与 downloader.go 一致）。
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
+	}
+
+	return fmt.Sprintf("mirror-%s-%s%s", goos, label, ext)
+}
+
+// updateCandidate 是一个下载候选：URL + 资产名 + 是否压缩包。
+type updateCandidate struct {
+	url       string
+	name      string
+	isArchive bool
+}
+
+// buildUpdateCandidates 根据 repo URL + tag + 当前平台构造下载候选列表。
+// 优先裸二进制（快），回退压缩包（兼容旧版本 Release，如 alpha1-alpha3 仅含压缩包）。
+// 不再调用 GetReleaseByTag API，下载链接由内置命名规则推导（CI 资产名固定）。
+func buildUpdateCandidates(repoURL, tag, assetProxyURL string) ([]updateCandidate, error) {
+	owner, repo, err := gh.ParseOwnerRepo(repoURL)
+	if err != nil {
+		return nil, fmt.Errorf("解析仓库地址失败: %w", err)
+	}
+
+	rawName := platformAssetName()
+	archiveName := platformArchiveName()
+	base := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/", owner, repo, tag)
+
+	proxyPrefix := ""
 	if assetProxyURL != "" && !looksLikeProxyURL(assetProxyURL) {
-		downloadURL = assetProxyURL + downloadURL
+		proxyPrefix = assetProxyURL
 	}
 
-	log.Printf("自更新: 下载 %s (%d 字节)", asset.GetName(), asset.GetSize())
+	return []updateCandidate{
+		{url: proxyPrefix + base + rawName, name: rawName, isArchive: false},
+		{url: proxyPrefix + base + archiveName, name: archiveName, isArchive: true},
+	}, nil
+}
+
+func downloadAndReplace(ctx context.Context, httpClient *http.Client, downloadURL, assetName, targetPath string, isArchive bool) error {
+	log.Printf("自更新: 下载 %s", assetName)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
@@ -497,7 +494,7 @@ func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.
 	}
 
 	tmpFile := targetPath + ".download"
-	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %w", err)
 	}
@@ -506,7 +503,7 @@ func downloadAndReplace(ctx context.Context, httpClient *http.Client, asset *gh.
 	bufWriter := bufio.NewWriterSize(f, 64*1024)
 	written, err := io.Copy(bufWriter, io.TeeReader(resp.Body, &progressTracker{
 		total:    resp.ContentLength,
-		fileName: asset.GetName(),
+		fileName: assetName,
 	}))
 	if err != nil {
 		f.Close()
@@ -601,7 +598,6 @@ func extractFromTarGz(tgzPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// Zip Slip 防护：拒绝包含 ".." 的非规范化路径，拒绝非法路径
 		if strings.Contains(header.Name, "..") || !filepath.IsLocal(header.Name) {
 			continue
 		}
@@ -639,7 +635,6 @@ func extractFromZip(zipPath string) (string, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		// Zip Slip 防护：拒绝路径穿越条目
 		if strings.Contains(f.Name, "..") || !filepath.IsLocal(f.Name) {
 			continue
 		}

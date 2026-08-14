@@ -1,6 +1,8 @@
 package selfupdate
 
 import (
+	"runtime"
+	"strings"
 	"lemwood_mirror/internal/version"
 	"testing"
 )
@@ -119,15 +121,50 @@ func TestPickLatest(t *testing.T) {
 	}
 }
 
-func TestPlatformPatterns(t *testing.T) {
-	patterns := platformPatterns()
-	if len(patterns) < 2 {
-		t.Fatal("platformPatterns should return at least 2 patterns")
+func TestPlatformAssetName(t *testing.T) {
+	name := platformAssetName()
+	if name == "" {
+		t.Fatal("platformAssetName should not be empty")
 	}
-	for _, pat := range patterns {
-		if pat == "" {
-			t.Fatal("platformPatterns should not contain empty pattern")
-		}
+	if !strings.HasPrefix(name, "mirror-") {
+		t.Fatalf("platformAssetName = %q, want mirror- prefix", name)
+	}
+	// 运行时平台必须出现在名字里
+	goos := strings.ToLower(runtime.GOOS)
+	if !strings.Contains(name, goos) {
+		t.Fatalf("platformAssetName = %q, should contain goos %q", name, goos)
+	}
+}
+
+func TestBuildUpdateCandidates(t *testing.T) {
+	candidates, err := buildUpdateCandidates("https://github.com/foo/bar", "v1.2.3", "")
+	if err != nil {
+		t.Fatalf("buildUpdateCandidates error = %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("want 2 candidates (raw + archive), got %d", len(candidates))
+	}
+	// 第一个候选 = 裸二进制
+	if candidates[0].isArchive {
+		t.Fatal("first candidate should be raw binary, not archive")
+	}
+	if !strings.Contains(candidates[0].url, "github.com/foo/bar/releases/download/v1.2.3/mirror-") {
+		t.Fatalf("raw binary URL = %q", candidates[0].url)
+	}
+	// 第二个候选 = 压缩包
+	if !candidates[1].isArchive {
+		t.Fatal("second candidate should be archive")
+	}
+
+	// asset_proxy_url 镜像前缀
+	candidates, _ = buildUpdateCandidates("https://github.com/foo/bar", "v1.2.3", "https://mirror.example.com")
+	if !strings.HasPrefix(candidates[0].url, "https://mirror.example.com") {
+		t.Fatalf("mirror prefix not applied: %q", candidates[0].url)
+	}
+
+	// 无效仓库地址应报错
+	if _, err := buildUpdateCandidates("not-a-url", "v1.0", ""); err == nil {
+		t.Fatal("buildUpdateCandidates with invalid repo should return error")
 	}
 }
 
@@ -176,28 +213,5 @@ func TestUpdateConfigAppliesDefaultRepoURL(t *testing.T) {
 	m.UpdateConfig(Config{Enabled: true, RepoURL: ""})
 	if got := m.Status().RepoURL; got != DefaultRepoURL {
 		t.Fatalf("UpdateConfig with empty RepoURL should fall back to DefaultRepoURL, got %q", got)
-	}
-}
-
-func TestIsExtractableBinary(t *testing.T) {
-	cases := []struct {
-		name string
-		want bool
-	}{
-		{"lemwood-mirror", true},
-		{"README.md", false},
-		{"LICENSE", false},
-		{"config.yaml", false},
-		{"CHANGELOG.txt", false},
-		{"contributors.json", false},
-		{"image.png", false},
-		{"install.sh", false},
-		{"man.1", false},
-		{"binary", true},
-	}
-	for _, tt := range cases {
-		if got := isExtractableBinary(tt.name); got != tt.want {
-			t.Fatalf("isExtractableBinary(%q) = %v, want %v", tt.name, got, tt.want)
-		}
 	}
 }

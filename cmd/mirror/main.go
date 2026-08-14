@@ -294,8 +294,16 @@ func main() {
 
 	if cfg.SelfUpdateEnabled && cfg.SelfUpdateCheckCron != "" {
 		_, err = c.AddFunc(cfg.SelfUpdateCheckCron, func() {
-			if _, checkErr := selfUpdateManager.Check(context.Background()); checkErr != nil {
+			status, checkErr := selfUpdateManager.Check(context.Background())
+			if checkErr != nil {
 				log.Printf("定时自更新检查失败: %v", checkErr)
+				return
+			}
+			if status.CanApply {
+				log.Printf("自更新: 检测到新版本 %s（当前 %s），开始自动应用", status.LatestVersion, status.CurrentVersion)
+				if _, applyErr := selfUpdateManager.Apply(context.Background()); applyErr != nil {
+					log.Printf("自更新: 自动应用失败: %v", applyErr)
+				}
 			}
 		})
 		if err != nil {

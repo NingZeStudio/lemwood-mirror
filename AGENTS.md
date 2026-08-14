@@ -92,7 +92,16 @@
 - 状态持久化在 `<storage>/selfupdate_state.json`，重启对账靠其中的 `applied_version`。
 - 重启用 `syscall.Exec`（unix，`restart_unix.go`）原地替换进程；Windows 走 `restart_other.go`（os.StartProcess）。`SetOnRestart` 在 main.go 注入闭包，需绝对路径（解析失败才回退 `os.Args[0]`）。
 - 频道：`notify` / `release` / `preview`（`NormalizeSelfUpdateChannel`）。
+- **下载链接内置（2026-08-14 重构）**：`Apply()` 不再调 `GetReleaseByTag` API，改为 `buildUpdateCandidates` 按 CI 资产命名规则（`mirror-{goos}-{label}{ext}`）直接构造 `https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}`。候选列表：先裸二进制，404 回退压缩包（`.tar.gz`/`.zip`，兼容旧版 alpha Release 仅含压缩包的情况），解压用 `extractFromTarGz`/`extractFromZip`。代理链：`httpClient`（`buildHTTPClient`）处理 HTTP 代理（`proxy_url` / `asset_proxy_url` 是代理时），`buildUpdateCandidates` 处理镜像前缀拼接（`asset_proxy_url` 不是代理时）——两条路径互补，不要漏。
+- **自动更新默认开启（2026-08-14）**：`DefaultConfig` 改为 `SelfUpdateEnabled=true`/`Channel="release"`/`AutoRestart=true`/`CheckCron="0 */6 * * *"`。cron 回调不再仅 `Check()`，`CanApply` 为 true 时自动调 `Apply()`（main.go）。
+- **配置项缺失自动补充（2026-08-14）**：`LoadConfig` 加载后用 `cfg.renderYAML()` 对比磁盘文件，不一致则重写（新版本新增字段自动补齐）。`Save` 重构提取 `renderYAML` 复用。
 
 ## 嵌入前端释放
 
 - `embedded_files.go`：`//go:embed all:web/default all:web/admin`。启动时 `assets.SyncEmbedded` 把内嵌前端释放到项目根 `web/default`、`web/admin`，**每次启动都释放**（内容相同的文件跳过写入减 IO，无 manifest 短路，确保前端随二进制即时生效）。`deprecatedBundles` 列表里的历史遗留目录（如 `web/default_v2`）会被整体删除。
+
+## 下载 URL 生成（CDN 优先，2026-08-14 加）
+
+- 配置 `cdn_base_url`（如 `https://cdn.foldcraftlauncher.cn`，空 = 纯相对路径，行为与旧版完全一致）。`download_url_base` 另有用（`FixAssetURLs` 重写启动器 index.json 里的资产 URL），**不要混用**。
+- `s.buildDownloadURLs(token, filePath)`（server.go）生成候选数组：配置了 CDN → `[CDN绝对URL, 同源相对路径]`；未配置 → `[相对路径]`。`downloadTokenResponse` 新增 `download_urls` 字段（prepare/authorize/landing 三处都带），`download_url` 仍是单值 = 首选候选（兼容旧客户端）。
+- 前端降级策略（DownloadStartedView.vue，PoW/CLI 链路的最终落点）：`pickDownloadUrl` 按序 HEAD 探测候选（剥离 query 的下载路径，5s 超时 AbortController），CDN 不通自动退回同源直连；按钮 href 用探测后的 `downloadTarget`。**HEAD 探测分支（server.go）不校验 token、不记账、不写 download_events**，探测请求零成本、零污染；不要改成带 token 的 GET/Range 探测（会写事件+防刷墙记账）。

@@ -18,6 +18,33 @@ const loading = ref(true)
 const error = ref('')
 const fileInfo = ref(null)
 const downloadTriggered = ref(false)
+const downloadTarget = ref('')
+
+// probeUrl 用 HEAD 探测下载地址可达性。HEAD 分支不校验 token、不记账，
+// 也不会产生下载事件，仅验证链路可用；避免探测本身污染统计。
+const probeUrl = (url) =>
+  new Promise((resolve) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    fetch(url, { method: 'HEAD', cache: 'no-store', credentials: 'omit', signal: controller.signal })
+      .then((res) => resolve(res.ok))
+      .catch(() => resolve(false))
+      .finally(() => clearTimeout(timer))
+  })
+
+// pickDownloadUrl 按候选顺序探测，返回首个可达的 URL（CDN 优先），全部失败兜底第一候选。
+const pickDownloadUrl = async () => {
+  const candidates = fileInfo.value?.download_urls?.length
+    ? fileInfo.value.download_urls
+    : fileInfo.value?.download_url
+      ? [fileInfo.value.download_url]
+      : []
+  for (const url of candidates.slice(0, 2)) {
+    const probeTarget = url.split('?')[0]
+    if (await probeUrl(probeTarget)) return url
+  }
+  return candidates[0] || ''
+}
 
 const loadLandingInfo = async () => {
   const token = route.query.token
@@ -30,6 +57,7 @@ const loadLandingInfo = async () => {
   try {
     const response = await getDownloadLanding(token)
     fileInfo.value = response.data
+    downloadTarget.value = response.data.download_url || ''
     triggerDownload()
   } catch (err) {
     error.value = err.response?.data?.message || '获取下载信息失败，凭证可能已过期'
@@ -38,10 +66,14 @@ const loadLandingInfo = async () => {
   }
 }
 
-const triggerDownload = () => {
+const triggerDownload = async () => {
   if (downloadTriggered.value || !fileInfo.value?.download_url) return
-  window.location.href = fileInfo.value.download_url
   downloadTriggered.value = true
+  const target = await pickDownloadUrl()
+  if (target) {
+    downloadTarget.value = target
+    window.location.href = target
+  }
 }
 
 // 返回来源网站（集成站）：优先外部 referrer，其次外部 return_url，兜底首页。
@@ -132,7 +164,7 @@ onMounted(() => {
         <div v-else class="space-y-5">
           <!-- 真实 <a> 用户手势触发下载：Chrome/Android 会拦截非手势的自动下载 -->
           <a
-            :href="fileInfo.download_url"
+            :href="downloadTarget || fileInfo.download_url"
             :download="fileInfo.file_name || undefined"
             class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
           >

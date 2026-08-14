@@ -112,7 +112,7 @@ func TestShouldSyncByMode(t *testing.T) {
 
 func TestDefaultConfigSelfUpdateChannel(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.SelfUpdateChannel != string(SelfUpdateChannelNotify) {
-		t.Fatalf("DefaultConfig().SelfUpdateChannel = %q, want %q", cfg.SelfUpdateChannel, SelfUpdateChannelNotify)
+	if cfg.SelfUpdateChannel != string(SelfUpdateChannelRelease) {
+		t.Fatalf("DefaultConfig().SelfUpdateChannel = %q, want %q", cfg.SelfUpdateChannel, SelfUpdateChannelRelease)
 	}
 }

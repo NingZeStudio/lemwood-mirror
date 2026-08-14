@@ -54,7 +54,7 @@ func TestLoadConfig_LegacyJSONMigration(t *testing.T) {
 	if cfg.Launchers[0].Mode != "release" {
 		t.Fatalf("expected launcher mode 'release' (normalized from empty), got %q", cfg.Launchers[0].Mode)
 	}
-	if cfg.SelfUpdateChannel != string(SelfUpdateChannelNotify) {
+	if cfg.SelfUpdateChannel != string(SelfUpdateChannelRelease) {
 		t.Fatalf("expected default SelfUpdateChannel 'notify', got %q", cfg.SelfUpdateChannel)
 	}
 	if cfg.ServerPort != 9090 {
@@ -144,7 +144,7 @@ func TestLoadConfig_FreshInstallWritesDefault(t *testing.T) {
 	if cfg.StoragePath != "download" {
 		t.Fatalf("expected default StoragePath 'download', got %q", cfg.StoragePath)
 	}
-	if cfg.SelfUpdateChannel != string(SelfUpdateChannelNotify) {
+	if cfg.SelfUpdateChannel != string(SelfUpdateChannelRelease) {
 		t.Fatalf("expected default SelfUpdateChannel 'notify', got %q", cfg.SelfUpdateChannel)
 	}
 }

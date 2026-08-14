@@ -47,6 +47,11 @@ github_token: ""
 # 生成的下载链接和 API 响应中的 URL 均基于此地址。
 download_url_base: ""
 
+# 下载加速 CDN 前缀（如 https://cdn.example.com）。
+# 配置后下载授权链接优先生成 CDN 绝对 URL，download_urls 数组尾部附带
+# 同源相对路径作降级兜底；留空则保持旧版纯相对路径行为。
+cdn_base_url: ""
+
 # HTTP/HTTPS 代理地址（用于 GitHub API 请求，留空则不使用代理）
 proxy_url: ""
 
@@ -159,22 +164,22 @@ mysql_migration: false
 # 自更新设置
 # -----------------------------------------------------------------------------
 
-# 是否启用自更新功能
+# 是否启用自更新功能（默认启用：定时检查新版本并自动下载替换二进制 + 重启）
 # 注意：Docker 等容器环境中替换二进制文件不会持久生效，此时仅提供更新
 #       检测与提醒（状态中会标记为不可应用），请通过更新镜像完成升级。
-self_update_enabled: false
+self_update_enabled: true
 
 # 自更新源仓库 URL（GitHub 仓库地址，留空则使用默认源）
 self_update_repo_url: ""
 
-# 更新检查通道: notify（仅通知）、release（稳定版）、preview（预览版）
-self_update_channel: "notify"
+# 更新检查通道: notify（仅通知）、release（稳定版，自动应用）、preview（预览版，自动应用）
+self_update_channel: "release"
 
-# 自更新检查的 cron 表达式（留空则使用默认检查间隔）
-self_update_check_cron: ""
+# 自更新检查的 cron 表达式（默认每 6 小时检查一次）
+self_update_check_cron: "0 */6 * * *"
 
 # 更新完成后是否自动重启服务
-self_update_auto_restart: false
+self_update_auto_restart: true
 
 # -----------------------------------------------------------------------------
 # 启动器列表

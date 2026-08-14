@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,6 +300,84 @@ func TestDownloadPrepareReturnsLandingURL(t *testing.T) {
 	}
 	if resp["landing_url"] == "" || resp["landing_url"] == nil {
 		t.Fatal("landing_url should not be empty")
+	}
+}
+
+func TestDownloadPrepareWithCDNBaseURL(t *testing.T) {
+	cfg := &config.Config{
+		PowEnabled:    false,
+		AppealContact: "test-contact",
+		CDNBaseURL:    "https://cdn.example.com/",
+	}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt","return_url":"https://example.com/back","source":"homepage"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	resp := unwrapV2Envelope(t, rec.Body.Bytes())
+
+	urls, ok := resp["download_urls"].([]interface{})
+	if !ok || len(urls) != 2 {
+		t.Fatalf("download_urls = %v, want 2 candidates", resp["download_urls"])
+	}
+	cdnURL, _ := urls[0].(string)
+	relURL, _ := urls[1].(string)
+	if !strings.HasPrefix(cdnURL, "https://cdn.example.com/download/launcher/v1/file.txt?token=") {
+		t.Fatalf("cdn url = %q, want cdn prefix", cdnURL)
+	}
+	if !strings.HasPrefix(relURL, "/download/launcher/v1/file.txt?token=") {
+		t.Fatalf("fallback url = %q, want relative path", relURL)
+	}
+	if resp["download_url"] != cdnURL {
+		t.Fatalf("download_url = %v, want cdn first %q", resp["download_url"], cdnURL)
+	}
+	if !strings.Contains(cdnURL, url.QueryEscape(resp["download_token"].(string))) {
+		t.Fatal("cdn url should embed the download token")
+	}
+
+	// landing 也应携带相同候选列表
+	landingReq := httptest.NewRequest(http.MethodGet, resp["landing_url"].(string), nil)
+	landingRec := httptest.NewRecorder()
+	handler.ServeHTTP(landingRec, landingReq)
+	if landingRec.Code != http.StatusOK {
+		t.Fatalf("landing status = %d, want 200", landingRec.Code)
+	}
+	landingResp := unwrapV2Envelope(t, landingRec.Body.Bytes())
+	lurls, ok := landingResp["download_urls"].([]interface{})
+	if !ok || len(lurls) != 2 {
+		t.Fatalf("landing download_urls = %v, want 2 candidates", landingResp["download_urls"])
+	}
+}
+
+func TestDownloadPrepareWithoutCDNBaseURL(t *testing.T) {
+	cfg := &config.Config{
+		PowEnabled:    false,
+		AppealContact: "test-contact",
+	}
+	_, handler, _ := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	body := bytes.NewBufferString(`{"file_path":"launcher/v1/file.txt"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/downloads/prepare", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	resp := unwrapV2Envelope(t, rec.Body.Bytes())
+	urls, ok := resp["download_urls"].([]interface{})
+	if !ok || len(urls) != 1 {
+		t.Fatalf("download_urls = %v, want single relative fallback", resp["download_urls"])
+	}
+	if resp["download_url"] != urls[0] {
+		t.Fatalf("download_url = %v, want equal to only candidate", resp["download_url"])
 	}
 }
 

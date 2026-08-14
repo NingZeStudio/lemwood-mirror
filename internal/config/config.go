@@ -32,6 +32,10 @@ github_token: {{ yaml .GitHubToken }}
 # 对外下载地址基准（为空时回退到 server_address）
 download_url_base: {{ yaml .DownloadUrlBase }}
 
+# 下载加速 CDN 前缀（如 https://cdn.example.com）。配置后下载授权链接优先
+# 生成 CDN 绝对 URL，并在 download_urls 数组尾部附带同源相对路径作降级兜底
+cdn_base_url: {{ yaml .CDNBaseURL }}
+
 # 单文件下载超时（分钟），Git 镜像同步也复用此超时
 download_timeout_minutes: {{ .DownloadTimeoutMinutes }}
 concurrent_downloads: {{ .ConcurrentDownloads }}
@@ -169,6 +173,7 @@ type Config struct {
 	DownloadTimeoutMinutes int              `json:"download_timeout_minutes" yaml:"download_timeout_minutes"`
 	ConcurrentDownloads    int              `json:"concurrent_downloads" yaml:"concurrent_downloads"`
 	DownloadUrlBase        string           `json:"download_url_base,omitempty" yaml:"download_url_base,omitempty"`
+	CDNBaseURL             string           `json:"cdn_base_url,omitempty" yaml:"cdn_base_url,omitempty"`
 	TwoFactorEnabled       bool             `json:"two_factor_enabled" yaml:"two_factor_enabled"`
 	TwoFactorSecret        string           `json:"two_factor_secret" yaml:"two_factor_secret"`
 	PowEnabled             bool             `json:"pow_enabled" yaml:"pow_enabled"`
@@ -213,7 +218,10 @@ func DefaultConfig() *Config {
 		BanRecordFile:          "banned_ips.txt",
 		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
-		SelfUpdateChannel:      string(SelfUpdateChannelNotify),
+		SelfUpdateEnabled:      true,
+		SelfUpdateChannel:      string(SelfUpdateChannelRelease),
+		SelfUpdateCheckCron:    "0 */6 * * *",
+		SelfUpdateAutoRestart:  true,
 		Launchers:              []LauncherConfig{},
 		PowEnabled:             true,
 		PowAlgorithm:           "PBKDF2-SHA256",
@@ -297,6 +305,16 @@ func LoadConfig(projectRoot string) (*Config, error) {
 	if err := NormalizeConfig(cfg); err != nil {
 		return nil, err
 	}
+
+	// 配置项缺失自动补充：渲染模板对比磁盘文件，不一致则重写（新版本新增字段自动补齐）。
+	if newBytes, rErr := cfg.renderYAML(); rErr == nil && !bytes.Equal(newBytes, b) {
+		if wErr := os.WriteFile(cfgPath, newBytes, 0o644); wErr != nil {
+			log.Printf("[配置] 自动补充缺失配置项失败: %v", wErr)
+		} else {
+			log.Printf("[配置] config.yaml 已自动补充缺失的配置项")
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -366,19 +384,27 @@ func NormalizeConfig(cfg *Config) error {
 	return nil
 }
 
-func (c *Config) Save(projectRoot string) error {
-	cfgPath := configYAMLPath(projectRoot)
+func (c *Config) renderYAML() ([]byte, error) {
 	tpl, err := template.New("config").Funcs(template.FuncMap{
 		"yaml": yamlScalar,
 	}).Parse(defaultConfigTemplate)
 	if err != nil {
-		return fmt.Errorf("解析配置模板失败: %w", err)
+		return nil, fmt.Errorf("解析配置模板失败: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, c); err != nil {
-		return fmt.Errorf("渲染配置模板失败: %w", err)
+		return nil, fmt.Errorf("渲染配置模板失败: %w", err)
 	}
-	if err := os.WriteFile(cfgPath, buf.Bytes(), 0o644); err != nil {
+	return buf.Bytes(), nil
+}
+
+func (c *Config) Save(projectRoot string) error {
+	cfgPath := configYAMLPath(projectRoot)
+	data, err := c.renderYAML()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
 		return fmt.Errorf("写入 config.yaml 失败: %w", err)
 	}
 	return nil
