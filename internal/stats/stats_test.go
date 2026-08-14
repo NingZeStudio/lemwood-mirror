@@ -183,6 +183,12 @@ func TestComputeStatsDataEventsMerge(t *testing.T) {
 			t.Fatalf("today TrafficBytes = %d, want 1500", ds.TrafficBytes)
 		}
 	}
+	// DailyStats 今日下载次数 = 事件表 1（downloads 表冻结为 0 行，不得回退为 0）
+	for _, ds := range data.DailyStats {
+		if ds.Date == today && ds.DownloadCount != 1 {
+			t.Fatalf("today DownloadCount = %d, want 1 (from events)", ds.DownloadCount)
+		}
+	}
 }
 
 // TestComputeTotalDaysFromVisits 有访问记录时，运行天数取 visits 最早记录至今，至少为 1。

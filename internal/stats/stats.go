@@ -577,6 +577,17 @@ func mergeDailyTraffic(data *StatsData, trafficMap map[string]int64) {
 	}
 }
 
+// mergeDailyDownloads 用事件表的按日下载计数覆盖 DailyStats 的每日下载次数。
+// 事件表是下载次数的唯一口径（downloads 表已冻结不再写入），故每次有事件计数即覆盖。
+func mergeDailyDownloads(data *StatsData, countMap map[string]int64) {
+	for i := range data.DailyStats {
+		date := data.DailyStats[i].Date
+		if c, ok := countMap[date]; ok {
+			data.DailyStats[i].DownloadCount = c
+		}
+	}
+}
+
 // applyDownloadAndTrafficStats 计算下载次数与流量字节：
 //   - 下载次数/top 完全来自 download_events（含历史回填）；
 //   - 流量字节 = 冻结基线（daily_traffic/daily_completed_traffic）SUM + 事件表 SUM。
@@ -591,14 +602,17 @@ func applyDownloadAndTrafficStats(data *StatsData) {
 	// 每日事件聚合（served/completed/count）
 	evtStats, _ := db.GetDailyEventStats(30)
 	var last30EvtCount, last30EvtCompleted, last30EvtServed int64
+	evtCount := map[string]int64{}
 	evtCompleted := map[string]int64{}
 	for _, s := range evtStats {
 		last30EvtCount += s.Count
 		last30EvtCompleted += s.Completed
 		last30EvtServed += s.Served
+		evtCount[s.Date] = s.Count
 		evtCompleted[s.Date] = s.Completed
 	}
 	data.Last30Downloads = last30EvtCount
+	mergeDailyDownloads(data, evtCount)
 
 	// 流量总量 = 冻结基线 + 事件
 	if bv, err := db.GetTotalCompletedTraffic(); err == nil {
