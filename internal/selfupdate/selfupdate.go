@@ -237,14 +237,16 @@ func (m *Manager) Check(ctx context.Context) (Status, error) {
 	})
 
 	latest := pickLatest(available, normalizeChannel(cfg.Channel))
+	// dev / 空等不可解析的版本号视为最旧，任何已发布 tag 都比它新。
+	hasUpdate := latest != "" && (m.currentVersion == "dev" || m.currentVersion == "" || version.Compare(latest, m.currentVersion) > 0)
 	status := Status{
 		Enabled:           cfg.Enabled,
 		RepoURL:           cfg.RepoURL,
 		Channel:           normalizeChannel(cfg.Channel),
 		CurrentVersion:    m.currentVersion,
 		LatestVersion:     latest,
-		HasUpdate:         latest != "" && version.Compare(latest, m.currentVersion) > 0,
-		CanApply:          normalizeChannel(cfg.Channel) != string(ChannelNotify) && latest != "" && version.Compare(latest, m.currentVersion) > 0,
+		HasUpdate:         hasUpdate,
+		CanApply:          normalizeChannel(cfg.Channel) != string(ChannelNotify) && hasUpdate,
 		PendingRestart:    prev.PendingRestart,
 		LastCheckedAt:     time.Now(),
 		LastAppliedAt:     prev.LastAppliedAt,

@@ -266,8 +266,15 @@ func main() {
 
 	if cfg.SelfUpdateEnabled {
 		go func() {
-			if _, err := selfUpdateManager.Check(context.Background()); err != nil {
+			status, err := selfUpdateManager.Check(context.Background())
+			if err != nil {
 				log.Printf("自更新检查失败: %v", err)
+				return
+			}
+			if status.HasUpdate {
+				log.Printf("自更新: 检测到新版本 %s（当前 %s，通道 %s）", status.LatestVersion, status.CurrentVersion, status.Channel)
+			} else {
+				log.Printf("自更新: 当前已是最新版本 %s", status.CurrentVersion)
 			}
 		}()
 	}
@@ -333,6 +340,11 @@ func main() {
 	selfUpdateManager.SetOnRestart(doRestart)
 
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
+	if cfg.SelfUpdateEnabled {
+		log.Printf("自更新已启用: 通道=%s, 检查间隔=%s, 自动重启=%v", cfg.SelfUpdateChannel, cfg.SelfUpdateCheckCron, cfg.SelfUpdateAutoRestart)
+	} else {
+		log.Printf("自更新已禁用")
+	}
 	log.Printf("正在启动服务器于 %s", addr)
 
 	stop := make(chan os.Signal, 1)
