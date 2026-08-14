@@ -121,6 +121,26 @@ func TestPickLatest(t *testing.T) {
 	}
 }
 
+func TestIsParseable(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"1.3.0", true},
+		{"v1.3.0-beta3", true},
+		{"2.4.11", true},
+		{"alpha2", false},
+		{"dev", false},
+		{"", false},
+		{"v", false},
+	}
+	for _, tt := range cases {
+		if got := version.IsParseable(tt.in); got != tt.want {
+			t.Fatalf("IsParseable(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestPlatformAssetName(t *testing.T) {
 	name := platformAssetName()
 	if name == "" {

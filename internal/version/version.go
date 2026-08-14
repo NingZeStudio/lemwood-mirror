@@ -5,6 +5,7 @@ package version
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // IsStable reports whether a version string represents a stable release
@@ -20,6 +21,17 @@ func IsStable(v string) bool {
 	// 额外检查：如果包含横杠，通常也是非稳定版（如 1.2.3-v1）
 	// 但有些启动器可能使用横杠作为正常版本号的一部分，所以以关键词优先
 	return true
+}
+
+// IsParseable reports whether a version string looks like a semantic version
+// (starts with a digit, optionally after a "v" prefix). Non-parseable tags
+// like "alpha2" or "dev" are excluded from selfupdate version comparison.
+func IsParseable(v string) bool {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if v == "" {
+		return false
+	}
+	return unicode.IsDigit(rune(v[0]))
 }
 
 // SplitPreRelease splits "1.2.3-beta.1" into core "1.2.3" and suffix "beta.1".

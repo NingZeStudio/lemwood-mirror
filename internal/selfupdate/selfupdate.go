@@ -223,7 +223,7 @@ func (m *Manager) Check(ctx context.Context) (Status, error) {
 	available := make([]TagInfo, 0, len(tags))
 	for _, tag := range tags {
 		name := normalizeVersion(tag.GetName())
-		if name == "" {
+		if name == "" || !version.IsParseable(name) {
 			continue
 		}
 		available = append(available, TagInfo{
