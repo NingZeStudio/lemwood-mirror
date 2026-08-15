@@ -9,6 +9,7 @@
 - 构建：`go build -o mirror ./cmd/mirror`；开发运行：`go run ./cmd/mirror`。
 - 纯 Go 构建，`CGO_ENABLED=0`：SQLite 驱动是 `modernc.org/sqlite`（pure-Go），**不需要 cgo**，不要为 SQLite 切换 `mattn/go-sqlite3`。
 - 版本号靠 `-ldflags "-s -w -X main.Version=..."` 注入：CI tag 构建注入 `github.ref_name`；Docker 需 `--build-arg VERSION=x.y.z`（Dockerfile ARG VERSION）；dev 构建为 `"dev"`，自更新检查时视为"有更新"。
+- **构建产物不入库（2026-08-15 起）**：`mirror-linux-amd64` 曾误入库（66MB）已 `git rm --cached` 移除，.gitignore 含 `mirror-linux-amd64`。本地 `go build` 的二进制只用于本地验证/部署，**不要 `git add` 任何二进制**；正式产物由 CI 按 tag 构建发布。
 - 前端构建：`cd frontend && pnpm build`，产物输出到 `web/default/`（git 跟踪的内嵌资源，改完 frontend/src 必须重新构建否则线上不生效）。
 - 管理端构建：`cd admin-app && pnpm build`，产物输出到 `web/admin/`（同样被 git 跟踪，会被构建重写 hash 文件名）。
 - CI（`.github/workflows/build.yml`）矩阵构建 windows/linux × amd64/arm64/x86；**仅 tag 推送时发 Release**（softprops/action-gh-release）。pnpm 版本固定 10.12.4。
