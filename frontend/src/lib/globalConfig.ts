@@ -111,6 +111,10 @@ export const globalConfig = {
     aamc: {
       displayName: 'Angel Aura Amethyst',
       logoUrl: new URL('../assets/images/amethyst.png', import.meta.url).href
+    },
+    axolotl: {
+      displayName: 'Axolotl Launcher',
+      logoUrl: new URL('../assets/images/axolotl.png', import.meta.url).href
     }
   },
 
