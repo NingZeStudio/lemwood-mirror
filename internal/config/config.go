@@ -36,6 +36,11 @@ download_url_base: {{ yaml .DownloadUrlBase }}
 # 生成 CDN 绝对 URL，并在 download_urls 数组尾部附带同源相对路径作降级兜底
 cdn_base_url: {{ yaml .CDNBaseURL }}
 
+# 启用 CDN 后，下载响应允许边缘缓存的最大时长（秒；0=不缓存维持 no-store）。
+# 下载路径含 launcher/version/file，缓存键稳定，可放心用长 TTL；
+# 配合 CDN（如 EdgeOne）忽略 query string 按路径缓存，即可让大文件由边缘节点供流。
+cdn_cache_max_age: {{ .CDNCacheMaxAge }}
+
 # 单文件下载超时（分钟），Git 镜像同步也复用此超时
 download_timeout_minutes: {{ .DownloadTimeoutMinutes }}
 concurrent_downloads: {{ .ConcurrentDownloads }}
@@ -174,16 +179,17 @@ type Config struct {
 	ConcurrentDownloads    int              `json:"concurrent_downloads" yaml:"concurrent_downloads"`
 	DownloadUrlBase        string           `json:"download_url_base,omitempty" yaml:"download_url_base,omitempty"`
 	CDNBaseURL             string           `json:"cdn_base_url,omitempty" yaml:"cdn_base_url,omitempty"`
+	CDNCacheMaxAge         int              `json:"cdn_cache_max_age,omitempty" yaml:"cdn_cache_max_age,omitempty"`
 	TwoFactorEnabled       bool             `json:"two_factor_enabled" yaml:"two_factor_enabled"`
 	TwoFactorSecret        string           `json:"two_factor_secret" yaml:"two_factor_secret"`
 	PowEnabled             bool             `json:"pow_enabled" yaml:"pow_enabled"`
-	PowAlgorithm            string           `json:"pow_algorithm" yaml:"pow_algorithm"`
-	PowCost                 int              `json:"pow_cost" yaml:"pow_cost"`
-	PowKeyLength            int              `json:"pow_key_length" yaml:"pow_key_length"`
-	PowDifficulty           int              `json:"pow_difficulty" yaml:"pow_difficulty"`
-	PowChallengeTTL         string           `json:"pow_challenge_ttl" yaml:"pow_challenge_ttl"`
-	PowHMACSecret           string           `json:"pow_hmac_secret,omitempty" yaml:"pow_hmac_secret,omitempty"`
-	DownloadTokenTTL        string           `json:"download_token_ttl,omitempty" yaml:"download_token_ttl,omitempty"`
+	PowAlgorithm           string           `json:"pow_algorithm" yaml:"pow_algorithm"`
+	PowCost                int              `json:"pow_cost" yaml:"pow_cost"`
+	PowKeyLength           int              `json:"pow_key_length" yaml:"pow_key_length"`
+	PowDifficulty          int              `json:"pow_difficulty" yaml:"pow_difficulty"`
+	PowChallengeTTL        string           `json:"pow_challenge_ttl" yaml:"pow_challenge_ttl"`
+	PowHMACSecret          string           `json:"pow_hmac_secret,omitempty" yaml:"pow_hmac_secret,omitempty"`
+	DownloadTokenTTL       string           `json:"download_token_ttl,omitempty" yaml:"download_token_ttl,omitempty"`
 	Launchers              []LauncherConfig `json:"launchers" yaml:"launchers"`
 	TrafficLimitGB         int              `json:"traffic_limit_gb" yaml:"traffic_limit_gb"`
 	BanRecordFile          string           `json:"ban_record_file" yaml:"ban_record_file"`
@@ -215,6 +221,7 @@ func DefaultConfig() *Config {
 		AdminMaxRetries:        10,
 		AdminLockDuration:      120,
 		TrafficLimitGB:         0,
+		CDNCacheMaxAge:         604800,
 		BanRecordFile:          "banned_ips.txt",
 		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
@@ -356,6 +363,9 @@ func NormalizeConfig(cfg *Config) error {
 	}
 	if cfg.TrafficLimitGB < 0 {
 		cfg.TrafficLimitGB = 5
+	}
+	if cfg.CDNCacheMaxAge < 0 {
+		cfg.CDNCacheMaxAge = 604800
 	}
 	if cfg.BanRecordFile == "" {
 		cfg.BanRecordFile = "banned_ips.txt"

@@ -45,11 +45,11 @@ type State struct {
 	loginAttemptsMu sync.Mutex
 
 	// 验证码（已移除极验）→ PoW 挑战 + DB 授权
-	powMgr   *pow.Manager
-	authzMgr *download_authz.Manager
-	selfUpdate       *selfupdate.Manager
-	applySelfUpdate  func(ctx context.Context) error
-	restartProcess   func() error
+	powMgr          *pow.Manager
+	authzMgr        *download_authz.Manager
+	selfUpdate      *selfupdate.Manager
+	applySelfUpdate func(ctx context.Context) error
+	restartProcess  func() error
 
 	// 扫描回调（在 Routes 中使用）
 	scanAllFunc         func()
@@ -430,7 +430,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"error":              "verification_required",
 				"message":            "Download requires PoW authorization",
-				"pow":                 true,
+				"pow":                true,
 				"challenge_endpoint": "/api/v2/downloads/challenge",
 			})
 			return
@@ -530,8 +530,14 @@ func (s *State) Routes(mux *http.ServeMux) {
 			ResponseWriter: w,
 			counter:        counter,
 		}
-		// 令牌不出现在可公开缓存的响应里；防止 referrer 泄露与中间缓存
-		w.Header().Set("Cache-Control", "private, no-store")
+		// 配置了 CDN 且 cdn_cache_max_age>0 时允许边缘缓存（配合 EdgeOne 等忽略
+		// query string 按路径缓存大文件，路径含 launcher/version/file 缓存键稳定）；
+		// 未配 CDN 或 TTL=0 时维持 private/no-store，防止中间缓存按 token 串号。
+		if s.Config.CDNBaseURL != "" && s.Config.CDNCacheMaxAge > 0 {
+			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", s.Config.CDNCacheMaxAge))
+		} else {
+			w.Header().Set("Cache-Control", "private, no-store")
+		}
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		// 强制附件下载：无扩展名文件（如 mirror-linux-amd64）浏览器需要 attachment 才弹下载
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(relPath)))
