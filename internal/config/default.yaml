@@ -47,16 +47,6 @@ github_token: ""
 # 生成的下载链接和 API 响应中的 URL 均基于此地址。
 download_url_base: ""
 
-# 下载加速 CDN 前缀（如 https://cdn.example.com）。
-# 配置后下载授权链接优先生成 CDN 绝对 URL，download_urls 数组尾部附带
-# 同源相对路径作降级兜底；留空则保持旧版纯相对路径行为。
-cdn_base_url: ""
-
-# 启用 CDN 后，下载响应允许边缘缓存的最大时长（秒；0=不缓存维持 no-store）。
-# 下载路径含 launcher/version/file，缓存键稳定，可放心用长 TTL；
-# 配合 CDN（如 EdgeOne）忽略 query string 按路径缓存，大文件即可由边缘节点供流。
-cdn_cache_max_age: 604800
-
 # HTTP/HTTPS 代理地址（用于 GitHub API 请求，留空则不使用代理）
 proxy_url: ""
 

@@ -530,14 +530,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 			ResponseWriter: w,
 			counter:        counter,
 		}
-		// 配置了 CDN 且 cdn_cache_max_age>0 时允许边缘缓存（配合 EdgeOne 等忽略
-		// query string 按路径缓存大文件，路径含 launcher/version/file 缓存键稳定）；
-		// 未配 CDN 或 TTL=0 时维持 private/no-store，防止中间缓存按 token 串号。
-		if s.Config.CDNBaseURL != "" && s.Config.CDNCacheMaxAge > 0 {
-			w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", s.Config.CDNCacheMaxAge))
-		} else {
-			w.Header().Set("Cache-Control", "private, no-store")
-		}
+		// token-based URL，禁止中间缓存共享。
+		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		// 强制附件下载：无扩展名文件（如 mirror-linux-amd64）浏览器需要 attachment 才弹下载
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(relPath)))
@@ -948,10 +942,9 @@ type downloadPrepareRequest struct {
 }
 
 type downloadTokenResponse struct {
-	DownloadToken string   `json:"download_token"`
-	DownloadURL   string   `json:"download_url"`
-	DownloadURLs  []string `json:"download_urls"`
-	LandingURL    string   `json:"landing_url"`
+	DownloadToken string `json:"download_token"`
+	DownloadURL   string `json:"download_url"`
+	LandingURL    string `json:"landing_url"`
 }
 
 func writeJSONError(w http.ResponseWriter, statusCode int, code, message string) {
@@ -1004,28 +997,16 @@ func (s *State) issueAuthz(filePath, returnURL, source, flow, clientIP, sourceKi
 	if err != nil {
 		return downloadTokenResponse{}, err
 	}
-	urls := s.buildDownloadURLs(token, filePath)
+	downloadURL := buildDownloadURL(token, filePath)
 	return downloadTokenResponse{
 		DownloadToken: token,
-		DownloadURL:   urls[0],
-		DownloadURLs:  urls,
+		DownloadURL:   downloadURL,
 		LandingURL:    fmt.Sprintf("/api/v2/downloads/landing?token=%s", url.QueryEscape(token)),
 	}, nil
 }
 
 func buildDownloadURL(token, filePath string) string {
 	return fmt.Sprintf("/download/%s?token=%s", filePath, url.QueryEscape(token))
-}
-
-// buildDownloadURLs 返回下载候选 URL 列表，CDN 优先（配置了 cdn_base_url 时），
-// 尾部恒为同源相对路径（直前源站），供客户端探测失败后降级。
-func (s *State) buildDownloadURLs(token, filePath string) []string {
-	rel := buildDownloadURL(token, filePath)
-	cdnBase := strings.TrimRight(s.Config.CDNBaseURL, "/")
-	if cdnBase == "" {
-		return []string{rel}
-	}
-	return []string{cdnBase + rel, rel}
 }
 
 func isBrowserRequest(r *http.Request) bool {

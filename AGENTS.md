@@ -61,7 +61,7 @@
 ## PoW 下载验证 + 状态表授权/流量（2026-08-12 起，替代极验）
 
 - **背景**：移除极验（`internal/captcha` 已删）与内存 `download_token`（`internal/download_token` 已删）。改为 PoW 自动验证客户端正规性 + DB 状态表承载授权与流量。参考 PoW实现.md 与 MapleMirror（AGPL，仅参考数据模型形状/流程，**从零实现不复制源码**）。单节点、改 v2（不新建 v3）。前端已迁移（2026-08-12）。
-- **PoW（`internal/pow`）**：ALTCHA 风格 PBKDF2-SHA256（自实现，无 altcha 依赖——因 altcha-lib-go/v2 传递性要求 go 1.25，本仓 CI 为 go 1.24）。挑战**内存态**（`reserved→open→issuing→consumed`，不落库，对齐 PoW实现.md §1.10/MapleMirror §5.1），TTL 默认 2m。`pow.Solve(p, max)` 供测试/CLI。`servePowPage`（server.go）是浏览器直连验证页：Web Crypto PBKDF2 求解 → POST authorize → 跳转，无 CDN。
+- **PoW（`internal/pow`）**：ALTCHA 风格 PBKDF2-SHA256（自实现，无 altcha 依赖——因 altcha-lib-go/v2 传递性要求 go 1.25，本仓 CI 为 go 1.24）。挑战**内存态**（`reserved→open→issuing→consumed`，不落库，对齐 PoW实现.md §1.10/MapleMirror §5.1），TTL 默认 2m。`pow.Solve(p, max)` 供测试/CLI。`servePowPage`（server.go）是浏览器直连验证页：Web Crypto PBKDF2 求解 → POST authorize → 跳转。
 - **授权（`internal/download_authz` + `download_authorizations` 表）**：token = 32 字节无填充 base64url（43 字符），DB 只存 `token_hash=sha256(token)` hex。`Issue/Peek/Consume`（`ConsumeDownloadAuthorization` atomic：`issued 且未过期 → consumed`，单次防重放）。
 - **事件/流量（`download_events` 表）**：每次下载一行（`authorization_id/file/launcher/version/client_ip/country/bytes_served/completed/status_code/date`）。**全切口径**：served=bytes_served（含中止），completed=bytes_served WHERE completed=1。防刷墙按 IP 当日 served 读 `download_events`（`GetDailyServedByIPFromEventsToday`，注入 `traffic.InitTracker`）；`daily_traffic`/`daily_completed_traffic` **冻结为只读历史基线**（不再写入，schema v4 迁移从 `downloads` 回填事件行 bytes=0）。
 - **v2 端点**：`POST /api/v2/downloads/prepare`（CLI/API 直发授权，无 PoW，保留）、`GET /landing`（Peek）、`GET /downloads/challenge` + `POST /downloads/authorize`（浏览器 PoW，替代极验 verify）、`GET /api/v2/pow/config`。`/download/{path}`：token 取 `?token=` 或 `Authorization: Bearer`；无 token+浏览器→`servePowPage`，无 token+非浏览器→403 `verification_required`，有 token→`authz.Consume`+文件绑定校验+`RecordDownloadEvent`+`FinalizeTraffic`（顺序：先 event 后 finalize，防刷墙才读得到本次字节）。
@@ -100,10 +100,3 @@
 ## 嵌入前端释放
 
 - `embedded_files.go`：`//go:embed all:web/default all:web/admin`。启动时 `assets.SyncEmbedded` 把内嵌前端释放到项目根 `web/default`、`web/admin`，**每次启动都释放**（内容相同的文件跳过写入减 IO，无 manifest 短路，确保前端随二进制即时生效）。`deprecatedBundles` 列表里的历史遗留目录（如 `web/default_v2`）会被整体删除。
-
-## 下载 URL 生成（CDN 优先，2026-08-14 加）
-
-- 配置 `cdn_base_url`（如 `https://cdn.foldcraftlauncher.cn`，空 = 纯相对路径，行为与旧版完全一致）。`download_url_base` 另有用（`FixAssetURLs` 重写启动器 index.json 里的资产 URL），**不要混用**。
-- `s.buildDownloadURLs(token, filePath)`（server.go）生成候选数组：配置了 CDN → `[CDN绝对URL, 同源相对路径]`；未配置 → `[相对路径]`。`downloadTokenResponse` 新增 `download_urls` 字段（prepare/authorize/landing 三处都带），`download_url` 仍是单值 = 首选候选（兼容旧客户端）。
-- 前端降级策略（DownloadStartedView.vue，PoW/CLI 链路的最终落点）：`pickDownloadUrl` 按序 HEAD 探测候选（剥离 query 的下载路径，5s 超时 AbortController），CDN 不通自动退回同源直连；按钮 href 用探测后的 `downloadTarget`。**HEAD 探测分支（server.go）不校验 token、不记账、不写 download_events**，探测请求零成本、零污染；不要改成带 token 的 GET/Range 探测（会写事件+防刷墙记账）。
-- **CDN 缓存头（2026-08-15 加）**：配置 `cdn_cache_max_age`（秒，默认 604800，负值归一）后，配了 `cdn_base_url` 的下载 GET 响应改发 `Cache-Control: public, max-age=N`（server.go 下载处理器）；否则维持 `private, no-store`。路径含 `launcher/version/file` 缓存键稳定，配合 CDN（EdgeOne）忽略 query string 按路径缓存即可让大文件由边缘供流。**代价**：缓存命中不回源，PoW 校验/防刷墙/download_events 计数失效，下载次数/流量只能从 CDN 日志拉；HEAD 探测分支不设缓存头（本就不回源记账）。

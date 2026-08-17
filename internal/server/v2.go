@@ -487,15 +487,14 @@ func (s *State) handleV2DownloadLanding(w http.ResponseWriter, r *http.Request) 
 	}
 
 	markNoStore(w)
-	urls := s.buildDownloadURLs(token, auth.FilePath)
+	url := buildDownloadURL(token, auth.FilePath)
 	writeV2Success(w, r, map[string]interface{}{
-		"download_url":  urls[0],
-		"download_urls": urls,
-		"return_url":    auth.ReturnURL,
-		"source":        auth.Source,
-		"file_name":     filepath.Base(auth.FilePath),
-		"file_path":     auth.FilePath,
-		"flow":          auth.Flow,
+		"download_url": url,
+		"return_url":   auth.ReturnURL,
+		"source":       auth.Source,
+		"file_name":    filepath.Base(auth.FilePath),
+		"file_path":    auth.FilePath,
+		"flow":         auth.Flow,
 	}, false)
 }
 
