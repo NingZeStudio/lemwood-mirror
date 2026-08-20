@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"lemwood_mirror/internal/bandwidth"
 	"lemwood_mirror/internal/blacklist"
 	"lemwood_mirror/internal/config"
 	"lemwood_mirror/internal/db"
@@ -47,6 +48,7 @@ type State struct {
 	// 验证码（已移除极验）→ PoW 挑战 + DB 授权
 	powMgr          *pow.Manager
 	authzMgr        *download_authz.Manager
+	bandwidth       *bandwidth.Tracker
 	selfUpdate      *selfupdate.Manager
 	applySelfUpdate func(ctx context.Context) error
 	restartProcess  func() error
@@ -80,6 +82,7 @@ func NewState(base string, projectRoot string, cfg *config.Config) *State {
 		})
 	}
 	s.authzMgr = download_authz.NewManager(parseDuration(cfg.DownloadTokenTTL, 5*time.Minute))
+	s.bandwidth = bandwidth.NewTracker(int64(cfg.BandwidthLimitMbps))
 
 	return s
 }
@@ -526,9 +529,12 @@ func (s *State) Routes(mux *http.ServeMux) {
 		}
 
 		counter := &traffic.CountingWriter{}
+		s.bandwidth.StartDownload()
+		defer s.bandwidth.FinishDownload()
 		countingWriter := &responseWriterCounter{
 			ResponseWriter: w,
 			counter:        counter,
+			recordBytes:    s.bandwidth.RecordBytes,
 		}
 		// token-based URL，禁止中间缓存共享。
 		w.Header().Set("Cache-Control", "private, no-store")
@@ -564,6 +570,8 @@ func (s *State) Routes(mux *http.ServeMux) {
 				StatusCode:      countingWriter.statusCode,
 			}); err != nil {
 				log.Printf("[流量统计] 记录下载事件失败: %v", err)
+			} else {
+				stats.InvalidateSnapshot()
 			}
 		}
 
@@ -583,6 +591,7 @@ func (s *State) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/latest", s.handleV2LatestAll)
 	mux.HandleFunc("/api/v2/latest/", s.handleV2LatestLauncher)
 	mux.HandleFunc("/api/v2/stats", s.handleV2Stats)
+	mux.HandleFunc("/api/v2/bandwidth", s.handleV2Bandwidth)
 	mux.HandleFunc("/api/v2/auth/2fa/status", s.handleV2Auth2FAStatus)
 
 	// 下载：prepare（CLI/API 直发授权）+ PoW 挑战/授权（替代极验浏览器验证）+ landing
@@ -1036,6 +1045,7 @@ type responseWriterCounter struct {
 	counter     *traffic.CountingWriter
 	statusCode  int
 	wroteHeader bool
+	recordBytes func(int64)
 }
 
 func (rw *responseWriterCounter) WriteHeader(statusCode int) {
@@ -1051,6 +1061,9 @@ func (rw *responseWriterCounter) Write(p []byte) (int, error) {
 	}
 	n, err := rw.ResponseWriter.Write(p)
 	rw.counter.Total += int64(n)
+	if n > 0 && rw.recordBytes != nil {
+		rw.recordBytes(int64(n))
+	}
 	return n, err
 }
 

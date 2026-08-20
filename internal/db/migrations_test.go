@@ -60,7 +60,10 @@ func applyMaySchemaOnly(t *testing.T, d *sql.DB) {
 	}
 
 	// 插入历史 ip_daily_traffic 数据（不同 IP、不同日期）
-	rows := []struct{ ip, date string; bytes int64 }{
+	rows := []struct {
+		ip, date string
+		bytes    int64
+	}{
 		{"1.1.1.1", "2026-05-01", 1024},
 		{"2.2.2.2", "2026-05-01", 2048},
 		{"1.1.1.1", "2026-05-02", 4096},
@@ -425,6 +428,51 @@ func TestMigrateV3CompletedTraffic_Idempotent(t *testing.T) {
 	}
 }
 
+func TestRecordDownloadEventAggregatesMatchingDownloads(t *testing.T) {
+	d := setupSQLiteDB(t)
+	prev := DB
+	DB = d
+	isMySQL = false
+	isPostgres = false
+	t.Cleanup(func() { DB = prev })
+	if err := createTables(); err != nil {
+		t.Fatalf("createTables error = %v", err)
+	}
+	event := DownloadEvent{
+		FilePath:    "fcl/1/file.apk",
+		FileName:    "file.apk",
+		Launcher:    "fcl",
+		Version:     "1",
+		ClientIP:    "1.2.3.4",
+		Country:     "CN",
+		BytesServed: 100,
+		Completed:   true,
+		StatusCode:  200,
+		Date:        "2026-08-20",
+	}
+	if err := RecordDownloadEvent(event); err != nil {
+		t.Fatalf("first RecordDownloadEvent error = %v", err)
+	}
+	event.BytesServed = 250
+	if err := RecordDownloadEvent(event); err != nil {
+		t.Fatalf("second RecordDownloadEvent error = %v", err)
+	}
+	var rows, count int64
+	if err := DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(event_count), 0) FROM download_events").Scan(&rows, &count); err != nil {
+		t.Fatalf("query aggregate error = %v", err)
+	}
+	if rows != 1 || count != 2 {
+		t.Fatalf("aggregate rows/count = %d/%d, want 1/2", rows, count)
+	}
+	var bytes int64
+	if err := DB.QueryRow("SELECT bytes_served FROM download_events").Scan(&bytes); err != nil {
+		t.Fatalf("query bytes error = %v", err)
+	}
+	if bytes != 350 {
+		t.Fatalf("aggregate bytes = %d, want 350", bytes)
+	}
+}
+
 func TestRecordCompletedTraffic_Roundtrip(t *testing.T) {
 	d := setupSQLiteDB(t)
 	prev := DB
@@ -660,10 +708,10 @@ func TestDownloadAuthorizationConsumeAndEventRoundtrip(t *testing.T) {
 	// 过期授权不应被消费
 	expired := DownloadAuthorization{
 		AuthorizationID: "auth_2",
-		TokenHash:        "cafebabe",
-		FilePath:         "fcl/1.0.0/a.apk",
-		Status:           "issued",
-		ExpiresAt:        timeNowPlusMinutes(-1), // 已过期
+		TokenHash:       "cafebabe",
+		FilePath:        "fcl/1.0.0/a.apk",
+		Status:          "issued",
+		ExpiresAt:       timeNowPlusMinutes(-1), // 已过期
 	}
 	if err := CreateDownloadAuthorization(expired); err != nil {
 		t.Fatalf("create expired auth error = %v", err)

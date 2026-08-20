@@ -18,7 +18,7 @@
 
 | 接口 | 返回类型 |
 |------|----------|
-| `GET /api/v2/launchers`、`/api/v2/stats` 等查询接口 | `application/json`（统一信封） |
+| `GET /api/v2/launchers`、`/api/v2/stats`、`/api/v2/bandwidth` 等查询接口 | `application/json`（统一信封） |
 | `GET /api/v2/latest/{launcher}` | `text/plain; charset=utf-8`（纯文本，不走信封） |
 | `GET /download/{token}/{file_path}` | `application/octet-stream`（文件流） |
 | `POST /api/v2/admin/scans`、`/api/v2/admin/scans/launcher` | `application/json`（统一信封） |
@@ -364,7 +364,43 @@ GET /api/v2/stats
 | `daily_stats[].traffic_bytes` | int | 当日普通下载流量（字节） |
 | `dropped_records` | int | 因统计写入队列溢出而丢弃的记录数 |
 
-### 2.6 获取验证码配置
+### 2.6 获取服务器带宽状态
+
+```
+GET /api/v2/bandwidth
+```
+
+返回下载响应实际写出字节的滚动带宽状态。该接口不读取历史聚合表，状态保存在内存中，服务重启后累计字节和观测峰值会清零。当前带宽按最近 10 秒内实际写出字节计算。
+
+**响应示例（`data` 字段）：**
+
+```json
+{
+  "peak_bandwidth_mbps": 200,
+  "current_bandwidth_mbps": 38.4,
+  "current_bandwidth_bps": 4800000,
+  "peak_observed_mbps": 96.2,
+  "utilization_percent": 19.2,
+  "active_downloads": 3,
+  "total_bytes_served": 5368709120,
+  "measurement_window_seconds": 10,
+  "updated_at": "2026-08-19T12:00:00Z"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `peak_bandwidth_mbps` | int | 配置的峰值带宽，默认 200 Mbps，对应 `bandwidth_limit_mbps` |
+| `current_bandwidth_mbps` | number | 最近 10 秒实际发送带宽，十进制 Mbps |
+| `current_bandwidth_bps` | int | 最近 10 秒实际发送带宽，字节/秒 |
+| `peak_observed_mbps` | number | 当前进程自启动以来观测到的最高带宽 |
+| `utilization_percent` | number | 当前带宽相对配置峰值的百分比，最高显示 100 |
+| `active_downloads` | int | 当前正在传输的下载请求数 |
+| `total_bytes_served` | int | 当前进程自启动以来实际写出的总字节数 |
+| `measurement_window_seconds` | int | 当前带宽计算窗口，固定为 10 秒 |
+| `updated_at` | string | 状态生成时间，RFC 3339 格式 |
+
+### 2.7 获取验证码配置
 
 ```
 GET /api/v2/captcha/config
@@ -388,7 +424,7 @@ GET /api/v2/captcha/config
 | `enabled` | bool | 是否启用验证码（对应配置 `captcha_enabled`） |
 | `app_id` | string | 极验验证码初始化所需的 App ID |
 
-### 2.7 获取两步验证状态
+### 2.8 获取两步验证状态
 
 ```
 GET /api/v2/auth/2fa/status

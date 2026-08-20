@@ -283,6 +283,15 @@ func (s *State) handleV2Stats(w http.ResponseWriter, r *http.Request) {
 	writeV2Success(w, r, data, true)
 }
 
+// handleV2Bandwidth returns the in-memory rolling bandwidth status for downloads.
+func (s *State) handleV2Bandwidth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
+		return
+	}
+	writeV2Success(w, r, s.bandwidth.Snapshot(), false)
+}
+
 // handleV2PowConfig 返回 PoW 公开参数（算法/迭代数/难度），供客户端预知求解成本，信封包裹。
 func (s *State) handleV2PowConfig(w http.ResponseWriter, r *http.Request) {
 	if s.powMgr == nil {

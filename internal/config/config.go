@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,7 @@ pow_hmac_secret: {{ yaml .PowHMACSecret }}
 download_token_ttl: {{ yaml .DownloadTokenTTL }}
 
 traffic_limit_gb: {{ .TrafficLimitGB }}
+bandwidth_limit_mbps: {{ .BandwidthLimitMbps }}
 ban_record_file: {{ yaml .BanRecordFile }}
 external_blacklist_url: {{ yaml .ExternalBlacklistURL }}
 appeal_contact: {{ yaml .AppealContact }}
@@ -74,6 +76,17 @@ mysql_user: {{ yaml .MySQLUser }}
 mysql_password: {{ yaml .MySQLPassword }}
 mysql_database: {{ yaml .MySQLDatabase }}
 mysql_migration: {{ .MySQLMigration }}
+
+database_mode: {{ yaml .DatabaseMode }}
+
+postgres_host: {{ yaml .PostgresHost }}
+postgres_port: {{ .PostgresPort }}
+postgres_user: {{ yaml .PostgresUser }}
+postgres_password: {{ yaml .PostgresPassword }}
+postgres_database: {{ yaml .PostgresDatabase }}
+postgres_sslmode: {{ yaml .PostgresSSLMode }}
+postgres_migration_batch: {{ .PostgresMigrationBatch }}
+postgres_migration_delay: {{ yaml .PostgresMigrationDelay }}
 
 self_update_enabled: {{ .SelfUpdateEnabled }}
 self_update_repo_url: {{ yaml .SelfUpdateRepoURL }}
@@ -181,6 +194,7 @@ type Config struct {
 	DownloadTokenTTL       string           `json:"download_token_ttl,omitempty" yaml:"download_token_ttl,omitempty"`
 	Launchers              []LauncherConfig `json:"launchers" yaml:"launchers"`
 	TrafficLimitGB         int              `json:"traffic_limit_gb" yaml:"traffic_limit_gb"`
+	BandwidthLimitMbps     int              `json:"bandwidth_limit_mbps" yaml:"bandwidth_limit_mbps"`
 	BanRecordFile          string           `json:"ban_record_file" yaml:"ban_record_file"`
 	ExternalBlacklistURL   string           `json:"external_blacklist_url" yaml:"external_blacklist_url"`
 	AppealContact          string           `json:"appeal_contact" yaml:"appeal_contact"`
@@ -190,6 +204,15 @@ type Config struct {
 	MySQLPassword          string           `json:"mysql_password" yaml:"mysql_password"`
 	MySQLDatabase          string           `json:"mysql_database" yaml:"mysql_database"`
 	MySQLMigration         bool             `json:"mysql_migration" yaml:"mysql_migration"`
+	DatabaseMode           string           `json:"database_mode" yaml:"database_mode"`
+	PostgresHost           string           `json:"postgres_host" yaml:"postgres_host"`
+	PostgresPort           int              `json:"postgres_port" yaml:"postgres_port"`
+	PostgresUser           string           `json:"postgres_user" yaml:"postgres_user"`
+	PostgresPassword       string           `json:"postgres_password" yaml:"postgres_password"`
+	PostgresDatabase       string           `json:"postgres_database" yaml:"postgres_database"`
+	PostgresSSLMode        string           `json:"postgres_sslmode" yaml:"postgres_sslmode"`
+	PostgresMigrationBatch int              `json:"postgres_migration_batch" yaml:"postgres_migration_batch"`
+	PostgresMigrationDelay string           `json:"postgres_migration_delay" yaml:"postgres_migration_delay"`
 	SelfUpdateEnabled      bool             `json:"self_update_enabled" yaml:"self_update_enabled"`
 	SelfUpdateRepoURL      string           `json:"self_update_repo_url" yaml:"self_update_repo_url"`
 	SelfUpdateChannel      string           `json:"self_update_channel" yaml:"self_update_channel"`
@@ -210,9 +233,15 @@ func DefaultConfig() *Config {
 		AdminMaxRetries:        10,
 		AdminLockDuration:      120,
 		TrafficLimitGB:         0,
+		BandwidthLimitMbps:     200,
 		BanRecordFile:          "banned_ips.txt",
 		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
+		PostgresPort:           5432,
+		PostgresSSLMode:        "disable",
+		PostgresMigrationBatch: 200,
+		PostgresMigrationDelay: "250ms",
+		DatabaseMode:           "auto",
 		SelfUpdateEnabled:      true,
 		SelfUpdateChannel:      string(SelfUpdateChannelRelease),
 		SelfUpdateCheckCron:    "0 */6 * * *",
@@ -352,6 +381,9 @@ func NormalizeConfig(cfg *Config) error {
 	if cfg.TrafficLimitGB < 0 {
 		cfg.TrafficLimitGB = 5
 	}
+	if cfg.BandwidthLimitMbps <= 0 {
+		cfg.BandwidthLimitMbps = 200
+	}
 	if cfg.BanRecordFile == "" {
 		cfg.BanRecordFile = "banned_ips.txt"
 	}
@@ -375,6 +407,31 @@ func NormalizeConfig(cfg *Config) error {
 	}
 	if cfg.DownloadTokenTTL == "" {
 		cfg.DownloadTokenTTL = "10m"
+	}
+	if cfg.PostgresPort <= 0 {
+		cfg.PostgresPort = 5432
+	}
+	if cfg.PostgresSSLMode == "" {
+		cfg.PostgresSSLMode = "disable"
+	}
+	if cfg.PostgresMigrationBatch <= 0 {
+		cfg.PostgresMigrationBatch = 200
+	}
+	if cfg.PostgresMigrationDelay == "" {
+		cfg.PostgresMigrationDelay = "250ms"
+	}
+	if delay, err := time.ParseDuration(cfg.PostgresMigrationDelay); err != nil || delay < 0 {
+		return fmt.Errorf("无效的 postgres_migration_delay %q", cfg.PostgresMigrationDelay)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.DatabaseMode)) {
+	case "", "auto":
+		cfg.DatabaseMode = "auto"
+	case "sqlite", "mysql", "pgsql":
+		cfg.DatabaseMode = strings.ToLower(strings.TrimSpace(cfg.DatabaseMode))
+	case "postgres", "postgresql":
+		cfg.DatabaseMode = "pgsql"
+	default:
+		return fmt.Errorf("无效的 database_mode %q，需要 auto、sqlite、mysql 或 pgsql", cfg.DatabaseMode)
 	}
 	return nil
 }

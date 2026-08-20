@@ -1,4 +1,4 @@
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 WORKDIR /src
 COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
 COPY admin-app/package.json admin-app/pnpm-lock.yaml ./admin-app/
@@ -9,7 +9,7 @@ COPY admin-app/ ./admin-app/
 RUN cd frontend && pnpm build
 RUN cd admin-app && pnpm build
 
-FROM golang:1.24-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

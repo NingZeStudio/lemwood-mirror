@@ -1,105 +1,190 @@
-name: Go Build and Package
+name: Test, Build and Release
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - '*'
+    branches: [main]
+    tags: ['*']
   pull_request:
-    branches:
-      - main
+    branches: [main]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.12.4'
 
 jobs:
-  build:
+  go-check:
+    name: Go test and vet
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Test
+        run: go test ./... -count=1 -timeout 120s
+
+      - name: Vet
+        run: go vet ./...
+
+  frontend-assets:
+    name: Build embedded frontends
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            admin-app/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend types
+        working-directory: frontend
+        run: pnpm typecheck
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm build
+
+      - name: Install admin dependencies
+        working-directory: admin-app
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint admin frontend
+        working-directory: admin-app
+        run: pnpm lint
+
+      - name: Build admin frontend
+        working-directory: admin-app
+        run: pnpm build
+
+      - name: Upload embedded assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedded-assets
+          path: web
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.label }}
+    needs: [go-check, frontend-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
           - { goos: windows, goarch: amd64, label: amd64, extension: .exe, archive: zip }
           - { goos: windows, goarch: arm64, label: arm64, extension: .exe, archive: zip }
-          - { goos: windows, goarch: "386", label: x86, extension: .exe, archive: zip }
-          - { goos: linux, goarch: amd64, label: amd64, extension: "", archive: tar.gz }
-          - { goos: linux, goarch: arm64, label: arm64, extension: "", archive: tar.gz }
-          - { goos: linux, goarch: "386", label: x86, extension: "", archive: tar.gz }
-
+          - { goos: windows, goarch: '386', label: x86, extension: .exe, archive: zip }
+          - { goos: linux, goarch: amd64, label: amd64, extension: '', archive: tar.gz }
+          - { goos: linux, goarch: arm64, label: arm64, extension: '', archive: tar.gz }
+          - { goos: linux, goarch: '386', label: x86, extension: '', archive: tar.gz }
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.24'
+      - name: Download embedded assets
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-assets
+          path: web
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-    - name: Set up pnpm
-      uses: pnpm/action-setup@v4
-      with:
-        version: 10.12.4
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          binary="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
+          go build -trimpath -ldflags "-s -w -X main.Version=${GITHUB_REF_NAME}" -o "$binary" ./cmd/mirror
 
-    - name: Install frontend dependencies
-      run: pnpm install --frozen-lockfile=false
-      working-directory: ./frontend
+      - name: Package artifact
+        run: |
+          binary="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
+          archive="mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            zip -q "$archive" "$binary"
+          else
+            tar -czf "$archive" "$binary"
+          fi
 
-    - name: Build frontend
-      run: pnpm build
-      working-directory: ./frontend
+      - name: Upload packaged artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.goos }}-${{ matrix.label }}
+          path: mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
 
-    - name: Install admin dependencies
-      run: pnpm install --frozen-lockfile=false
-      working-directory: ./admin-app
+      - name: Upload release artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.label }}
+          path: |
+            mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}
+            mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
 
-    - name: Build admin frontend
-      run: pnpm build
-      working-directory: ./admin-app
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
 
-    - name: Test
-      run: go test ./... -count=1 -timeout 120s
-
-    - name: Build binary
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 0
-      run: |
-        BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
-        VERSION="${{ github.ref_name }}"
-        go build -ldflags "-s -w -X main.Version=${VERSION}" -o "$BINARY_NAME" ./cmd/mirror
-
-    - name: Package Artifact (Windows)
-      if: matrix.archive == 'zip'
-      run: |
-        BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
-        PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.zip"
-        zip -r "$PKG_NAME" "$BINARY_NAME"
-
-    - name: Package Artifact (Linux)
-      if: matrix.archive == 'tar.gz'
-      run: |
-        BINARY_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}"
-        PKG_NAME="mirror-${{ matrix.goos }}-${{ matrix.label }}.tar.gz"
-        tar -czvf "$PKG_NAME" "$BINARY_NAME"
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: mirror-${{ matrix.goos }}-${{ matrix.label }}
-        path: mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
-
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          mirror-${{ matrix.goos }}-${{ matrix.label }}${{ matrix.extension }}
-          mirror-${{ matrix.goos }}-${{ matrix.label }}.${{ matrix.archive }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/mirror-*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

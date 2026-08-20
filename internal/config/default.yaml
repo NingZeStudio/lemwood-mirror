@@ -123,6 +123,9 @@ download_token_ttl: "10m"
 # 单 IP 每日下载流量上限（GB），设为 0 表示不限制，负值自动修正为 5GB
 traffic_limit_gb: 0
 
+# 服务器峰值带宽（Mbps），用于带宽状态接口的利用率计算
+bandwidth_limit_mbps: 200
+
 # 被封禁 IP 的记录文件路径（默认 banned_ips.txt）
 ban_record_file: "banned_ips.txt"
 
@@ -154,6 +157,20 @@ mysql_database: ""
 
 # 是否启用从 SQLite 到 MySQL 的自动数据迁移
 mysql_migration: false
+
+# 数据库模式：auto / sqlite / mysql / pgsql。
+# pgsql 模式启动时会优先从 MySQL 清洗迁移，MySQL 不可用时回退本地 SQLite。
+database_mode: "auto"
+
+# PostgreSQL 设置（postgres_host 非空时优先使用 PostgreSQL）
+postgres_host: ""
+postgres_port: 5432
+postgres_user: ""
+postgres_password: ""
+postgres_database: ""
+postgres_sslmode: "disable"
+postgres_migration_batch: 200
+postgres_migration_delay: "250ms"
 
 # -----------------------------------------------------------------------------
 # 自更新设置

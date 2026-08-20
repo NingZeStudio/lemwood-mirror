@@ -12,32 +12,87 @@ import (
 	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
 var (
-	DB      *sql.DB
-	isMySQL bool
+	DB         *sql.DB
+	isMySQL    bool
+	isPostgres bool
 )
 
 func IsMySQL() bool {
 	return isMySQL
 }
 
+func IsPostgres() bool { return isPostgres }
+
+// Rebind converts the project's portable ? placeholders to PostgreSQL $n.
+// It is exported for packages issuing read/write queries outside db.go.
+func Rebind(query string) string { return rebind(query) }
+
+func rebind(query string) string {
+	if !isPostgres {
+		return query
+	}
+	result := make([]byte, 0, len(query)+8)
+	n := 0
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			n++
+			result = append(result, '$')
+			result = append(result, fmt.Sprintf("%d", n)...)
+			continue
+		}
+		result = append(result, query[i])
+	}
+	return string(result)
+}
+
 func InitDB(storagePath string, cfg *config.Config) error {
 	dbPath := filepath.Join(storagePath, "stats.db")
+	mode := strings.ToLower(strings.TrimSpace(cfg.DatabaseMode))
+	if mode == "" {
+		mode = "auto"
+	}
+	usePostgres := mode == "pgsql" || (mode == "auto" && cfg.PostgresHost != "")
+	useMySQL := mode == "mysql" || (mode == "auto" && cfg.PostgresHost == "" && cfg.MySQLHost != "")
 
-	// 检查是否启用 MySQL
-	if cfg.MySQLHost != "" {
+	if usePostgres {
+		if cfg.PostgresUser == "" || cfg.PostgresDatabase == "" || cfg.PostgresPort <= 0 {
+			return fmt.Errorf("PostgreSQL 配置不完整: 必须提供 host, user, database 和有效的 port")
+		}
+		isMySQL = false
+		isPostgres = true
+		sslMode := cfg.PostgresSSLMode
+		if sslMode == "" {
+			sslMode = "disable"
+		}
+		dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s", cfg.PostgresUser, cfg.PostgresPassword, cfg.PostgresHost, cfg.PostgresPort, cfg.PostgresDatabase, sslMode)
+		var err error
+		DB, err = sql.Open("pgx", dsn)
+		if err != nil {
+			return fmt.Errorf("打开 PostgreSQL 失败: %w", err)
+		}
+		if err := DB.Ping(); err != nil {
+			return fmt.Errorf("连接 PostgreSQL 失败: %w", err)
+		}
+		DB.SetMaxOpenConns(2)
+		DB.SetMaxIdleConns(1)
+		DB.SetConnMaxLifetime(time.Hour)
+		DB.SetConnMaxIdleTime(30 * time.Minute)
+	} else if useMySQL {
 		// 验证 MySQL 配置完整性
 		if cfg.MySQLUser == "" || cfg.MySQLDatabase == "" || cfg.MySQLPort <= 0 {
 			return fmt.Errorf("MySQL 配置不完整: 必须提供 host, user, database 和有效的 port")
 		}
 
 		isMySQL = true
+		isPostgres = false
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&timeout=30s&readTimeout=30s&writeTimeout=30s",
 			cfg.MySQLUser, cfg.MySQLPassword, cfg.MySQLHost, cfg.MySQLPort, cfg.MySQLDatabase)
-		
+
 		var err error
 		DB, err = sql.Open("mysql", dsn)
 		if err != nil {
@@ -72,6 +127,7 @@ func InitDB(storagePath string, cfg *config.Config) error {
 	} else {
 		// 使用 SQLite
 		isMySQL = false
+		isPostgres = false
 		// 确保目录存在
 		if err := os.MkdirAll(storagePath, 0755); err != nil {
 			return fmt.Errorf("创建数据库目录失败: %w", err)
@@ -104,7 +160,15 @@ func InitDB(storagePath string, cfg *config.Config) error {
 		return fmt.Errorf("连接数据库失败: %w", err)
 	}
 
-	return createTables()
+	if err := createTables(); err != nil {
+		return err
+	}
+	if mode == "pgsql" {
+		if err := migratePostgresFromConfiguredSources(storagePath, cfg); err != nil {
+			return fmt.Errorf("pgsql 数据迁移失败: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateFromSQLite(sqlitePath string) error {
@@ -122,7 +186,7 @@ func migrateFromSQLite(sqlitePath string) error {
 	// 2. 迁移数据
 	// 注意：stats_snapshot 是缓存表（id=1, data, updated_at），由统计模块重建，不参与数据迁移。
 	// repo 镜像功能已移除，repo_downloads / repo_ip_daily_traffic / daily_repo_traffic 不再迁移。
-		tables := []string{"visits", "downloads", "ip_blacklist", "ip_daily_traffic", "daily_traffic", "daily_completed_traffic", "download_authorizations", "download_events", "system_info"}
+	tables := []string{"visits", "downloads", "ip_blacklist", "ip_daily_traffic", "daily_traffic", "daily_completed_traffic", "download_authorizations", "download_events", "system_info"}
 	for _, table := range tables {
 		if err := migrateTable(sqliteDB, DB, table); err != nil {
 			return fmt.Errorf("迁移表 %s 失败: %w", table, err)
@@ -195,7 +259,7 @@ func migrateTable(src, dst *sql.DB, tableName string) error {
 			if val == nil {
 				continue
 			}
-			
+
 			var strVal string
 			switch v := val.(type) {
 			case []byte:
@@ -229,6 +293,33 @@ func migrateTable(src, dst *sql.DB, tableName string) error {
 }
 
 func createTables() error {
+	if isPostgres {
+		for _, query := range postgresTableQueries {
+			if _, err := DB.Exec(query); err != nil {
+				return fmt.Errorf("创建 PostgreSQL 表/索引失败: %w, query: %s", err, query)
+			}
+		}
+		for _, query := range []string{
+			`ALTER TABLE visits ADD COLUMN IF NOT EXISTS visit_count BIGINT NOT NULL DEFAULT 1`,
+			`ALTER TABLE download_events ADD COLUMN IF NOT EXISTS event_count BIGINT NOT NULL DEFAULT 1`,
+			`ALTER TABLE visits ADD COLUMN IF NOT EXISTS aggregate_key TEXT`,
+			`ALTER TABLE download_events ADD COLUMN IF NOT EXISTS aggregate_key TEXT`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS uq_visits_aggregate_key ON visits(aggregate_key)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS uq_dlevents_aggregate_key ON download_events(aggregate_key)`,
+		} {
+			if _, err := DB.Exec(query); err != nil {
+				return fmt.Errorf("补充 PostgreSQL 统计计数列失败: %w, query: %s", err, query)
+			}
+		}
+		startTime := time.Now().UTC().Format("2006-01-02 15:04:05")
+		if _, err := DB.Exec(`INSERT INTO system_info ("key", value) VALUES ($1, $2) ON CONFLICT ("key") DO NOTHING`, "start_time", startTime); err != nil {
+			return fmt.Errorf("记录系统启动时间失败: %w", err)
+		}
+		if _, err := DB.Exec(`INSERT INTO system_info ("key", value) VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET value = EXCLUDED.value`, "schema_version", fmt.Sprintf("%d", CurrentSchemaVersion)); err != nil {
+			return fmt.Errorf("记录 PostgreSQL schema 版本失败: %w", err)
+		}
+		return nil
+	}
 	var queries []string
 	if isMySQL {
 		queries = []string{
@@ -241,6 +332,8 @@ func createTables() error {
                 country VARCHAR(255),
                 region VARCHAR(255),
                 city VARCHAR(255),
+                visit_count BIGINT NOT NULL DEFAULT 1,
+                aggregate_key VARCHAR(64),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE TABLE IF NOT EXISTS downloads (
@@ -266,7 +359,7 @@ func createTables() error {
                 PRIMARY KEY (ip, date)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 			`CREATE INDEX idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
-		`CREATE TABLE IF NOT EXISTS daily_traffic (
+			`CREATE TABLE IF NOT EXISTS daily_traffic (
                 date VARCHAR(20) PRIMARY KEY,
                 bytes_downloaded BIGINT DEFAULT 0
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -274,7 +367,7 @@ func createTables() error {
                 date VARCHAR(20) PRIMARY KEY,
                 bytes_downloaded BIGINT DEFAULT 0
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS download_authorizations (
+			`CREATE TABLE IF NOT EXISTS download_authorizations (
                 authorization_id VARCHAR(64) PRIMARY KEY,
                 token_hash VARCHAR(64) NOT NULL,
                 file_path TEXT NOT NULL,
@@ -293,7 +386,7 @@ func createTables() error {
                 consumed_at DATETIME,
                 UNIQUE KEY uq_dlauthz_token_hash (token_hash)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-		`CREATE TABLE IF NOT EXISTS download_events (
+			`CREATE TABLE IF NOT EXISTS download_events (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 authorization_id VARCHAR(64),
                 file_path TEXT,
@@ -304,6 +397,8 @@ func createTables() error {
                 country VARCHAR(255),
                 bytes_served BIGINT DEFAULT 0,
                 completed INT DEFAULT 0,
+                event_count BIGINT NOT NULL DEFAULT 1,
+                aggregate_key VARCHAR(64),
                 status_code INT,
                 date VARCHAR(20),
                 source VARCHAR(32),
@@ -326,10 +421,10 @@ func createTables() error {
 			`CREATE INDEX idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX idx_downloads_launcher_version ON downloads(launcher, version)`,
-		`CREATE INDEX idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
-		`CREATE INDEX idx_dlevents_ip_date ON download_events(client_ip, date)`,
-		`CREATE INDEX idx_dlevents_date ON download_events(date)`,
-		`CREATE INDEX idx_dlevents_launcher ON download_events(launcher)`,
+			`CREATE INDEX idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
+			`CREATE INDEX idx_dlevents_ip_date ON download_events(client_ip, date)`,
+			`CREATE INDEX idx_dlevents_date ON download_events(date)`,
+			`CREATE INDEX idx_dlevents_launcher ON download_events(launcher)`,
 		}
 	} else {
 		queries = []string{
@@ -342,6 +437,8 @@ func createTables() error {
                 country TEXT,
                 region TEXT,
                 city TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 1,
+                aggregate_key TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )`,
 			`CREATE TABLE IF NOT EXISTS downloads (
@@ -367,7 +464,7 @@ func createTables() error {
                 PRIMARY KEY (ip, date)
             )`,
 			`CREATE INDEX IF NOT EXISTS idx_ip_daily_traffic_date ON ip_daily_traffic(date)`,
-		`CREATE TABLE IF NOT EXISTS daily_traffic (
+			`CREATE TABLE IF NOT EXISTS daily_traffic (
                 date TEXT PRIMARY KEY,
                 bytes_downloaded INTEGER DEFAULT 0
             )`,
@@ -375,7 +472,7 @@ func createTables() error {
                 date TEXT PRIMARY KEY,
                 bytes_downloaded INTEGER DEFAULT 0
             )`,
-		`CREATE TABLE IF NOT EXISTS download_authorizations (
+			`CREATE TABLE IF NOT EXISTS download_authorizations (
                 authorization_id TEXT PRIMARY KEY,
                 token_hash TEXT NOT NULL UNIQUE,
                 file_path TEXT NOT NULL,
@@ -393,7 +490,7 @@ func createTables() error {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 consumed_at DATETIME
             )`,
-		`CREATE TABLE IF NOT EXISTS download_events (
+			`CREATE TABLE IF NOT EXISTS download_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 authorization_id TEXT,
                 file_path TEXT,
@@ -404,6 +501,8 @@ func createTables() error {
                 country TEXT,
                 bytes_served INTEGER DEFAULT 0,
                 completed INTEGER DEFAULT 0,
+                event_count INTEGER NOT NULL DEFAULT 1,
+                aggregate_key TEXT,
                 status_code INTEGER,
                 date TEXT,
                 source TEXT,
@@ -426,10 +525,10 @@ func createTables() error {
 			`CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_file_name ON downloads(file_name)`,
 			`CREATE INDEX IF NOT EXISTS idx_downloads_launcher_version ON downloads(launcher, version)`,
-		`CREATE INDEX IF NOT EXISTS idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_dlevents_ip_date ON download_events(client_ip, date)`,
-		`CREATE INDEX IF NOT EXISTS idx_dlevents_date ON download_events(date)`,
-		`CREATE INDEX IF NOT EXISTS idx_dlevents_launcher ON download_events(launcher)`,
+			`CREATE INDEX IF NOT EXISTS idx_dlauthz_status_expires ON download_authorizations(status, expires_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_dlevents_ip_date ON download_events(client_ip, date)`,
+			`CREATE INDEX IF NOT EXISTS idx_dlevents_date ON download_events(date)`,
+			`CREATE INDEX IF NOT EXISTS idx_dlevents_launcher ON download_events(launcher)`,
 		}
 	}
 
@@ -472,7 +571,7 @@ func createTables() error {
 
 func IsIPBlacklisted(ip string) bool {
 	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM ip_blacklist WHERE ip = ?", ip).Scan(&count)
+	err := DB.QueryRow(rebind("SELECT COUNT(*) FROM ip_blacklist WHERE ip = ?"), ip).Scan(&count)
 	if err != nil {
 		return false
 	}
@@ -481,7 +580,7 @@ func IsIPBlacklisted(ip string) bool {
 
 func GetIPBlacklistInfo(ip string) (bool, string, error) {
 	var createdAtRaw interface{}
-	err := DB.QueryRow("SELECT created_at FROM ip_blacklist WHERE ip = ?", ip).Scan(&createdAtRaw)
+	err := DB.QueryRow(rebind("SELECT created_at FROM ip_blacklist WHERE ip = ?"), ip).Scan(&createdAtRaw)
 	if err == sql.ErrNoRows {
 		return false, "", nil
 	}
@@ -495,10 +594,12 @@ func AddIPToBlacklist(ip, reason string) error {
 	var query string
 	if isMySQL {
 		query = "INSERT INTO ip_blacklist (ip, reason) VALUES (?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason)"
+	} else if isPostgres {
+		query = `INSERT INTO ip_blacklist (ip, reason) VALUES (?, ?) ON CONFLICT (ip) DO UPDATE SET reason = EXCLUDED.reason`
 	} else {
 		query = "INSERT OR REPLACE INTO ip_blacklist (ip, reason) VALUES (?, ?)"
 	}
-	_, err := DB.Exec(query, ip, reason)
+	_, err := DB.Exec(rebind(query), ip, reason)
 	return err
 }
 
@@ -509,11 +610,11 @@ func RemoveIPFromBlacklist(ip string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM ip_blacklist WHERE ip = ?", ip); err != nil {
+	if _, err := tx.Exec(rebind("DELETE FROM ip_blacklist WHERE ip = ?"), ip); err != nil {
 		return err
 	}
 
-	if _, err := tx.Exec("DELETE FROM ip_daily_traffic WHERE ip = ?", ip); err != nil {
+	if _, err := tx.Exec(rebind("DELETE FROM ip_daily_traffic WHERE ip = ?"), ip); err != nil {
 		return err
 	}
 
@@ -595,10 +696,12 @@ func AddIPToBlacklistWithSource(ip, reason, source, banType string) error {
 	var query string
 	if isMySQL {
 		query = "INSERT INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason), source = VALUES(source), ban_type = VALUES(ban_type)"
+	} else if isPostgres {
+		query = `INSERT INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, ?, ?) ON CONFLICT (ip) DO UPDATE SET reason = EXCLUDED.reason, source = EXCLUDED.source, ban_type = EXCLUDED.ban_type`
 	} else {
 		query = "INSERT OR REPLACE INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, ?, ?)"
 	}
-	_, err := DB.Exec(query, ip, reason, source, banType)
+	_, err := DB.Exec(rebind(query), ip, reason, source, banType)
 	return err
 }
 
@@ -609,6 +712,10 @@ func RecordTraffic(ip string, bytes int64) error {
 		query = `
 			INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
 			ON DUPLICATE KEY UPDATE bytes_downloaded = bytes_downloaded + VALUES(bytes_downloaded)`
+	} else if isPostgres {
+		query = `
+			INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
+			ON CONFLICT (ip, date) DO UPDATE SET bytes_downloaded = ip_daily_traffic.bytes_downloaded + EXCLUDED.bytes_downloaded`
 	} else {
 		query = `
 			INSERT INTO ip_daily_traffic (ip, date, bytes_downloaded) VALUES (?, ?, ?)
@@ -617,9 +724,9 @@ func RecordTraffic(ip string, bytes int64) error {
 
 	var err error
 	if isMySQL {
-		_, err = DB.Exec(query, ip, date, bytes)
+		_, err = DB.Exec(rebind(query), ip, date, bytes)
 	} else {
-		_, err = DB.Exec(query, ip, date, bytes, bytes)
+		_, err = DB.Exec(rebind(query), ip, date, bytes, bytes)
 	}
 	if err != nil {
 		return err
@@ -644,6 +751,10 @@ func updateDailyTrafficAggregate(table, date string, bytes int64) error {
 		query = fmt.Sprintf(`
 			INSERT INTO %s (date, bytes_downloaded) VALUES (?, ?)
 			ON DUPLICATE KEY UPDATE bytes_downloaded = bytes_downloaded + VALUES(bytes_downloaded)`, table)
+	} else if isPostgres {
+		query = fmt.Sprintf(`
+			INSERT INTO %s (date, bytes_downloaded) VALUES (?, ?)
+			ON CONFLICT (date) DO UPDATE SET bytes_downloaded = %s.bytes_downloaded + EXCLUDED.bytes_downloaded`, table, table)
 	} else {
 		query = fmt.Sprintf(`
 			INSERT INTO %s (date, bytes_downloaded) VALUES (?, ?)
@@ -651,10 +762,10 @@ func updateDailyTrafficAggregate(table, date string, bytes int64) error {
 	}
 
 	if isMySQL {
-		_, err := DB.Exec(query, date, bytes)
+		_, err := DB.Exec(rebind(query), date, bytes)
 		return err
 	}
-	_, err := DB.Exec(query, date, bytes, bytes)
+	_, err := DB.Exec(rebind(query), date, bytes, bytes)
 	return err
 }
 
@@ -665,7 +776,7 @@ func GetDailyTraffic(ip string) (int64, error) {
 
 func GetTrafficOnDate(ip string, date string) (int64, error) {
 	var bytes int64
-	err := DB.QueryRow("SELECT bytes_downloaded FROM ip_daily_traffic WHERE ip = ? AND date = ?", ip, date).Scan(&bytes)
+	err := DB.QueryRow(rebind("SELECT bytes_downloaded FROM ip_daily_traffic WHERE ip = ? AND date = ?"), ip, date).Scan(&bytes)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -688,7 +799,7 @@ func GetTotalTraffic() (int64, error) {
 // GetDailyTrafficStats 返回最近 N 天每日普通下载流量，从无 IP 聚合表查询
 func GetDailyTrafficStats(days int) ([]DailyTrafficStat, error) {
 	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_traffic WHERE date >= ? ORDER BY date", threshold)
+	rows, err := DB.Query(rebind("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_traffic WHERE date >= ? ORDER BY date"), threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +825,7 @@ func GetTotalCompletedTraffic() (int64, error) {
 // GetDailyCompletedTrafficStats 返回最近 N 天每日完整传输流量，从 daily_completed_traffic 聚合表查询
 func GetDailyCompletedTrafficStats(days int) ([]DailyTrafficStat, error) {
 	threshold := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-	rows, err := DB.Query("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_completed_traffic WHERE date >= ? ORDER BY date", threshold)
+	rows, err := DB.Query(rebind("SELECT date, COALESCE(bytes_downloaded, 0) FROM daily_completed_traffic WHERE date >= ? ORDER BY date"), threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -734,7 +845,7 @@ func GetDailyCompletedTrafficStats(days int) ([]DailyTrafficStat, error) {
 // 超过 24 小时的记录（即 date < 今天），IP 级数据仅保留当日用于防刷墙。
 func CleanupOldTrafficRecords() (int64, error) {
 	today := time.Now().Format("2006-01-02")
-	res, err := DB.Exec("DELETE FROM ip_daily_traffic WHERE date < ?", today)
+	res, err := DB.Exec(rebind("DELETE FROM ip_daily_traffic WHERE date < ?"), today)
 	if err != nil {
 		return 0, err
 	}
@@ -751,6 +862,8 @@ func AddExternalBlacklist(ips []string) error {
 	var query string
 	if isMySQL {
 		query = "INSERT IGNORE INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, 'external', 'manual')"
+	} else if isPostgres {
+		query = "INSERT INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, 'external', 'manual') ON CONFLICT (ip) DO NOTHING"
 	} else {
 		query = "INSERT OR IGNORE INTO ip_blacklist (ip, reason, source, ban_type) VALUES (?, ?, 'external', 'manual')"
 	}
@@ -773,4 +886,3 @@ func AddExternalBlacklist(ips []string) error {
 
 	return tx.Commit()
 }
-

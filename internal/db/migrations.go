@@ -9,7 +9,7 @@ import (
 
 // CurrentSchemaVersion 是当前代码所期望的最新 schema 版本。
 // 每次新增 Migration 时递增此常量。
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 6
 
 // Migration 描述一个版本化的数据库迁移步骤。
 // Version 必须严格递增；Up 在已应用更低版本的迁移后被调用。
@@ -43,12 +43,26 @@ var migrations = []Migration{
 		Description: "新建下载授权与下载事件状态表，并从 downloads 回填历史事件",
 		Up:          migrateV4DownloadStatusTables,
 	},
+	{
+		Version:     5,
+		Description: "为统计聚合行增加访问/下载计数列",
+		Up:          migrateV5StatsCounts,
+	},
+	{
+		Version:     6,
+		Description: "增加运行时统计聚合键，后续访问和下载按键累加",
+		Up:          migrateV6AggregateKeys,
+	},
 }
 
 // getSchemaVersion 从 system_info 表读取 schema_version，缺失视为 0。
 func getSchemaVersion() (int, error) {
 	var version int
-	err := DB.QueryRow("SELECT value FROM system_info WHERE `key` = ?", "schema_version").Scan(&version)
+	key := "`key`"
+	if isPostgres {
+		key = `"key"`
+	}
+	err := DB.QueryRow(rebind("SELECT value FROM system_info WHERE "+key+" = ?"), "schema_version").Scan(&version)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -63,10 +77,16 @@ func setSchemaVersion(version int) error {
 	var query string
 	if isMySQL {
 		query = "INSERT INTO system_info (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)"
+	} else if isPostgres {
+		query = `INSERT INTO system_info ("key", value) VALUES (?, ?) ON CONFLICT ("key") DO UPDATE SET value = EXCLUDED.value`
 	} else {
 		query = "INSERT OR REPLACE INTO system_info (key, value) VALUES (?, ?)"
 	}
-	if _, err := DB.Exec(query, "schema_version", version); err != nil {
+	versionValue := any(version)
+	if isPostgres {
+		versionValue = fmt.Sprintf("%d", version)
+	}
+	if _, err := DB.Exec(rebind(query), "schema_version", versionValue); err != nil {
 		return fmt.Errorf("写入 schema_version=%d 失败: %w", version, err)
 	}
 	return nil
@@ -157,6 +177,122 @@ func migrateV1SchemaBaseline(d *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateV5StatsCounts(d *sql.DB) error {
+	for table, column := range map[string]string{
+		"visits":          "visit_count",
+		"download_events": "event_count",
+	} {
+		if !tableExists(d, table) {
+			continue
+		}
+		exists, err := columnExists(d, table, column)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		typeName := "INTEGER"
+		if isMySQL || isPostgres {
+			typeName = "BIGINT"
+		}
+		if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s NOT NULL DEFAULT 1", table, column, typeName)); err != nil {
+			return fmt.Errorf("添加 %s.%s 失败: %w", table, column, err)
+		}
+	}
+	return nil
+}
+
+func migrateV6AggregateKeys(d *sql.DB) error {
+	for table, column := range map[string]string{
+		"visits":          "aggregate_key",
+		"download_events": "aggregate_key",
+	} {
+		if !tableExists(d, table) {
+			continue
+		}
+		exists, err := columnExists(d, table, column)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			typeName := "TEXT"
+			if isMySQL {
+				typeName = "VARCHAR(64)"
+			}
+			if _, err := d.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, typeName)); err != nil {
+				return fmt.Errorf("添加 %s.%s 失败: %w", table, column, err)
+			}
+		}
+	}
+
+	indexQueries := make([]string, 0, 2)
+	if tableExists(d, "visits") {
+		indexQueries = append(indexQueries, "CREATE UNIQUE INDEX uq_visits_aggregate_key ON visits(aggregate_key)")
+	}
+	if tableExists(d, "download_events") {
+		indexQueries = append(indexQueries, "CREATE UNIQUE INDEX uq_dlevents_aggregate_key ON download_events(aggregate_key)")
+	}
+	if !isMySQL && !isPostgres {
+		for i := range indexQueries {
+			indexQueries[i] = strings.Replace(indexQueries[i], "CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1)
+		}
+	} else if isPostgres {
+		for i := range indexQueries {
+			indexQueries[i] = strings.Replace(indexQueries[i], "CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1)
+		}
+	}
+	for _, query := range indexQueries {
+		if _, err := d.Exec(query); err != nil {
+			if isMySQL && isDuplicateIndexErr(err) {
+				continue
+			}
+			return fmt.Errorf("创建聚合键索引失败: %w, query: %s", err, query)
+		}
+	}
+	return nil
+}
+
+func tableExists(d *sql.DB, table string) bool {
+	if isMySQL {
+		var n int
+		return d.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?", table).Scan(&n) == nil && n > 0
+	}
+	if isPostgres {
+		var n int
+		return d.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=$1", table).Scan(&n) == nil && n > 0
+	}
+	var n int
+	return d.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&n) == nil && n > 0
+}
+
+func columnExists(d *sql.DB, table, column string) (bool, error) {
+	if isMySQL {
+		var n int
+		err := d.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?`, table, column).Scan(&n)
+		return n > 0, err
+	}
+	if isPostgres {
+		var n int
+		err := d.QueryRow(`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2`, table, column).Scan(&n)
+		return n > 0, err
+	}
+	rows, err := d.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typeName string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typeName, &notnull, &defaultValue, &pk); err == nil && name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // migrateV2AggregateTraffic 将 ip_daily_traffic 历史数据

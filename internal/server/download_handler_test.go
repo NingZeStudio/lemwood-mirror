@@ -242,6 +242,33 @@ func TestDownloadHandlerRecordsCompletedTrafficOnFullDownload(t *testing.T) {
 	}
 }
 
+func TestBandwidthEndpointReportsServedBytes(t *testing.T) {
+	cfg := &config.Config{PowEnabled: false, BandwidthLimitMbps: 200}
+	_, handler, path := setupDownloadHandlerState(t, cfg, 1, "hello")
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download status = %d, want 200", rec.Code)
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v2/bandwidth", nil)
+	statusRec := httptest.NewRecorder()
+	handler.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("bandwidth status = %d, want 200", statusRec.Code)
+	}
+	data := unwrapV2Envelope(t, statusRec.Body.Bytes())
+	if got := int64(data["total_bytes_served"].(float64)); got != 5 {
+		t.Fatalf("total bytes served = %d, want 5", got)
+	}
+	if got := int64(data["peak_bandwidth_mbps"].(float64)); got != 200 {
+		t.Fatalf("peak bandwidth = %d, want 200", got)
+	}
+}
+
 // 客户端中止的部分传输：served 口径仍记录已写出字节（防刷墙），
 // 但完整传输（展示）口径不应计入。
 func TestDownloadHandlerDoesNotRecordCompletedTrafficOnAbort(t *testing.T) {

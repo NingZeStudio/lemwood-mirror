@@ -65,7 +65,7 @@ const (
 
 func scanCount(label, query string) int64 {
 	var n int64
-	if err := db.DB.QueryRow(query).Scan(&n); err != nil {
+	if err := db.DB.QueryRow(db.Rebind(query)).Scan(&n); err != nil {
 		log.Printf("[Stats] %s 查询失败: %v", label, err)
 		return 0
 	}
@@ -157,6 +157,14 @@ func CloseWritePool() {
 	}
 }
 
+// InvalidateSnapshot forces the next stats request to refresh from the DB.
+func InvalidateSnapshot() {
+	snapshotMu.Lock()
+	lastSnapshot = nil
+	lastSnapshotTime = time.Time{}
+	snapshotMu.Unlock()
+}
+
 func DroppedCount() int64 {
 	return atomic.LoadInt64(&droppedCount)
 }
@@ -164,7 +172,7 @@ func DroppedCount() int64 {
 func writeWorker() {
 	defer workerWg.Done()
 	for task := range writeQueue {
-		if _, err := db.DB.Exec(task.query, task.args...); err != nil {
+		if _, err := db.DB.Exec(db.Rebind(task.query), task.args...); err != nil {
 			log.Printf("数据库写入失败: %v", err)
 		}
 	}
@@ -308,10 +316,7 @@ func enqueueWrite(task *writeTask) {
 }
 
 func RecordVisit(r *http.Request) {
-	ip := netutil.ExtractClientIP(r)
 	path := r.URL.Path
-	ua := r.UserAgent()
-	referer := r.Referer()
 
 	if strings.HasPrefix(path, "/dist/") ||
 		strings.HasPrefix(path, "/assets/") ||
@@ -325,6 +330,7 @@ func RecordVisit(r *http.Request) {
 	}
 
 	// 解析 IP 属地后只存储地域信息，不存储 IP 本身
+	ip := netutil.ExtractClientIP(r)
 	getIPInfoAsync(ip, func(info *IPInfo) {
 		country, region, city := "", "", ""
 		if info != nil {
@@ -333,9 +339,20 @@ func RecordVisit(r *http.Request) {
 			city = info.City
 		}
 
+		date := time.Now().UTC().Format("2006-01-02")
+		key := db.VisitAggregateKey(date, country, region, city)
+		query := `INSERT INTO visits (ip, path, user_agent, referer, country, region, city, visit_count, aggregate_key, created_at)
+			VALUES ('', '', '', '', ?, ?, ?, ?, ?, ?)`
+		if db.IsMySQL() {
+			query += ` ON DUPLICATE KEY UPDATE visit_count=visit_count+VALUES(visit_count)`
+		} else if db.IsPostgres() {
+			query += ` ON CONFLICT (aggregate_key) DO UPDATE SET visit_count=visits.visit_count+EXCLUDED.visit_count`
+		} else {
+			query += ` ON CONFLICT(aggregate_key) DO UPDATE SET visit_count=visit_count+excluded.visit_count`
+		}
 		enqueueWrite(&writeTask{
-			query: `INSERT INTO visits (ip, path, user_agent, referer, country, region, city) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			args:  []interface{}{"", path, ua, referer, country, region, city},
+			query: query,
+			args:  []interface{}{country, region, city, 1, key, time.Now().UTC().Format("2006-01-02 00:00:00")},
 		})
 	})
 }
@@ -466,6 +483,8 @@ func loadSnapshot() (*StatsData, time.Time) {
 	var err error
 	if db.IsMySQL() {
 		err = db.DB.QueryRow("SELECT data, updated_at FROM stats_snapshot WHERE id = 1").Scan(&dataJSON, &updatedAt)
+	} else if db.IsPostgres() {
+		err = db.DB.QueryRow("SELECT data, updated_at FROM stats_snapshot WHERE id = $1", 1).Scan(&dataJSON, &updatedAt)
 	} else {
 		var raw interface{}
 		err = db.DB.QueryRow("SELECT data, updated_at FROM stats_snapshot WHERE id = 1").Scan(&dataJSON, &raw)
@@ -510,18 +529,22 @@ func computeStatsData() *StatsData {
 		return data
 	}
 
-	if db.IsMySQL() {
+	if db.IsMySQL() || db.IsPostgres() {
 		var wg sync.WaitGroup
+		last30VisitsQuery := "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)"
+		if db.IsPostgres() {
+			last30VisitsQuery = "SELECT COALESCE(SUM(visit_count), 0) FROM visits WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days'"
+		}
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
+			data.TotalVisits = scanCount("total_visits", "SELECT COALESCE(SUM(visit_count), 0) FROM visits")
 		}()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)")
+			data.Last30Visits = scanCount("last_30_visits", last30VisitsQuery)
 		}()
 		wg.Add(1)
 		go func() {
@@ -553,8 +576,8 @@ func computeStatsData() *StatsData {
 		return data
 	}
 
-	data.TotalVisits = scanCount("total_visits", "SELECT COUNT(*) FROM visits")
-	data.Last30Visits = scanCount("last_30_visits", "SELECT COUNT(*) FROM visits WHERE created_at > datetime('now', '-30 days')")
+	data.TotalVisits = scanCount("total_visits", "SELECT COALESCE(SUM(visit_count), 0) FROM visits")
+	data.Last30Visits = scanCount("last_30_visits", "SELECT COALESCE(SUM(visit_count), 0) FROM visits WHERE created_at > datetime('now', '-30 days')")
 
 	computeTotalDays(data)
 	queryTopDownloads(data)
@@ -569,23 +592,28 @@ func computeStatsData() *StatsData {
 
 // mergeDailyTraffic 将每日流量 map 合并到 DailyStats 中对应的日期。
 func mergeDailyTraffic(data *StatsData, trafficMap map[string]int64) {
-	for i := range data.DailyStats {
-		date := data.DailyStats[i].Date
-		if trafficMap != nil {
-			data.DailyStats[i].TrafficBytes = trafficMap[date]
-		}
+	for date, bytes := range trafficMap {
+		findOrCreateDailyStat(data, date).TrafficBytes = bytes
 	}
 }
 
 // mergeDailyDownloads 用事件表的按日下载计数覆盖 DailyStats 的每日下载次数。
 // 事件表是下载次数的唯一口径（downloads 表已冻结不再写入），故每次有事件计数即覆盖。
 func mergeDailyDownloads(data *StatsData, countMap map[string]int64) {
+	for date, count := range countMap {
+		findOrCreateDailyStat(data, date).DownloadCount = count
+	}
+	sort.Slice(data.DailyStats, func(i, j int) bool { return data.DailyStats[i].Date > data.DailyStats[j].Date })
+}
+
+func findOrCreateDailyStat(data *StatsData, date string) *DailyStat {
 	for i := range data.DailyStats {
-		date := data.DailyStats[i].Date
-		if c, ok := countMap[date]; ok {
-			data.DailyStats[i].DownloadCount = c
+		if data.DailyStats[i].Date == date {
+			return &data.DailyStats[i]
 		}
 	}
+	data.DailyStats = append(data.DailyStats, DailyStat{Date: date})
+	return &data.DailyStats[len(data.DailyStats)-1]
 }
 
 // applyDownloadAndTrafficStats 计算下载次数与流量字节：
@@ -660,10 +688,12 @@ func saveSnapshot(data *StatsData) error {
 	var query string
 	if db.IsMySQL() {
 		query = "INSERT INTO stats_snapshot (id, data, updated_at) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = NOW()"
+	} else if db.IsPostgres() {
+		query = "INSERT INTO stats_snapshot (id, data, updated_at) VALUES (1, $1, CURRENT_TIMESTAMP) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP"
 	} else {
 		query = "INSERT INTO stats_snapshot (id, data, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"
 	}
-	if _, err := db.DB.Exec(query, string(b)); err != nil {
+	if _, err := db.DB.Exec(db.Rebind(query), string(b)); err != nil {
 		return fmt.Errorf("保存快照失败: %w", err)
 	}
 	return nil
@@ -693,6 +723,9 @@ func RefreshSnapshot() error {
 func minVisitDateQuery() string {
 	if db.IsMySQL() {
 		return "SELECT DATE_FORMAT(MIN(created_at), '%Y-%m-%d') FROM visits"
+	}
+	if db.IsPostgres() {
+		return "SELECT TO_CHAR(MIN(created_at), 'YYYY-MM-DD') FROM visits"
 	}
 	return "SELECT date(MIN(created_at)) FROM visits"
 }
@@ -747,9 +780,11 @@ func computeTotalDays(data *StatsData) {
 	keyRef := "key"
 	if db.IsMySQL() {
 		keyRef = "`key`"
+	} else if db.IsPostgres() {
+		keyRef = `"key"`
 	}
 	var startTimeStr string
-	if err := db.DB.QueryRow("SELECT value FROM system_info WHERE " + keyRef + " = 'start_time'").Scan(&startTimeStr); err != nil {
+	if err := db.DB.QueryRow(db.Rebind("SELECT value FROM system_info WHERE " + keyRef + " = 'start_time'")).Scan(&startTimeStr); err != nil {
 		log.Printf("[Stats] system_info.start_time 查询失败: %v", err)
 		return
 	}
@@ -773,13 +808,13 @@ func queryTopDownloads(data *StatsData) {
 }
 
 func queryGeoDistribution(data *StatsData) {
-	rows, err := db.DB.Query(`
-		SELECT country, COUNT(*) as c
+	rows, err := db.DB.Query(db.Rebind(`
+		SELECT country, COALESCE(SUM(visit_count), 0) as c
 		FROM visits
 		WHERE country != '' AND country != 'Local'
 		GROUP BY country
 		ORDER BY c DESC
-		LIMIT 50`)
+		LIMIT 50`))
 	if err != nil {
 		return
 	}
@@ -798,10 +833,13 @@ func queryGeoDistribution(data *StatsData) {
 
 func dailyQueryFlavor() (visitQ, downloadQ string) {
 	if db.IsMySQL() {
-		visitQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+		visitQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COALESCE(SUM(visit_count), 0) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
 		downloadQ = "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
+	} else if db.IsPostgres() {
+		visitQ = "SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as d, COALESCE(SUM(visit_count), 0) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+		downloadQ = "SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
 	} else {
-		visitQ = "SELECT date(created_at) as d, COUNT(*) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
+		visitQ = "SELECT date(created_at) as d, COALESCE(SUM(visit_count), 0) FROM visits GROUP BY d ORDER BY d DESC LIMIT 30"
 		downloadQ = "SELECT date(created_at) as d, COUNT(*) FROM downloads GROUP BY d ORDER BY d DESC LIMIT 30"
 	}
 	return

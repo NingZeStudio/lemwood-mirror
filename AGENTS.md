@@ -4,7 +4,7 @@
 
 ## 构建与测试
 
-- Go 1.24。测试/构建：`go test -count=1 ./...`、`go vet ./...`。CI 用 `go test ./... -count=1 -timeout 120s`。
+- Go 1.25。测试/构建：`go test -count=1 ./...`、`go vet ./...`。CI 用 `go test ./... -count=1 -timeout 120s`。
 - Termux 环境 go 不在默认 PATH，位于 `/data/data/com.termux/files/usr/lib/go/bin`（apt 的 golang 包），用前先 `export PATH=$PREFIX/lib/go/bin:$PATH`。
 - 构建：`go build -o mirror ./cmd/mirror`；开发运行：`go run ./cmd/mirror`。
 - 纯 Go 构建，`CGO_ENABLED=0`：SQLite 驱动是 `modernc.org/sqlite`（pure-Go），**不需要 cgo**，不要为 SQLite 切换 `mattn/go-sqlite3`。
@@ -12,7 +12,7 @@
 - **构建产物不入库（2026-08-15 起）**：`mirror-linux-amd64` 曾误入库（66MB）已 `git rm --cached` 移除，.gitignore 含 `mirror-linux-amd64`。本地 `go build` 的二进制只用于本地验证/部署，**不要 `git add` 任何二进制**；正式产物由 CI 按 tag 构建发布。
 - 前端构建：`cd frontend && pnpm build`，产物输出到 `web/default/`（git 跟踪的内嵌资源，改完 frontend/src 必须重新构建否则线上不生效）。
 - 管理端构建：`cd admin-app && pnpm build`，产物输出到 `web/admin/`（同样被 git 跟踪，会被构建重写 hash 文件名）。
-- CI（`.github/workflows/build.yml`）矩阵构建 windows/linux × amd64/arm64/x86；**仅 tag 推送时发 Release**（softprops/action-gh-release）。pnpm 版本固定 10.12.4。
+- CI（`.github/workflows/build.yml`）先单独执行 Go test/vet 和前端检查/构建，再矩阵构建 windows/linux × amd64/arm64/x86；**仅 tag 推送时由单独 job 发 Release**（softprops/action-gh-release）。pnpm 版本固定 10.12.4。
 
 ## 后端架构（internal/ 包职责）
 
