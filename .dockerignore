@@ -6,4 +6,4 @@ web/dist
 web/admin
 *.db
 *.db.bak
-banned_ips.txt
+banned_ips.json

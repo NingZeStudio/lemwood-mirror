@@ -105,7 +105,7 @@ captcha_enabled: false
 captcha_app_id: ""
 captcha_secret_key: ""
 traffic_limit_gb: 0
-ban_record_file: "banned_ips.txt"
+ban_record_file: "banned_ips.json"
 external_blacklist_url: ""
 appeal_contact: "QQ群 https://qm.qq.com/q/FOGt99aayY"
 mysql_host: ""
@@ -168,7 +168,7 @@ launchers:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `traffic_limit_gb` | int | — | 单 IP 每日下载流量上限（GB），`0` 禁用，负数自动修正为 `5` |
-| `ban_record_file` | string | `"banned_ips.txt"` | 封禁记录文件（存于 `storage_path` 下） |
+| `ban_record_file` | string | `"banned_ips.json"` | 封禁记录文件（存于 `storage_path` 下，JSON 格式） |
 | `external_blacklist_url` | string | `""` | 外部黑名单同步地址（按行解析，跳过 `#` 注释） |
 | `appeal_contact` | string | — | 封禁页显示的申诉联系方式 |
 

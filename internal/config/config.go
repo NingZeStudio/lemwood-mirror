@@ -234,7 +234,7 @@ func DefaultConfig() *Config {
 		AdminLockDuration:      120,
 		TrafficLimitGB:         0,
 		BandwidthLimitMbps:     200,
-		BanRecordFile:          "banned_ips.txt",
+		BanRecordFile:          "banned_ips.json",
 		AppealContact:          "QQ群 1104690837",
 		MySQLPort:              3306,
 		PostgresPort:           5432,
@@ -385,7 +385,7 @@ func NormalizeConfig(cfg *Config) error {
 		cfg.BandwidthLimitMbps = 200
 	}
 	if cfg.BanRecordFile == "" {
-		cfg.BanRecordFile = "banned_ips.txt"
+		cfg.BanRecordFile = "banned_ips.json"
 	}
 	if cfg.AppealContact == "" {
 		cfg.AppealContact = "QQ群 1104690837"

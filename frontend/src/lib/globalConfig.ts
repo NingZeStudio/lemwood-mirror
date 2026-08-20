@@ -36,6 +36,7 @@ export const globalConfig = {
       status: '/launchers',
       latest: '/latest',
       stats: '/stats',
+      bandwidth: '/bandwidth',
       files: '/files',
       scan: '/admin/scans',
       powConfig: '/pow/config',
@@ -95,10 +96,6 @@ export const globalConfig = {
     luminol: {
       displayName: 'Luminol 服务端',
       logoUrl: new URL('../assets/images/c25a955166388e1257c23d01c78a62e6.webp', import.meta.url).href
-    },
-    'authlib-injector': {
-      displayName: '【开发者】authlib-injector 库',
-      logoUrl: new URL('../assets/images/authlib-injector.png', import.meta.url).href
     },
     fcl_dl: {
       displayName: 'FoldCraftLauncher (DL)',

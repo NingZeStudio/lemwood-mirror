@@ -180,8 +180,9 @@ const currentItems = computed(() => {
   const depth = currentPath.value.length
 
   if (depth === 0) {
-    return Object.keys(launchers.value)
-      .map((name) => ({
+  	    return Object.keys(launchers.value)
+  	      .filter((name) => name !== 'authlib-injector')
+  	      .map((name) => ({
         id: name,
         name: getLauncherDisplayName(name),
         displayName: name,

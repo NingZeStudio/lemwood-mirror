@@ -289,6 +289,8 @@ func (s *State) handleV2Bandwidth(w http.ResponseWriter, r *http.Request) {
 		writeV2Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method Not Allowed", nil)
 		return
 	}
+	// 带宽是实时内存状态，禁用缓存（CDN/浏览器），否则前端轮询会一直拿到旧值。
+	markNoStore(w)
 	writeV2Success(w, r, s.bandwidth.Snapshot(), false)
 }
 

@@ -2,10 +2,12 @@ package traffic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"lemwood_mirror/internal/db"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -105,12 +107,12 @@ func (t *Tracker) initBanRecordFile() {
 	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		header := fmt.Sprintf(`# IP封禁记录 - 公开数据
-# 格式: IP | 封禁时间 | 封禁理由 | 当日流量(GB)
-# 如有误封，请加入 %s 进行申诉
-
-`, t.appealContact)
-		if err := os.WriteFile(fullPath, []byte(header), 0644); err != nil {
+		content, err := t.buildBanRecordJSON(nil)
+		if err != nil {
+			log.Printf("[防刷墙] 生成初始封禁记录失败: %v", err)
+			return
+		}
+		if err := os.WriteFile(fullPath, content, 0644); err != nil {
 			log.Printf("[防刷墙] 初始化封禁记录文件失败: %v", err)
 		}
 	}
@@ -316,7 +318,75 @@ func (t *Tracker) TriggerSync() {
 	}
 }
 
-// SyncBanRecordFile 从数据库重新生成封禁记录文件，确保与数据库同步并去重
+// banRecordEntry 是封禁记录文件中的单条记录。
+type banRecordEntry struct {
+	IP        string  `json:"ip"`
+	Reason    string  `json:"reason"`
+	Source    string  `json:"source"`
+	BanType   string  `json:"ban_type"`
+	CreatedAt string  `json:"created_at"`
+	TrafficGB float64 `json:"traffic_gb"`
+}
+
+// banRecordFile 是公开封禁记录文件的 JSON 结构。
+type banRecordFile struct {
+	UpdatedAt      string           `json:"updated_at"`
+	TrafficLimitGB int              `json:"traffic_limit_gb"`
+	AppealContact  string           `json:"appeal_contact"`
+	Count          int              `json:"count"`
+	Records        []banRecordEntry `json:"records"`
+}
+
+// buildBanRecordJSON 将黑名单列表序列化为公开 JSON 内容。
+// blacklist 为 nil 时生成空记录（用于初始化文件）。
+func (t *Tracker) buildBanRecordJSON(blacklist []map[string]string) ([]byte, error) {
+	records := make([]banRecordEntry, 0, len(blacklist))
+	for _, item := range blacklist {
+		ip := item["ip"]
+		createdAtStr := item["created_at"]
+
+		date := time.Now().Format("2006-01-02")
+		if createdAt, err := time.Parse("2006-01-02 15:04:05", createdAtStr); err == nil {
+			date = createdAt.Format("2006-01-02")
+		} else if createdAt, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+			date = createdAt.Format("2006-01-02")
+		}
+
+		traffic := int64(0)
+		if t.getTrafficOnDateFunc != nil {
+			traffic, _ = t.getTrafficOnDateFunc(ip, date)
+		}
+
+		records = append(records, banRecordEntry{
+			IP:        ip,
+			Reason:    item["reason"],
+			Source:    item["source"],
+			BanType:   item["ban_type"],
+			CreatedAt: createdAtStr,
+			TrafficGB: round2(ToGB(traffic)),
+		})
+	}
+
+	doc := banRecordFile{
+		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
+		TrafficLimitGB: t.GetTrafficLimitGB(),
+		AppealContact:  t.appealContact,
+		Count:          len(records),
+		Records:        records,
+	}
+
+	content, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(content, '\n'), nil
+}
+
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+// SyncBanRecordFile 从数据库重新生成封禁记录文件（JSON），确保与数据库同步并去重
 func (t *Tracker) SyncBanRecordFile() error {
 	if t == nil || t.banRecordFile == "" {
 		return nil
@@ -327,47 +397,15 @@ func (t *Tracker) SyncBanRecordFile() error {
 		return fmt.Errorf("获取本地黑名单失败: %w", err)
 	}
 
-	header := fmt.Sprintf(`# IP封禁记录 - 公开数据
-# 格式: IP | 封禁时间 | 封禁理由 | 当日流量(GB)
-# 如有误封，请加入 %s 进行申诉
-
-`, t.appealContact)
-
-	var content strings.Builder
-	content.WriteString(header)
-
-	for _, item := range blacklist {
-		ip := item["ip"]
-		reason := item["reason"]
-		createdAtStr := item["created_at"]
-
-		createdAt, err := time.Parse("2006-01-02 15:04:05", createdAtStr)
-		if err != nil {
-			createdAt, err = time.Parse(time.RFC3339, createdAtStr)
-		}
-
-		timestamp := createdAtStr
-		date := time.Now().Format("2006-01-02")
-		if err == nil {
-			timestamp = createdAt.Format("2006-01-02 15:04:05")
-			date = createdAt.Format("2006-01-02")
-		}
-
-		traffic := int64(0)
-		if t.getTrafficOnDateFunc != nil {
-			traffic, _ = t.getTrafficOnDateFunc(ip, date)
-		}
-		trafficGB := ToGB(traffic)
-
-		line := fmt.Sprintf("%s | %s | %s | %.2f\n", ip, timestamp, reason, trafficGB)
-		content.WriteString(line)
+	content, err := t.buildBanRecordJSON(blacklist)
+	if err != nil {
+		return fmt.Errorf("序列化封禁记录失败: %w", err)
 	}
 
-	contentBytes := []byte(content.String())
 	fullPath := filepath.Join(t.storagePath, t.banRecordFile)
 
 	t.fileMutex.Lock()
-	err = os.WriteFile(fullPath, contentBytes, 0644)
+	err = os.WriteFile(fullPath, content, 0644)
 	t.fileMutex.Unlock()
 
 	if err != nil {

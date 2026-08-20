@@ -18,7 +18,9 @@ const loading = ref(true)
 const powConfig = ref({ enabled: false })
 
 const launcherList = computed(() => {
-  const list = Object.keys(rawLaunchers.value).map((name) => {
+	  const list = Object.keys(rawLaunchers.value)
+	    .filter((name) => name !== 'authlib-injector')
+	    .map((name) => {
     const versions = rawLaunchers.value[name]
     const latestVersion = latestMap.value[name]
     const latestObj = versions.find((v) => (v.tag_name || v.name) === latestVersion) || versions[0]

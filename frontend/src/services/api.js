@@ -18,6 +18,7 @@ export default api;
 export const getStatus = () => api.get(globalConfig.api.endpoints.status)
 export const getLatest = () => api.get(globalConfig.api.endpoints.latest)
 export const getStats = () => api.get(globalConfig.api.endpoints.stats)
+export const getBandwidth = () => api.get(globalConfig.api.endpoints.bandwidth)
 export const scan = () => api.post(globalConfig.api.endpoints.scan)
 export const getPowConfig = () => api.get(globalConfig.api.endpoints.powConfig)
 

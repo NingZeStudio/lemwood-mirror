@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { getStats } from '@/services/api'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { getStats, getBandwidth } from '@/services/api'
 import { useDark } from '@vueuse/core'
 import { globalConfig } from '@/lib/globalConfig'
 import {
@@ -10,6 +10,7 @@ import {
   BarChart3,
   Download,
   Eye,
+  Gauge,
   Globe,
   HardDrive,
   MapPin,
@@ -42,9 +43,27 @@ use([
 ])
 
 const stats = ref({})
+const bandwidth = ref({})
 const loading = ref(true)
 const mapLoaded = ref(false)
 const isDark = useDark()
+let bandwidthTimer = null
+
+const formatMbps = (v) => {
+  if (!Number.isFinite(v)) return '0'
+  return v.toFixed(2)
+}
+
+const bandwidthUtilization = computed(() => {
+  const u = bandwidth.value.utilization_percent
+  if (!Number.isFinite(u)) return 0
+  return Math.min(100, Math.max(0, Math.round(u)))
+})
+
+const isBandwidthIdle = computed(() => {
+  const v = bandwidth.value.current_bandwidth_mbps
+  return !Number.isFinite(v) || v < 0.01
+})
 
 const formatBytes = (bytes) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -243,6 +262,15 @@ const trendOption = computed(() => {
   }
 })
 
+const refreshBandwidth = async () => {
+  try {
+    const res = await getBandwidth()
+    bandwidth.value = res.data
+  } catch (e) {
+    console.error('Failed to load bandwidth', e)
+  }
+}
+
 onMounted(async () => {
   try {
     const [statsRes] = await Promise.all([
@@ -265,6 +293,13 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+
+  await refreshBandwidth()
+  bandwidthTimer = setInterval(refreshBandwidth, 1000)
+})
+
+onUnmounted(() => {
+  if (bandwidthTimer) clearInterval(bandwidthTimer)
 })
 </script>
 
@@ -287,6 +322,15 @@ onMounted(async () => {
           </CardContent>
         </Card>
       </div>
+      <Card class="shadow-sm">
+        <CardHeader><Skeleton class="h-5 w-32" /></CardHeader>
+        <CardContent>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div v-for="i in 5" :key="i"><Skeleton class="h-8 w-24" /></div>
+          </div>
+          <div class="mt-4"><Skeleton class="h-2 w-full rounded-full" /></div>
+        </CardContent>
+      </Card>
       <div class="grid gap-4 md:grid-cols-7">
         <Card class="col-span-7 lg:col-span-4 h-[420px] shadow-sm">
           <CardHeader><Skeleton class="h-5 w-32" /></CardHeader>
@@ -402,6 +446,60 @@ onMounted(async () => {
           </CardContent>
         </Card>
       </div>
+
+      <Card class="shadow-sm">
+        <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle class="flex items-center gap-2 text-base">
+            <Gauge class="h-4 w-4 text-primary" />
+            服务器带宽状态
+          </CardTitle>
+          <span class="text-xs text-muted-foreground">每秒自动刷新</span>
+        </CardHeader>
+        <CardContent>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div>
+              <p class="text-xs text-muted-foreground">当前带宽</p>
+              <p class="text-2xl font-bold">
+                <span v-if="isBandwidthIdle" class="text-muted-foreground">空闲中</span>
+                <template v-else>
+                  {{ formatMbps(bandwidth.current_bandwidth_mbps) }}
+                  <span class="text-sm font-normal text-muted-foreground">Mbps</span>
+                </template>
+              </p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">峰值上限</p>
+              <p class="text-2xl font-bold">{{ bandwidth.peak_bandwidth_mbps ?? '-' }} <span class="text-sm font-normal text-muted-foreground">Mbps</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">峰值（已观测）</p>
+              <p class="text-2xl font-bold">{{ formatMbps(bandwidth.peak_observed_mbps) }} <span class="text-sm font-normal text-muted-foreground">Mbps</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">活动下载</p>
+              <p class="text-2xl font-bold">{{ bandwidth.active_downloads ?? '-' }}</p>
+            </div>
+            <div>
+              <p class="text-xs text-muted-foreground">累计传输</p>
+              <p class="text-2xl font-bold">{{ formatBytes(bandwidth.total_bytes_served) }}</p>
+            </div>
+          </div>
+          <div class="mt-4">
+            <div class="mb-1 flex items-center justify-between text-xs">
+              <span class="text-muted-foreground">带宽利用率</span>
+              <span v-if="isBandwidthIdle" class="font-medium text-green-600 dark:text-green-400">空闲</span>
+              <span v-else class="font-medium" :class="bandwidthUtilization > 90 ? 'text-red-600 dark:text-red-400' : bandwidthUtilization > 75 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'">{{ bandwidthUtilization }}%</span>
+            </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-secondary">
+              <div
+                class="h-full rounded-full transition-all duration-500"
+                :class="isBandwidthIdle ? 'bg-secondary' : bandwidthUtilization > 90 ? 'bg-red-500' : bandwidthUtilization > 75 ? 'bg-amber-500' : 'bg-green-500'"
+                :style="{ width: isBandwidthIdle ? '0%' : `${bandwidthUtilization}%` }"
+              ></div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div class="grid gap-4 md:grid-cols-7">
         <Card class="col-span-7 lg:col-span-4 shadow-sm">

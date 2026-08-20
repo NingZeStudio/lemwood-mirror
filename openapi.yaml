@@ -1856,7 +1856,7 @@ components:
           description: Per-IP daily download traffic limit in GB (0 disables, negative corrected to 5)
         ban_record_file:
           type: string
-          example: banned_ips.txt
+          example: banned_ips.json
         external_blacklist_url:
           type: string
           description: External blacklist URL

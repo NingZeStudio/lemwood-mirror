@@ -43,7 +43,7 @@ func setupDownloadHandlerState(t *testing.T, cfg *config.Config, limitGB int, co
 		t.Fatalf("InitDB() error = %v", err)
 	}
 
-	traffic.InitTracker(limitGB, "banned_ips.txt", "test-contact", base)
+	traffic.InitTracker(limitGB, "banned_ips.json", "test-contact", base)
 	stats.InitWritePool(1, 20)
 
 	state := NewState(base, base, cfg)

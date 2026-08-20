@@ -126,8 +126,8 @@ traffic_limit_gb: 0
 # 服务器峰值带宽（Mbps），用于带宽状态接口的利用率计算
 bandwidth_limit_mbps: 200
 
-# 被封禁 IP 的记录文件路径（默认 banned_ips.txt）
-ban_record_file: "banned_ips.txt"
+# 被封禁 IP 的记录文件路径（默认 banned_ips.json，JSON 格式）
+ban_record_file: "banned_ips.json"
 
 # 外部黑名单同步源 URL（定期拉取并合并到本地黑名单）
 external_blacklist_url: "https://bcr.pbh-btn.ghorg.ghostchu-services.top/combine/all.txt"

@@ -1,6 +1,9 @@
 package traffic
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"lemwood_mirror/internal/config"
@@ -24,7 +27,7 @@ func setupTrackerTest(t *testing.T, limitGB int) *Tracker {
 		t.Fatalf("InitDB() error = %v", err)
 	}
 
-	InitTracker(limitGB, "banned_ips.txt", "test-contact", base)
+	InitTracker(limitGB, "banned_ips.json", "test-contact", base)
 
 	t.Cleanup(func() {
 		CloseTracker()
@@ -119,5 +122,43 @@ func TestReserveTrafficCountsPendingBytesUntilFinalize(t *testing.T) {
 	allowed, _, _, reason = tracker.ReserveTraffic(ip, secondEstimate)
 	if !allowed {
 		t.Fatalf("ReserveTraffic() should succeed after pending bytes are released: %s", reason)
+	}
+}
+
+func TestSyncBanRecordFileWritesJSON(t *testing.T) {
+	tracker := setupTrackerTest(t, 5)
+
+	if err := db.AddIPToBlacklistWithSource("1.2.3.4", "单日下载流量超过5GB限制", "local", "traffic"); err != nil {
+		t.Fatalf("AddIPToBlacklistWithSource() error = %v", err)
+	}
+
+	if err := tracker.SyncBanRecordFile(); err != nil {
+		t.Fatalf("SyncBanRecordFile() error = %v", err)
+	}
+
+	path := filepath.Join(tracker.storagePath, tracker.banRecordFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read ban record file: %v", err)
+	}
+
+	var doc banRecordFile
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("ban record file is not valid JSON: %v\n%s", err, string(raw))
+	}
+	if doc.Count != 1 {
+		t.Fatalf("count = %d, want 1", doc.Count)
+	}
+	if len(doc.Records) != 1 {
+		t.Fatalf("records len = %d, want 1", len(doc.Records))
+	}
+	if got := doc.Records[0].IP; got != "1.2.3.4" {
+		t.Fatalf("ip = %q, want 1.2.3.4", got)
+	}
+	if got := doc.Records[0].BanType; got != "traffic" {
+		t.Fatalf("ban_type = %q, want traffic", got)
+	}
+	if doc.TrafficLimitGB != 5 {
+		t.Fatalf("traffic_limit_gb = %d, want 5", doc.TrafficLimitGB)
 	}
 }
