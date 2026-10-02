@@ -105,7 +105,7 @@ const init = async () => {
 
   if (!isPowSupported()) {
     errorMessage.value =
-      '当前浏览器不支持 Web Crypto（需要较新的内核与 HTTPS 环境），无法自动完成验证。可升级浏览器，或使用下方备用下载入口。'
+      '当前浏览器内核过旧，无法完成安全验证。请从系统应用商店安装 Microsoft Edge 或 Google Chrome，用其打开本页后重新发起下载。'
     verifyStatus.value = 'error'
     isLoading.value = false
     return
@@ -184,12 +184,6 @@ const formatSize = (bytes) => {
 
 const retry = () => {
   init()
-}
-
-const directDownload = () => {
-  if (filePath.value) {
-    window.location.href = `/download/${filePath.value}`
-  }
 }
 
 watch(
@@ -271,9 +265,6 @@ onUnmounted(() => {
           <Button class="w-full" @click="retry">
             <RefreshCw weight="duotone" class="mr-2 h-4 w-4" />
             重新验证
-          </Button>
-          <Button v-if="filePath" variant="outline" class="w-full" @click="directDownload">
-            验证遇到问题？直接下载
           </Button>
         </div>
       </CardContent>
